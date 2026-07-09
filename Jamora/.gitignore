@@ -1,0 +1,8 @@
+# Secrets & local env (never commit)
+.env
+.env.local
+.env.*.local
+
+# Build/runtime artifacts
+node_modules/
+*.log

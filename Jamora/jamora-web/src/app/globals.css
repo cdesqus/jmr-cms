@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  /* Muted natural palette — Indonesian herbal heritage, EU-premium restraint */
+  --color-cream: #faf6ee;
+  --color-sand: #efe6d5;
+  --color-clay: #e3d4bd;
+  --color-ink: #201b15;
+  --color-bark: #4a4038;
+  --color-stone: #8a7d6d;
+
+  /* Product accent — warm terracotta / amber (brand "orange") */
+  --color-terracotta: #c25a2b;
+  --color-terracotta-deep: #9f461f;
+  --color-amber: #e2913f;
+
+  /* Herbal greens */
+  --color-herb: #5b6f57;
+  --color-herb-deep: #3a4a38;
+
+  /* Category accents: Energy / Digestion / Balance */
+  --color-energy: #d5722e;
+  --color-digestion: #6f8a5a;
+  --color-balance: #9179ac;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+
+  --radius-xl: 1.25rem;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-terracotta);
+  color: var(--color-cream);
+}
+
+/* Eyebrow / kicker label */
+.eyebrow {
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 600;
+}

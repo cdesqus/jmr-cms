@@ -1,0 +1,78 @@
+# Jamora full stack — Postgres + Redis + Medusa (backend/CMS) + Next.js storefront.
+# Deploy on a Linux dev server:
+#   1) cp .env.example .env   and edit the secrets + PUBLIC_URL values
+#   2) docker compose up -d --build
+#   3) grab the pk_... printed in the medusa logs (docker compose logs medusa | grep PUBLISHABLE_KEY)
+#      put it in .env as MEDUSA_PUBLISHABLE_KEY, then: docker compose up -d storefront
+#
+# Admin/CMS:  http://<server>:9000/app   (login = MEDUSA_ADMIN_EMAIL / MEDUSA_ADMIN_PASSWORD)
+# Storefront: http://<server>:3000
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-jamora_medusa}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-jamora_medusa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  medusa:
+    build:
+      context: ./jamora-medusa/apps/backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-jamora_medusa}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      COOKIE_SECRET: ${COOKIE_SECRET:?set COOKIE_SECRET in .env}
+      # Comma-separated origins allowed to call the backend.
+      STORE_CORS: ${STORE_CORS:-http://localhost:3000}
+      ADMIN_CORS: ${ADMIN_CORS:-http://localhost:9000}
+      AUTH_CORS: ${AUTH_CORS:-http://localhost:3000,http://localhost:9000}
+      MEDUSA_ADMIN_EMAIL: ${MEDUSA_ADMIN_EMAIL:-admin@jamora.eu}
+      MEDUSA_ADMIN_PASSWORD: ${MEDUSA_ADMIN_PASSWORD:-Jamora2026!}
+    ports:
+      - "${MEDUSA_PORT:-9000}:9000"
+
+  storefront:
+    build:
+      context: ./jamora-web
+    restart: unless-stopped
+    depends_on:
+      medusa:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # Server-side fetches use the internal service hostname.
+      MEDUSA_BACKEND_URL: http://medusa:9000
+      MEDUSA_PUBLISHABLE_KEY: ${MEDUSA_PUBLISHABLE_KEY:-}
+    ports:
+      - "${STOREFRONT_PORT:-3000}:3000"
+
+volumes:
+  pgdata:
+  redisdata:
