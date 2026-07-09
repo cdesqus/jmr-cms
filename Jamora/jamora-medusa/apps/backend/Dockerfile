@@ -8,18 +8,21 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-ENV NODE_ENV=production
 
-# Source deps (used for migrations/seed via the CLI)
+# devDependencies must be installed and kept: `medusa build` needs typescript/
+# swc/vite/react, and the entrypoint's `medusa db:migrate` transpiles
+# medusa-config.ts at runtime. Hence NODE_ENV stays unset until the last step.
 COPY package.json package-lock.json* ./
-RUN npm install --legacy-peer-deps --no-audit --no-fund
+RUN npm install --legacy-peer-deps --include=dev --no-audit --no-fund
 
 # Build the production server + admin dashboard, then install the built
 # server's own runtime dependencies.
 COPY . .
 RUN npx medusa build \
   && cd .medusa/server \
-  && npm install --legacy-peer-deps --no-audit --no-fund
+  && npm install --legacy-peer-deps --omit=dev --no-audit --no-fund
+
+ENV NODE_ENV=production
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
