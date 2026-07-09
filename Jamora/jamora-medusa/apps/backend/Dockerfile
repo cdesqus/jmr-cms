@@ -29,6 +29,6 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 9000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=300s --retries=20 \
-  CMD curl -fsS http://localhost:9000/health || exit 1
+  CMD node -e "require('http').get('http://127.0.0.1:9000/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
