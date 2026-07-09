@@ -56,7 +56,8 @@ copy-paste from logs is required.
 - On the first boot, Medusa migrations and seeding can take several minutes before
   the backend health endpoint is available. Use `docker compose logs -f medusa`
   to watch progress. The entrypoint logs schema migrations and Jamora seed as
-  separate steps so startup stalls are easier to diagnose.
+  separate steps, runs migrations from the `.medusa/server` production build, and
+  uses single-migration concurrency so startup stalls are easier to diagnose.
 
 Handy: `docker compose ps` | `docker compose logs -f medusa` | `docker compose down`
 (add `-v` to also wipe the database volumes).
