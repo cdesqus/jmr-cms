@@ -5,10 +5,9 @@ import {
   type Product,
 } from "@/lib/products";
 
-// Data-access layer for the storefront. When a Medusa backend is configured
-// (NEXT_PUBLIC_MEDUSA_BACKEND_URL + NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY) products
-// are read live from its Store API; otherwise we gracefully fall back to the
-// bundled mock catalogue so the site still works standalone.
+// Data-access layer for the storefront. When a Medusa backend is available,
+// products are read live from its Store API; otherwise we gracefully fall back
+// to the bundled mock catalogue so the site still works standalone.
 
 // Read server-side only (this module is imported exclusively by Server
 // Components), so these are supplied at runtime by the container — no need to
@@ -30,13 +29,48 @@ const CERT_ORDER: Certification[] = [
   "Non-GMO",
 ];
 
-function hasMedusaBackend(): boolean {
-  return Boolean(PUBLISHABLE_KEY);
+let publishableKeyCache: string | undefined;
+
+function getConfiguredPublishableKey(): string | undefined {
+  const key = PUBLISHABLE_KEY?.trim();
+  return key ? key : undefined;
+}
+
+async function getPublishableKey(): Promise<string | null> {
+  const configuredKey = getConfiguredPublishableKey();
+  if (configuredKey) return configuredKey;
+  if (publishableKeyCache) return publishableKeyCache;
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/jamora/storefront-config`, {
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) {
+      throw new Error(`Medusa storefront config -> ${res.status}`);
+    }
+
+    const { publishableKey } = (await res.json()) as {
+      publishableKey?: string | null;
+    };
+    const discoveredKey = publishableKey?.trim();
+    if (!discoveredKey) return null;
+
+    publishableKeyCache = discoveredKey;
+  } catch {
+    return null;
+  }
+
+  return publishableKeyCache;
 }
 
 async function medusaFetch<T>(path: string): Promise<T> {
+  const publishableKey = await getPublishableKey();
+  if (!publishableKey) {
+    throw new Error("Medusa publishable key is unavailable");
+  }
+
   const res = await fetch(`${BACKEND_URL}${path}`, {
-    headers: { "x-publishable-api-key": PUBLISHABLE_KEY as string },
+    headers: { "x-publishable-api-key": publishableKey },
     // Revalidate periodically so CMS edits show up without a redeploy.
     next: { revalidate: 60 },
   });
@@ -116,7 +150,9 @@ async function getEurRegionId(): Promise<string | null> {
 }
 
 export async function getAllProducts(): Promise<Product[]> {
-  if (!hasMedusaBackend()) return MOCK_PRODUCTS;
+  const publishableKey = await getPublishableKey();
+  if (!publishableKey) return MOCK_PRODUCTS;
+
   try {
     const regionId = await getEurRegionId();
     const fields =

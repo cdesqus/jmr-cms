@@ -407,6 +407,6 @@ export default async function initial_data_seed({
 
   logger.info(
     `\n==================\nPUBLISHABLE_KEY=${publishableApiKey.token}\n==================\n` +
-      "Add this to jamora-web/.env.local as NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY"
+      "Optional override: add this to .env as MEDUSA_PUBLISHABLE_KEY"
   );
 }

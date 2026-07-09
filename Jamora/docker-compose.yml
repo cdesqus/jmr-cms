@@ -2,8 +2,7 @@
 # Deploy on a Linux dev server:
 #   1) cp .env.example .env   and edit the secrets + PUBLIC_URL values
 #   2) docker compose up -d --build
-#   3) grab the pk_... printed in the medusa logs (docker compose logs medusa | grep PUBLISHABLE_KEY)
-#      put it in .env as MEDUSA_PUBLISHABLE_KEY, then: docker compose up -d storefront
+#   3) open the storefront; it auto-discovers the Medusa publishable key
 #
 # Admin/CMS:  http://<server>:9000/app   (login = MEDUSA_ADMIN_EMAIL / MEDUSA_ADMIN_PASSWORD)
 # Storefront: http://<server>:3000
