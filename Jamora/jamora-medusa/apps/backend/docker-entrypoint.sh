@@ -3,10 +3,14 @@ set -e
 
 cd /app
 
-echo "[entrypoint] Running database migrations + one-time Jamora seed..."
-# db:migrate also runs the tracked script in src/migration-scripts (the seed),
-# which is recorded so it only executes once even across restarts.
-npx medusa db:migrate
+echo "[entrypoint] Running database migrations..."
+# Split schema migrations from migration scripts so first boot logs show exactly
+# where startup is. --execute-all-links prevents non-interactive Docker startup
+# from waiting on link-sync prompts.
+npx medusa db:migrate --skip-scripts --execute-all-links --verbose
+
+echo "[entrypoint] Running one-time Jamora seed..."
+npx medusa db:migrate:scripts --verbose
 
 echo "[entrypoint] Ensuring admin user ${MEDUSA_ADMIN_EMAIL}..."
 npx medusa user -e "${MEDUSA_ADMIN_EMAIL}" -p "${MEDUSA_ADMIN_PASSWORD}" \
