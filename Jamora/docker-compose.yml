@@ -10,6 +10,7 @@
 services:
   postgres:
     image: postgres:16
+    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -53,8 +54,11 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-jamora_medusa}
+      DATABASE_POOL_MIN: ${DATABASE_POOL_MIN:-2}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-50}
       REDIS_URL: redis://redis:6379
       MEDUSA_WORKER_MODE: ${MEDUSA_WORKER_MODE:-shared}
+      MEDUSA_CLI_TIMEOUT_SECONDS: ${MEDUSA_CLI_TIMEOUT_SECONDS:-240}
       DISABLE_MEDUSA_ADMIN: ${DISABLE_MEDUSA_ADMIN:-false}
       MEDUSA_BACKEND_URL: ${MEDUSA_BACKEND_URL:-http://localhost:9014}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
