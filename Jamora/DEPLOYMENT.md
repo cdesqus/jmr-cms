@@ -53,6 +53,9 @@ copy-paste from logs is required.
 - Data persists in the `pgdata` / `redisdata` named volumes across restarts.
 - Put a reverse proxy (Caddy / Nginx / Traefik) in front for TLS + real domains
   when you move past the dev server.
+- On the first boot, Medusa migrations and seeding can take several minutes before
+  the backend health endpoint is available. Use `docker compose logs -f medusa`
+  to watch progress.
 
 Handy: `docker compose ps` | `docker compose logs -f medusa` | `docker compose down`
 (add `-v` to also wipe the database volumes).

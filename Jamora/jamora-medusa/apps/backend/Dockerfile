@@ -28,7 +28,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 9000
-HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=10 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=300s --retries=20 \
   CMD curl -fsS http://localhost:9000/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
