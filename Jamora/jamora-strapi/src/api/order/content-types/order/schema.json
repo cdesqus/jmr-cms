@@ -1,0 +1,26 @@
+{
+  "kind": "collectionType",
+  "collectionName": "orders",
+  "info": {
+    "singularName": "order",
+    "pluralName": "orders",
+    "displayName": "Order"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "email": { "type": "email", "required": true },
+    "status": {
+      "type": "enumeration",
+      "enum": ["pending", "paid", "failed", "fulfilled", "refunded"],
+      "default": "pending",
+      "required": true
+    },
+    "currency": { "type": "string", "default": "eur", "required": true },
+    "totalCents": { "type": "integer", "required": true, "min": 0 },
+    "stripeSessionId": { "type": "string" },
+    "items": { "type": "json" },
+    "shippingAddress": { "type": "json" }
+  }
+}

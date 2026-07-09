@@ -1,21 +1,15 @@
-# Jamora full stack — Postgres + Redis + Medusa (backend/CMS) + Next.js storefront.
-# Deploy on a Linux dev server:
-#   1) cp .env.example .env   and edit the secrets + PUBLIC_URL values
-#   2) docker compose up -d --build
-#   3) open the storefront; it auto-discovers the Medusa publishable key
-#
-# Admin/CMS:  http://<server>:9014/app   (login = MEDUSA_ADMIN_EMAIL / MEDUSA_ADMIN_PASSWORD)
+# Jamora full stack - Postgres + Strapi CMS + Next.js storefront.
+# Admin/CMS:  http://<server>:9014/admin
 # Storefront: http://<server>:3095
 
 services:
   postgres:
     image: postgres:16
-    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-jamora_medusa}
+      POSTGRES_DB: ${POSTGRES_DB:-jamora_strapi}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -30,65 +24,45 @@ services:
       timeout: 5s
       retries: 12
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    volumes:
-      - redisdata:/data
-    ports:
-      - "${REDIS_PORT:-6372}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-
-  medusa:
+  strapi:
     build:
-      context: ./jamora-medusa/apps/backend
+      context: ./jamora-strapi
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-jamora_medusa}
-      DATABASE_POOL_MIN: ${DATABASE_POOL_MIN:-2}
-      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-50}
+      NODE_ENV: production
       HOST: 0.0.0.0
-      PORT: 9000
-      REDIS_URL: redis://redis:6379
-      MEDUSA_WORKER_MODE: ${MEDUSA_WORKER_MODE:-shared}
-      MEDUSA_CLI_TIMEOUT_SECONDS: ${MEDUSA_CLI_TIMEOUT_SECONDS:-240}
-      DISABLE_MEDUSA_ADMIN: ${DISABLE_MEDUSA_ADMIN:-false}
-      MEDUSA_BACKEND_URL: ${MEDUSA_BACKEND_URL:-http://localhost:9014}
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      COOKIE_SECRET: ${COOKIE_SECRET:?set COOKIE_SECRET in .env}
-      # Comma-separated origins allowed to call the backend.
-      STORE_CORS: ${STORE_CORS:-http://localhost:3095}
-      ADMIN_CORS: ${ADMIN_CORS:-http://localhost:9014}
-      AUTH_CORS: ${AUTH_CORS:-http://localhost:3095,http://localhost:9014}
-      MEDUSA_ADMIN_EMAIL: ${MEDUSA_ADMIN_EMAIL:-admin@jamora.eu}
-      MEDUSA_ADMIN_PASSWORD: ${MEDUSA_ADMIN_PASSWORD:-Jamora2026!}
+      PORT: 1337
+      PUBLIC_URL: ${STRAPI_PUBLIC_URL:-http://localhost:9014}
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:-jamora_strapi}
+      DATABASE_USERNAME: ${POSTGRES_USER:-postgres}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DATABASE_POOL_MIN: ${DATABASE_POOL_MIN:-2}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      APP_KEYS: ${STRAPI_APP_KEYS:?set STRAPI_APP_KEYS in .env}
+      API_TOKEN_SALT: ${STRAPI_API_TOKEN_SALT:?set STRAPI_API_TOKEN_SALT in .env}
+      ADMIN_JWT_SECRET: ${STRAPI_ADMIN_JWT_SECRET:?set STRAPI_ADMIN_JWT_SECRET in .env}
+      TRANSFER_TOKEN_SALT: ${STRAPI_TRANSFER_TOKEN_SALT:?set STRAPI_TRANSFER_TOKEN_SALT in .env}
+      JWT_SECRET: ${STRAPI_JWT_SECRET:?set STRAPI_JWT_SECRET in .env}
     ports:
-      - "${MEDUSA_PORT:-9014}:9000"
+      - "${STRAPI_PORT:-9014}:1337"
 
   storefront:
     build:
       context: ./jamora-web
     restart: unless-stopped
     depends_on:
-      medusa:
+      strapi:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      # Server-side fetches use the internal service hostname.
-      MEDUSA_BACKEND_URL: http://medusa:9000
-      MEDUSA_PUBLISHABLE_KEY: ${MEDUSA_PUBLISHABLE_KEY:-}
+      STRAPI_URL: http://strapi:1337
     ports:
       - "${STOREFRONT_PORT:-3095}:3000"
 
 volumes:
   pgdata:
-  redisdata:

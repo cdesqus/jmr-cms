@@ -1,187 +1,186 @@
-# Jamora - Deployment & Production Checklist
+# Jamora - Deployment Guide
 
-Jamora is a two-app system:
+Jamora sekarang jalan sebagai stack self-hosted:
 
 | App | Path | What it is | Runtime |
 | --- | --- | --- | --- |
-| **Storefront** | [jamora-web/](jamora-web/) | Customer-facing Next.js site | Node / Edge (Vercel) |
-| **Backend / CMS** | [jamora-medusa/](jamora-medusa/) | Medusa commerce engine + Admin dashboard | Node server + Postgres |
+| **Storefront** | [jamora-web/](jamora-web/) | Customer-facing Next.js site | Node |
+| **CMS / Admin** | [jamora-strapi/](jamora-strapi/) | Strapi content dashboard + product API | Node + Postgres |
+| **Database** | Docker volume `pgdata` | Product/order CMS data | Postgres |
 
-The storefront reads products, prices, and inventory from the Medusa **Store API**.
-The Admin dashboard (your CMS) is served by the Medusa backend.
+Storefront membaca katalog dari Strapi. Kalau Strapi belum ready atau error,
+storefront tetap render mock catalogue supaya site tidak blank.
 
 ---
 
-## Deploy with Docker Compose (Linux dev server)
+## Deploy With Docker Compose (Linux Dev Server)
 
-The whole stack is containerised: **Postgres + Redis + Medusa + storefront**. Files:
-[docker-compose.yml](docker-compose.yml), [.env.example](.env.example),
-[jamora-medusa/apps/backend/Dockerfile](jamora-medusa/apps/backend/Dockerfile),
-[jamora-web/Dockerfile](jamora-web/Dockerfile).
+Ports default:
+
+| Service | URL |
+| --- | --- |
+| Storefront | `http://<server>:3095` |
+| Strapi Admin | `http://<server>:9014/admin` |
+| Postgres | `<server>:5439` |
+
+From repo root on the Linux server:
 
 ```bash
-# on the Linux server, from the repo root
 cp .env.example .env
-# edit .env: set strong JWT_SECRET & COOKIE_SECRET (openssl rand -hex 32),
-# the admin password, and the CORS URLs to your server's address.
-
-docker compose up -d --build          # builds & starts all 4 services
+nano .env
 ```
 
-On first boot the Medusa container automatically runs migrations, seeds the 6
-Jamora products, creates the admin user, and creates the storefront publishable
-API key. The storefront auto-discovers that key from the backend, so no
-copy-paste from logs is required.
-
-**Access:**
-
-- Storefront -> `http://<server>:3095`
-- Admin / CMS -> `http://<server>:9014/app` (login = `MEDUSA_ADMIN_EMAIL` / `MEDUSA_ADMIN_PASSWORD`)
-
-### Notes
-
-- `MEDUSA_PUBLISHABLE_KEY` is optional in Docker Compose. If it is blank, the
-  storefront asks Medusa for the active Jamora publishable key at runtime. If you
-  set it, the env var wins as a manual override.
-- If the backend or key lookup is unavailable, the storefront serves its built-in
-  mock catalogue, so the site is never down.
-- Set `STORE_CORS` / `ADMIN_CORS` / `AUTH_CORS` to your real hostnames (e.g.
-  `http://203.0.113.10:3095`) or the admin login and storefront API calls will be
-  blocked by CORS.
-- Redis is wired in (`REDIS_URL`) so the cache / event bus / workflow engine are
-  durable, not the in-memory dev defaults.
-- Data persists in the `pgdata` / `redisdata` named volumes across restarts.
-- Put a reverse proxy (Caddy / Nginx / Traefik) in front for TLS + real domains
-  when you move past the dev server.
-- On the first boot, Medusa migrations and seeding can take several minutes before
-  the backend health endpoint is available. Use `docker compose logs -f medusa`
-  to watch progress. The entrypoint logs schema migrations and Jamora seed as
-  separate steps, runs migrations from the `.medusa/server` production build, and
-  disables Redis only for CLI migration steps so Redis runtime clients do not keep
-  the migration process open.
-
-Handy: `docker compose ps` | `docker compose logs -f medusa` | `docker compose down`
-(add `-v` to also wipe the database volumes).
-
-Troubleshooting Postgres password errors:
+Minimal `.env` edits:
 
 ```bash
-# Symptom in Medusa logs:
-# password authentication failed for user "postgres"
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
 
-# For a fresh/dev deployment where stored data can be deleted:
+STRAPI_APP_KEYS=$(openssl rand -base64 32),$(openssl rand -base64 32),$(openssl rand -base64 32),$(openssl rand -base64 32)
+STRAPI_API_TOKEN_SALT=$(openssl rand -base64 32)
+STRAPI_ADMIN_JWT_SECRET=$(openssl rand -base64 32)
+STRAPI_TRANSFER_TOKEN_SALT=$(openssl rand -base64 32)
+STRAPI_JWT_SECRET=$(openssl rand -base64 32)
+
+STRAPI_PUBLIC_URL=http://<server>:9014
+STRAPI_PORT=9014
+STOREFRONT_PORT=3095
+POSTGRES_PORT=5439
+```
+
+Then build and start:
+
+```bash
+docker compose up -d --build
+```
+
+Watch boot logs:
+
+```bash
+docker compose ps
+docker compose logs -f strapi
+docker compose logs -f storefront
+```
+
+On first boot, open `http://<server>:9014/admin` and create the first Strapi
+admin user. The app also seeds the initial Jamora products if the CMS product
+table is empty.
+
+---
+
+## If You Are Migrating From The Old Medusa Attempt
+
+The old compose used Medusa + Redis + a different Postgres database name. For a
+fresh dev server where old data is not important, wipe the old containers and
+volumes first:
+
+```bash
 docker compose down -v
 docker compose up -d --build
 ```
 
-Postgres only applies `POSTGRES_PASSWORD` when the `pgdata` volume is first
-created. If you change `POSTGRES_PASSWORD` later while keeping the old volume,
-Medusa will use the new `.env` password but Postgres will still expect the old
-one. For existing data you must either restore the old `.env` password or log in
-with the old password and run `ALTER USER postgres WITH PASSWORD 'new-password';`.
+This avoids the classic issue where Postgres keeps an old volume/password/schema
+while the new `.env` expects Strapi settings.
 
-Troubleshooting the publishable key:
+---
+
+## Day-To-Day Commands
 
 ```bash
-# Confirm the auto-discovery endpoint sees a key:
-curl http://localhost:9014/jamora/storefront-config
+docker compose ps
+docker compose logs -f strapi
+docker compose logs -f storefront
+docker compose restart strapi
+docker compose down
+```
 
-# Or inspect it directly in Postgres:
-docker compose exec postgres psql -U postgres -d jamora_medusa \
-  -c "select title, token, revoked_at from api_key where type = 'publishable';"
+Wipe all database data in dev:
+
+```bash
+docker compose down -v
+```
+
+Open a Postgres shell:
+
+```bash
+docker compose exec postgres psql -U postgres -d jamora_strapi
+```
+
+Check product API from the server:
+
+```bash
+curl http://localhost:9014/api/products
 ```
 
 ---
 
-## Local development (without Docker)
+## Editing Products
+
+1. Open `http://<server>:9014/admin`.
+2. Create the first admin account if prompted.
+3. Go to **Content Manager -> Product**.
+4. Edit product content, prices, stock, and featured flags.
+
+The storefront revalidates product data periodically, so product changes should
+show without rebuilding the frontend.
+
+---
+
+## Troubleshooting
+
+### Strapi is unhealthy
 
 ```bash
-# 1. Database (Docker) - start once
-docker start jamora-postgres        # created during setup; run `docker ps` to confirm
-
-# 2. Backend / CMS
-cd jamora-medusa/apps/backend
-npm run dev                          # API + Admin at http://localhost:9000
-# Admin dashboard: http://localhost:9000/app
-
-# 3. Storefront (separate terminal)
-cd jamora-web
-npm run dev                          # http://localhost:3000
+docker compose logs --tail=200 strapi
+docker compose ps
 ```
 
-### Accessing the CMS (admin dashboard)
+Common causes:
 
-- URL: **http://localhost:9000/app**
-- Create/replace an admin user any time:
-  ```bash
-  cd jamora-medusa/apps/backend
-  npx medusa user --email you@jamora.eu --password "a-strong-password"
-  ```
-- Everything merchandising lives there: products, variants, **EUR prices**, inventory,
-  orders, customers, discounts, regions, and tax. Changes appear on the storefront
-  immediately (it fetches live from the Store API).
+- `.env` secrets are missing.
+- Postgres volume was created with a different `POSTGRES_PASSWORD`.
+- Port `9014` or `5439` is already used on the server.
 
----
+For disposable dev data:
 
-## Going to production - the pieces that are NOT code
+```bash
+docker compose down -v
+docker compose up -d --build
+```
 
-The code is production-grade, but a live store additionally needs these external
-accounts and services. This is the honest gap between "runs locally" and "charging
-real cards."
+### Storefront works but products are mock data
 
-### 1. Managed Postgres
+Check Strapi:
 
-- Use a managed provider (Neon, Supabase, Railway, RDS). Never self-manage the DB for a store.
-- Set `DATABASE_URL` on the backend host to the managed connection string.
+```bash
+curl http://localhost:9014/api/products
+docker compose logs --tail=100 storefront
+```
 
-### 2. Host the Medusa backend
+Inside Docker, storefront talks to Strapi through `http://strapi:1337`; do not
+change that value in `docker-compose.yml` unless the service name changes.
 
-- Deploy `jamora-medusa/apps/backend` to a Node host (Railway, Render, a VPS, or Medusa Cloud).
-- Required env: `DATABASE_URL`, `JWT_SECRET`, `COOKIE_SECRET` (generate strong new values;
-  the local defaults are `supersecret`), `STORE_CORS`, `ADMIN_CORS`, `AUTH_CORS`.
-- Add **Redis** for production (`REDIS_URL`) and configure the cache / event-bus / workflow-engine
-  modules. The in-memory defaults are dev-only and do not survive restarts or scale.
-- Run migrations on deploy: `npx medusa db:migrate`.
+### Postgres password errors
 
-### 3. Payments (real money)
+Postgres only applies `POSTGRES_PASSWORD` when the volume is first created. If
+you changed `.env` after the first boot, either restore the old password or wipe
+the dev volume:
 
-- Create a **Stripe** (or Adyen) account; add the Stripe payment module to `medusa-config.ts`
-  with `STRIPE_API_KEY` + webhook secret.
-- Enable EU methods in Stripe: cards, iDEAL, Bancontact, Klarna, Apple/Google Pay.
-- The storefront's checkout button is currently a stub. Wire it to Medusa's cart,
-  payment-session, and Stripe flow once the module is configured.
-
-### 4. Tax / VAT
-
-- Configure EU tax regions in the Admin (per-country VAT). Medusa handles VAT-inclusive
-  pricing and tax lines; enable automatic tax or a tax provider.
-
-### 5. Host the storefront
-
-- Deploy `jamora-web` to Vercel.
-- Env: `NEXT_PUBLIC_MEDUSA_BACKEND_URL` (the deployed backend URL). You may also set
-  `NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY` from Admin -> Settings -> Publishable API Keys
-  as an explicit override.
-- Point `STORE_CORS` on the backend at the storefront's production domain.
-
-### 6. Everything else
-
-- Domain + DNS + TLS.
-- Transactional email (order confirmations, the contact form) via Resend / Postmark.
-  Swap the `console.info` in [jamora-web/src/app/api/contact/route.ts](jamora-web/src/app/api/contact/route.ts).
-- Privacy-friendly analytics (Plausible / Matomo), honoring the existing granular cookie consent.
-- Backups for Postgres and an uptime monitor.
+```bash
+docker compose down -v
+docker compose up -d --build
+```
 
 ---
 
-## Production readiness status
+## Production Notes Later
 
-| Area | Status |
-| --- | --- |
-| Storefront UI (home, shop, product, cart, contact, about) | Built |
-| Granular GDPR cookie consent | Built |
-| Commerce backend + Admin CMS (products, orders, inventory) | Running locally |
-| EUR region / pricing | Configured |
-| Storefront reads live CMS data | Wired |
-| Real checkout / payments (Stripe) | Needs Stripe account + module |
-| Hosting, domain, managed DB, Redis, email | Needs infra + accounts |
+For a real paid store, the remaining pieces are:
+
+- Stripe Checkout endpoint in `jamora-web`.
+- Stripe webhook handling to record paid orders in Strapi.
+- Domain + TLS via Caddy, Nginx, or Traefik.
+- Transactional email for order confirmations.
+- Regular Postgres backups.
+
+No monthly CMS fee is required for this stack. You only pay for the server,
+domain, payment processing, and any optional infrastructure you choose.

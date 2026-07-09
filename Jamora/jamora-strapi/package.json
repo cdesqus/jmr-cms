@@ -1,0 +1,23 @@
+{
+  "name": "jamora-strapi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jamora self-hosted Strapi CMS",
+  "scripts": {
+    "build": "strapi build",
+    "develop": "strapi develop",
+    "start": "strapi start",
+    "strapi": "strapi"
+  },
+  "dependencies": {
+    "@strapi/plugin-users-permissions": "5.50.1",
+    "@strapi/provider-upload-local": "5.50.1",
+    "@strapi/strapi": "5.50.1",
+    "pg": "8.16.3",
+    "typescript": "5.8.3"
+  },
+  "engines": {
+    "node": ">=20 <=22.x.x",
+    "npm": ">=9.0.0"
+  }
+}
