@@ -7,10 +7,13 @@ echo "[entrypoint] Running database migrations..."
 # Split schema migrations from migration scripts so first boot logs show exactly
 # where startup is. --execute-all-links prevents non-interactive Docker startup
 # from waiting on link-sync prompts.
-npx medusa db:migrate --skip-scripts --execute-all-links --concurrency 1 --verbose
+# Redis-backed runtime modules can keep the migration CLI process alive after
+# connecting. Schema migrations do not need Redis, so disable it for CLI steps
+# and restore it for the server process below.
+REDIS_URL="" npx medusa db:migrate --skip-scripts --execute-all-links --concurrency 1 --verbose
 
 echo "[entrypoint] Running one-time Jamora seed..."
-npx medusa db:migrate:scripts --verbose
+REDIS_URL="" npx medusa db:migrate:scripts --verbose
 
 echo "[entrypoint] Ensuring admin user ${MEDUSA_ADMIN_EMAIL}..."
 npx medusa user -e "${MEDUSA_ADMIN_EMAIL}" -p "${MEDUSA_ADMIN_PASSWORD}" \
