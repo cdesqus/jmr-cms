@@ -5,8 +5,8 @@ WORKDIR /app
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json* ./
-RUN npm install --legacy-peer-deps --no-audit --no-fund
+COPY package.json ./
+RUN npm install --package-lock=false --legacy-peer-deps --no-audit --no-fund
 
 FROM node:20-slim AS builder
 WORKDIR /app

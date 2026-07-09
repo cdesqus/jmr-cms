@@ -156,7 +156,9 @@ docker compose up -d
 
 If it still fails, print the full npm error from the failed build log. The
 Strapi Dockerfile uses Node 20 and installs the small native build toolchain
-needed by Strapi dependencies.
+needed by Strapi dependencies. It intentionally installs from `package.json`
+without a committed lockfile to avoid npm lockfile/version issues across local
+Windows and Linux Docker builds.
 
 ### Storefront works but products are mock data
 
