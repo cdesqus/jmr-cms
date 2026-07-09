@@ -35,8 +35,8 @@ copy-paste from logs is required.
 
 **Access:**
 
-- Storefront -> `http://<server>:3000`
-- Admin / CMS -> `http://<server>:9000/app` (login = `MEDUSA_ADMIN_EMAIL` / `MEDUSA_ADMIN_PASSWORD`)
+- Storefront -> `http://<server>:3095`
+- Admin / CMS -> `http://<server>:9014/app` (login = `MEDUSA_ADMIN_EMAIL` / `MEDUSA_ADMIN_PASSWORD`)
 
 ### Notes
 
@@ -46,7 +46,7 @@ copy-paste from logs is required.
 - If the backend or key lookup is unavailable, the storefront serves its built-in
   mock catalogue, so the site is never down.
 - Set `STORE_CORS` / `ADMIN_CORS` / `AUTH_CORS` to your real hostnames (e.g.
-  `http://203.0.113.10:3000`) or the admin login and storefront API calls will be
+  `http://203.0.113.10:3095`) or the admin login and storefront API calls will be
   blocked by CORS.
 - Redis is wired in (`REDIS_URL`) so the cache / event bus / workflow engine are
   durable, not the in-memory dev defaults.
@@ -57,11 +57,28 @@ copy-paste from logs is required.
 Handy: `docker compose ps` | `docker compose logs -f medusa` | `docker compose down`
 (add `-v` to also wipe the database volumes).
 
+Troubleshooting Postgres password errors:
+
+```bash
+# Symptom in Medusa logs:
+# password authentication failed for user "postgres"
+
+# For a fresh/dev deployment where stored data can be deleted:
+docker compose down -v
+docker compose up -d --build
+```
+
+Postgres only applies `POSTGRES_PASSWORD` when the `pgdata` volume is first
+created. If you change `POSTGRES_PASSWORD` later while keeping the old volume,
+Medusa will use the new `.env` password but Postgres will still expect the old
+one. For existing data you must either restore the old `.env` password or log in
+with the old password and run `ALTER USER postgres WITH PASSWORD 'new-password';`.
+
 Troubleshooting the publishable key:
 
 ```bash
 # Confirm the auto-discovery endpoint sees a key:
-curl http://localhost:9000/jamora/storefront-config
+curl http://localhost:9014/jamora/storefront-config
 
 # Or inspect it directly in Postgres:
 docker compose exec postgres psql -U postgres -d jamora_medusa \

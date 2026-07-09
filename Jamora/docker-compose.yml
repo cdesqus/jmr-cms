@@ -4,8 +4,8 @@
 #   2) docker compose up -d --build
 #   3) open the storefront; it auto-discovers the Medusa publishable key
 #
-# Admin/CMS:  http://<server>:9000/app   (login = MEDUSA_ADMIN_EMAIL / MEDUSA_ADMIN_PASSWORD)
-# Storefront: http://<server>:3000
+# Admin/CMS:  http://<server>:9014/app   (login = MEDUSA_ADMIN_EMAIL / MEDUSA_ADMIN_PASSWORD)
+# Storefront: http://<server>:3095
 
 services:
   postgres:
@@ -17,8 +17,14 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-jamora_medusa}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5439}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-jamora_medusa}"]
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=$${POSTGRES_PASSWORD} psql -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'select 1' >/dev/null",
+        ]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -28,6 +34,8 @@ services:
     restart: unless-stopped
     volumes:
       - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6372}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -49,13 +57,13 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       COOKIE_SECRET: ${COOKIE_SECRET:?set COOKIE_SECRET in .env}
       # Comma-separated origins allowed to call the backend.
-      STORE_CORS: ${STORE_CORS:-http://localhost:3000}
-      ADMIN_CORS: ${ADMIN_CORS:-http://localhost:9000}
-      AUTH_CORS: ${AUTH_CORS:-http://localhost:3000,http://localhost:9000}
+      STORE_CORS: ${STORE_CORS:-http://localhost:3095}
+      ADMIN_CORS: ${ADMIN_CORS:-http://localhost:9014}
+      AUTH_CORS: ${AUTH_CORS:-http://localhost:3095,http://localhost:9014}
       MEDUSA_ADMIN_EMAIL: ${MEDUSA_ADMIN_EMAIL:-admin@jamora.eu}
       MEDUSA_ADMIN_PASSWORD: ${MEDUSA_ADMIN_PASSWORD:-Jamora2026!}
     ports:
-      - "${MEDUSA_PORT:-9000}:9000"
+      - "${MEDUSA_PORT:-9014}:9000"
 
   storefront:
     build:
@@ -70,7 +78,7 @@ services:
       MEDUSA_BACKEND_URL: http://medusa:9000
       MEDUSA_PUBLISHABLE_KEY: ${MEDUSA_PUBLISHABLE_KEY:-}
     ports:
-      - "${STOREFRONT_PORT:-3000}:3000"
+      - "${STOREFRONT_PORT:-3095}:3000"
 
 volumes:
   pgdata:
