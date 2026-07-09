@@ -147,6 +147,17 @@ docker compose down -v
 docker compose up -d --build
 ```
 
+### Strapi image fails while installing npm packages
+
+```bash
+docker compose build --no-cache strapi
+docker compose up -d
+```
+
+If it still fails, print the full npm error from the failed build log. The
+Strapi Dockerfile uses Node 20 and installs the small native build toolchain
+needed by Strapi dependencies.
+
 ### Storefront works but products are mock data
 
 Check Strapi:
