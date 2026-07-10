@@ -1,5 +1,3 @@
-import type { StrapiApp } from "@strapi/admin/strapi-admin";
-
 const AnalyticsIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
     <rect x="3" y="4" width="18" height="16" rx="4" fill="#4945FF" />
@@ -8,7 +6,7 @@ const AnalyticsIcon = () => (
 );
 
 export default {
-  register(app: StrapiApp) {
+  register(app: any) {
     if ("widgets" in app) {
       app.widgets.register({
         id: "jamora-analytics",

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Widget } from "@strapi/admin/strapi-admin";
 
 interface AnalyticsSummary {
   visits: number;
@@ -42,8 +41,16 @@ export default function JamoraAnalyticsWidget() {
     };
   }, []);
 
-  if (error) return <Widget.Error />;
-  if (!data) return <Widget.Loading />;
+  if (error) {
+    return (
+      <div style={{ color: "#d02b20", fontSize: 14 }}>
+        Analytics could not be loaded.
+      </div>
+    );
+  }
+  if (!data) {
+    return <div style={{ color: "#666687", fontSize: 14 }}>Loading analytics...</div>;
+  }
 
   const metrics = [
     ["Visits", data.visits.toLocaleString("en-GB")],

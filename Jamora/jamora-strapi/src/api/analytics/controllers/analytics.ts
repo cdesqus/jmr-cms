@@ -36,7 +36,7 @@ async function decrementProductStock(items: any[]) {
       documentId: product.documentId,
       data: {
         stock: Math.max(0, product.stock - qty),
-      },
+      } as any,
     });
   }
 }
