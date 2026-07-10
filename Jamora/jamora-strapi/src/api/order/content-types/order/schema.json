@@ -27,6 +27,8 @@
     "stripeSessionId": { "type": "string" },
     "itemsSummary": { "type": "text" },
     "shippingAddressText": { "type": "text" },
+    "trackingPreviewUrl": { "type": "string" },
+    "deliveryLabelUrl": { "type": "string" },
     "estimatedDelivery": { "type": "datetime" }
   }
 }

@@ -20,10 +20,13 @@ interface StrapiTrackedOrder {
 
 function isStatus(value: unknown): value is MockOrderStatus {
   return (
+    value === "pending" ||
     value === "paid" ||
     value === "processing" ||
     value === "shipped" ||
-    value === "fulfilled"
+    value === "fulfilled" ||
+    value === "failed" ||
+    value === "refunded"
   );
 }
 
@@ -54,7 +57,9 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
     orderNumber: order.orderNumber ?? "JMR-UNKNOWN",
     trackingNumber: order.trackingNumber ?? "",
     carrier: order.carrier ?? "Jamora EU Fulfilment",
-    status: isStatus(order.status) ? order.status : "paid",
+    status: isStatus(String(order.status).toLowerCase())
+      ? (String(order.status).toLowerCase() as MockOrderStatus)
+      : "pending",
     customer: {
       name: order.customerName ?? "",
       email: order.email ?? "",

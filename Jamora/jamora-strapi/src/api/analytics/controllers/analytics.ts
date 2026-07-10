@@ -63,6 +63,12 @@ export default {
     const body = ctx.request.body ?? {};
     const items = Array.isArray(body.items) ? body.items : [];
     const totalCents = asNumber(body.totalCents);
+    const orderNumber = asString(body.orderNumber);
+    const storefrontUrl = (
+      process.env.JAMORA_STOREFRONT_URL ??
+      process.env.PUBLIC_URL ??
+      "http://localhost:3095"
+    ).replace(/\/$/, "");
     const costRatio = Number(process.env.JAMORA_COST_RATIO ?? DEFAULT_COST_RATIO);
     const estimatedProfitCents = Math.max(
       0,
@@ -71,7 +77,7 @@ export default {
 
     const order = await strapi.documents("api::order.order").create({
       data: {
-        orderNumber: asString(body.orderNumber),
+        orderNumber,
         trackingNumber: asString(body.trackingNumber),
         carrier: asString(body.carrier, "Jamora EU Fulfilment"),
         customerName: asString(body.customer?.name),
@@ -86,6 +92,8 @@ export default {
           body.customer?.address,
           asString(body.shippingAddress?.address),
         ),
+        trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
+        deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
         estimatedDelivery: body.estimatedDelivery,
       },
     });
@@ -116,6 +124,8 @@ export default {
         "totalCents",
         "itemsSummary",
         "shippingAddressText",
+        "trackingPreviewUrl",
+        "deliveryLabelUrl",
         "estimatedDelivery",
         "createdAt",
       ],

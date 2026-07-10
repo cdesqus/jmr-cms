@@ -13,6 +13,11 @@ import { fetchTrackedOrder } from "@/lib/order-tracking";
 
 const STEPS: { status: MockOrderStatus; label: string; description: string }[] = [
   {
+    status: "pending",
+    label: "Pending",
+    description: "Order was created and is waiting for payment confirmation.",
+  },
+  {
     status: "paid",
     label: "Paid",
     description: "Payment accepted in test mode and confirmation prepared.",
@@ -34,6 +39,11 @@ const STEPS: { status: MockOrderStatus; label: string; description: string }[] =
   },
 ];
 
+const TERMINAL_STATUS_LABELS: Partial<Record<MockOrderStatus, string>> = {
+  failed: "Payment failed",
+  refunded: "Refunded",
+};
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
@@ -43,6 +53,13 @@ function formatDate(value: string) {
 
 function statusIndex(status: MockOrderStatus) {
   return STEPS.findIndex((step) => step.status === status);
+}
+
+function humanStatus(status: MockOrderStatus) {
+  return (
+    TERMINAL_STATUS_LABELS[status] ??
+    status.charAt(0).toUpperCase() + status.slice(1)
+  );
 }
 
 export function OrderDetail({
@@ -97,7 +114,8 @@ export function OrderDetail({
     );
   }
 
-  const active = statusIndex(order.status);
+  const active = Math.max(0, statusIndex(order.status));
+  const isTerminalException = order.status === "failed" || order.status === "refunded";
 
   return (
     <div className="space-y-8">
@@ -111,6 +129,9 @@ export function OrderDetail({
             <p className="mt-2 text-stone">
               Confirmation email simulated for {order.customer.email}.
             </p>
+            <p className="mt-3 inline-flex rounded-full border border-clay bg-cream px-3 py-1 text-sm font-semibold text-bark">
+              Current status: {humanStatus(order.status)}
+            </p>
           </div>
           <div className="rounded-lg border border-clay bg-cream px-4 py-3 text-sm">
             <p className="font-semibold text-ink">{order.carrier}</p>
@@ -121,12 +142,15 @@ export function OrderDetail({
 
       <section className="grid gap-4 md:grid-cols-4">
         {STEPS.map((step, index) => {
-          const done = index <= active;
+          const done = !isTerminalException && index <= active;
+          const current = !isTerminalException && step.status === order.status;
           return (
             <div
               key={step.status}
               className={`rounded-xl border p-4 ${
-                done
+                current
+                  ? "border-terracotta bg-terracotta/15"
+                  : done
                   ? "border-terracotta/50 bg-terracotta/10"
                   : "border-clay/70 bg-white/40"
               }`}
@@ -144,6 +168,16 @@ export function OrderDetail({
           );
         })}
       </section>
+
+      {isTerminalException && (
+        <section className="rounded-xl border border-terracotta/40 bg-terracotta/10 p-5">
+          <h2 className="font-semibold text-ink">{humanStatus(order.status)}</h2>
+          <p className="mt-1 text-sm text-bark">
+            This order is not moving through fulfilment. Contact Jamora support
+            if this status looks wrong.
+          </p>
+        </section>
+      )}
 
       <section className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-xl border border-clay/70 bg-white/40 p-6">

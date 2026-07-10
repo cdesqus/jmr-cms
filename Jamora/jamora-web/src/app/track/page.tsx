@@ -5,7 +5,13 @@ export const metadata: Metadata = {
   title: "Track Order",
 };
 
-export default function TrackPage() {
+export default async function TrackPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ order?: string }>;
+}) {
+  const { order } = await searchParams;
+
   return (
     <div className="mx-auto max-w-5xl px-5 py-14">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-terracotta">
@@ -16,8 +22,7 @@ export default function TrackPage() {
         Enter the order number or tracking number from your confirmation page.
         In this test build, orders are stored in the browser that created them.
       </p>
-      <TrackingView />
+      <TrackingView initialQuery={order ?? ""} />
     </div>
   );
 }
-

@@ -1,6 +1,13 @@
 import type { CartItem } from "@/components/cart-context";
 
-export type MockOrderStatus = "paid" | "processing" | "shipped" | "fulfilled";
+export type MockOrderStatus =
+  | "pending"
+  | "paid"
+  | "processing"
+  | "shipped"
+  | "fulfilled"
+  | "failed"
+  | "refunded";
 
 export interface MockOrder {
   id: string;

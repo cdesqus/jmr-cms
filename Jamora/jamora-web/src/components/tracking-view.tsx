@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { OrderDetail } from "@/components/order-detail";
 
-export function TrackingView() {
-  const [query, setQuery] = useState("");
-  const [submitted, setSubmitted] = useState<string | null>(null);
+export function TrackingView({ initialQuery = "" }: { initialQuery?: string }) {
+  const [query, setQuery] = useState(initialQuery);
+  const [submitted, setSubmitted] = useState<string | null>(
+    initialQuery.trim() || null,
+  );
 
   return (
     <div className="mt-8 space-y-8">
