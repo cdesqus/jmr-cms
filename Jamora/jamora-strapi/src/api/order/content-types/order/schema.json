@@ -10,17 +10,23 @@
     "draftAndPublish": false
   },
   "attributes": {
+    "orderNumber": { "type": "string" },
+    "trackingNumber": { "type": "string" },
+    "carrier": { "type": "string" },
+    "customerName": { "type": "string" },
     "email": { "type": "email", "required": true },
     "status": {
       "type": "enumeration",
-      "enum": ["pending", "paid", "failed", "fulfilled", "refunded"],
+      "enum": ["pending", "paid", "processing", "shipped", "fulfilled", "failed", "refunded"],
       "default": "pending",
       "required": true
     },
     "currency": { "type": "string", "default": "eur", "required": true },
     "totalCents": { "type": "integer", "required": true, "min": 0 },
+    "estimatedProfitCents": { "type": "integer", "min": 0 },
     "stripeSessionId": { "type": "string" },
     "items": { "type": "json" },
-    "shippingAddress": { "type": "json" }
+    "shippingAddress": { "type": "json" },
+    "estimatedDelivery": { "type": "datetime" }
   }
 }

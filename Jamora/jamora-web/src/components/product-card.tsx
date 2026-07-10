@@ -32,6 +32,11 @@ export function ProductCard({ product }: { product: Product }) {
             </Link>
           </h3>
           <p className="mt-1 text-sm text-stone">{product.tagline}</p>
+          {typeof product.stock === "number" && (
+            <p className="mt-2 text-xs font-medium text-bark">
+              {product.stock > 0 ? `${product.stock} in stock` : "Out of stock"}
+            </p>
+          )}
         </div>
         <div className="mt-auto pt-1">
           <AddToCartButton product={product} variant="soft" />

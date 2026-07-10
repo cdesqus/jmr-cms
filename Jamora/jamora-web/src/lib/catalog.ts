@@ -38,6 +38,7 @@ interface StrapiProductFields {
   certifications?: unknown;
   netWeight?: string;
   featured?: boolean;
+  stock?: number;
   gradient?: unknown;
 }
 
@@ -95,6 +96,7 @@ function mapProduct(entity: StrapiEntity<StrapiProductFields>): Product | null {
     certifications: toCertifications(fields.certifications),
     netWeight: fields.netWeight ?? "",
     featured: fields.featured ?? false,
+    stock: fields.stock ?? 0,
     gradient: toGradient(fields.gradient),
   };
 }

@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { createMockOrder, saveMockOrder } from "@/lib/mock-orders";
+import {
+  createMockOrder,
+  saveMockOrder,
+  syncMockOrderToStrapi,
+} from "@/lib/mock-orders";
 import { formatEUR } from "@/lib/products";
 import { useCart } from "@/components/cart-context";
 import { ProductVisual } from "@/components/product-visual";
@@ -40,7 +44,7 @@ export function CartView() {
   const canCheckout =
     customer.name.trim() && customer.email.trim() && customer.address.trim();
 
-  function handleCheckout() {
+  async function handleCheckout() {
     if (!canCheckout) {
       setError("Please add your name, email, and shipping address.");
       return;
@@ -57,6 +61,7 @@ export function CartView() {
       },
     });
     saveMockOrder(order);
+    await syncMockOrderToStrapi(order);
     clear();
     router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
   }

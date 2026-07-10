@@ -15,6 +15,7 @@ export function AddToCartButton({
   className?: string;
 }) {
   const { add } = useCart();
+  const outOfStock = typeof product.stock === "number" && product.stock <= 0;
 
   const base =
     "inline-flex w-full items-center justify-center rounded-full px-5 py-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-2 focus-visible:ring-offset-cream";
@@ -26,10 +27,11 @@ export function AddToCartButton({
   return (
     <button
       type="button"
+      disabled={outOfStock}
       onClick={() => add(product, qty)}
-      className={`${base} ${styles} ${className}`}
+      className={`${base} ${styles} ${className} disabled:cursor-not-allowed disabled:opacity-50`}
     >
-      Add to cart
+      {outOfStock ? "Out of stock" : "Add to cart"}
     </button>
   );
 }

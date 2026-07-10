@@ -9,6 +9,7 @@ import {
   type MockOrder,
   type MockOrderStatus,
 } from "@/lib/mock-orders";
+import { fetchTrackedOrder } from "@/lib/order-tracking";
 
 const STEPS: { status: MockOrderStatus; label: string; description: string }[] = [
   {
@@ -55,8 +56,23 @@ export function OrderDetail({
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    setOrder(orderId ? getMockOrder(orderId) : getLastMockOrder());
-    setLoaded(true);
+    let ignore = false;
+
+    async function load() {
+      try {
+        const remote = orderId ? await fetchTrackedOrder(orderId) : null;
+        if (!ignore) setOrder(remote ?? (orderId ? getMockOrder(orderId) : getLastMockOrder()));
+      } catch {
+        if (!ignore) setOrder(orderId ? getMockOrder(orderId) : getLastMockOrder());
+      } finally {
+        if (!ignore) setLoaded(true);
+      }
+    }
+
+    void load();
+    return () => {
+      ignore = true;
+    };
   }, [orderId]);
 
   if (!loaded) {
@@ -186,4 +202,3 @@ export function OrderDetail({
     </div>
   );
 }
-

@@ -74,6 +74,18 @@ export function saveMockOrder(order: MockOrder) {
   localStorage.setItem(LAST_ORDER_KEY, order.id);
 }
 
+export async function syncMockOrderToStrapi(order: MockOrder) {
+  try {
+    await fetch("/api/jamora/orders/mock-paid", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(order),
+    });
+  } catch {
+    // Analytics/order sync is best-effort in test mode.
+  }
+}
+
 export function getMockOrders(): MockOrder[] {
   try {
     const raw = localStorage.getItem(ORDERS_KEY);
@@ -99,4 +111,3 @@ export function getMockOrder(idOrNumber: string | null): MockOrder | null {
 export function getLastMockOrder(): MockOrder | null {
   return getMockOrder(localStorage.getItem(LAST_ORDER_KEY));
 }
-

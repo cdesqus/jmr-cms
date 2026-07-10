@@ -31,6 +31,7 @@ export interface Product {
   certifications: Certification[];
   netWeight: string;
   featured?: boolean;
+  stock?: number;
   /** Two-stop gradient used for the botanical placeholder visual. */
   gradient: [string, string];
 }

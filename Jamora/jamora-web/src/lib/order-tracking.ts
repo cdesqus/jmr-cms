@@ -1,0 +1,68 @@
+import type { MockOrder, MockOrderStatus } from "@/lib/mock-orders";
+
+interface StrapiTrackedOrder {
+  documentId?: string;
+  id?: string | number;
+  orderNumber?: string;
+  trackingNumber?: string;
+  carrier?: string;
+  customerName?: string;
+  email?: string;
+  status?: string;
+  totalCents?: number;
+  items?: MockOrder["items"];
+  shippingAddress?: { address?: string } | Record<string, unknown>;
+  estimatedDelivery?: string;
+  createdAt?: string;
+}
+
+function isStatus(value: unknown): value is MockOrderStatus {
+  return (
+    value === "paid" ||
+    value === "processing" ||
+    value === "shipped" ||
+    value === "fulfilled"
+  );
+}
+
+function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
+  const shippingAddress = order.shippingAddress ?? {};
+  const address =
+    typeof shippingAddress === "object" &&
+    "address" in shippingAddress &&
+    typeof shippingAddress.address === "string"
+      ? shippingAddress.address
+      : "";
+
+  return {
+    id: String(order.documentId ?? order.id ?? order.orderNumber),
+    orderNumber: order.orderNumber ?? "JMR-UNKNOWN",
+    trackingNumber: order.trackingNumber ?? "",
+    carrier: order.carrier ?? "Jamora EU Fulfilment",
+    status: isStatus(order.status) ? order.status : "paid",
+    customer: {
+      name: order.customerName ?? "",
+      email: order.email ?? "",
+      address,
+    },
+    items: Array.isArray(order.items) ? order.items : [],
+    subtotalCents: order.totalCents ?? 0,
+    shippingCents: 0,
+    totalCents: order.totalCents ?? 0,
+    createdAt: order.createdAt ?? new Date().toISOString(),
+    estimatedDelivery: order.estimatedDelivery ?? new Date().toISOString(),
+    emailConfirmationSent: true,
+  };
+}
+
+export async function fetchTrackedOrder(query: string): Promise<MockOrder | null> {
+  const res = await fetch(
+    `/api/jamora/orders/track?q=${encodeURIComponent(query)}`,
+    { cache: "no-store" },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Order tracking failed: ${res.status}`);
+  const json = (await res.json()) as { order?: StrapiTrackedOrder };
+  return json.order ? mapTrackedOrder(json.order) : null;
+}
+

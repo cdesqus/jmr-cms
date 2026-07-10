@@ -66,6 +66,11 @@ export default async function ProductPage(props: PageProps<"/product/[slug]">) {
             </span>
             <span className="text-sm text-stone">{product.netWeight}</span>
           </div>
+          {typeof product.stock === "number" && (
+            <p className="mt-2 text-sm font-medium text-bark">
+              {product.stock > 0 ? `${product.stock} in stock` : "Out of stock"}
+            </p>
+          )}
 
           <div className="mt-6 max-w-xs">
             <AddToCartButton product={product} />

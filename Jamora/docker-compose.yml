@@ -48,6 +48,7 @@ services:
       ADMIN_JWT_SECRET: ${STRAPI_ADMIN_JWT_SECRET:?set STRAPI_ADMIN_JWT_SECRET in .env}
       TRANSFER_TOKEN_SALT: ${STRAPI_TRANSFER_TOKEN_SALT:?set STRAPI_TRANSFER_TOKEN_SALT in .env}
       JWT_SECRET: ${STRAPI_JWT_SECRET:?set STRAPI_JWT_SECRET in .env}
+      JAMORA_COST_RATIO: ${JAMORA_COST_RATIO:-0.42}
     volumes:
       - strapi_uploads:/app/public/uploads
     ports:

@@ -6,6 +6,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { CartDrawer } from "@/components/cart-drawer";
 import { CookieConsent } from "@/components/cookie-consent";
+import { VisitTracker } from "@/components/visit-tracker";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -43,6 +44,7 @@ export default function RootLayout({
           <SiteFooter />
           <CartDrawer />
           <CookieConsent />
+          <VisitTracker />
         </CartProvider>
       </body>
     </html>

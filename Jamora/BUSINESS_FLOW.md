@@ -10,6 +10,7 @@ payment, dan fulfillment. Stack saat ini:
 | Database | Postgres | Simpan data CMS, produk, order |
 | Payment | Stripe Checkout | Pembayaran kartu dan metode lokal yang didukung Stripe |
 | Reverse Proxy | Nginx | Routing domain ke storefront dan Strapi |
+| Analytics | Strapi + visit events | Visit, sales, omzet, estimated profit dashboard |
 
 ---
 
@@ -163,7 +164,27 @@ sequenceDiagram
 
 ---
 
-## 9. Required Environment Variables For Checkout
+## 9. Analytics Flow
+
+1. Storefront loads a page.
+2. `VisitTracker` sends a lightweight visit event to Strapi.
+3. Mock paid checkout sends paid order data to Strapi.
+4. Strapi aggregates visit events and paid/fulfilled orders.
+5. Strapi Admin homepage widget displays:
+   - total visits
+   - visits today
+   - sales count
+   - omzet
+   - today omzet
+   - estimated profit
+   - estimated margin
+
+Estimated profit uses `JAMORA_COST_RATIO`. Example: `0.42` means estimated cost
+is 42% of omzet, so estimated gross profit is 58%.
+
+---
+
+## 10. Required Environment Variables For Checkout
 
 ```bash
 NEXT_PUBLIC_SITE_URL=https://jamora.kaumtech.com
@@ -171,6 +192,7 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRAPI_URL=http://strapi:1337
+JAMORA_COST_RATIO=0.42
 ```
 
 Notes:
@@ -182,7 +204,7 @@ Notes:
 
 ---
 
-## 10. Implementation Checklist
+## 11. Implementation Checklist
 
 | Item | Status |
 | --- | --- |
@@ -195,7 +217,12 @@ Notes:
 | Mock paid checkout for testing | Done |
 | Success / cancel pages | Done |
 | Browser-based order tracking | Done |
+| Strapi-backed order tracking | Done |
+| Inventory stock field | Done |
+| Stock decrement on mock paid checkout | Done |
 | Simulated email confirmation | Done |
+| Visit analytics capture | Done |
+| Sales / omzet / profit Strapi widget | Done |
 | Stripe Checkout API route | Todo |
 | Checkout button integration | Todo |
 | Stripe webhook verification | Todo |
