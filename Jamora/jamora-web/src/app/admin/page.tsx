@@ -21,14 +21,14 @@ export default async function AdminDashboardPage() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-terracotta">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">
             Operations
           </p>
-          <h1 className="mt-2 font-display text-4xl text-ink">Shop dashboard</h1>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">Shop dashboard</h1>
         </div>
         <Link
           href="/admin/orders"
-          className="rounded-full bg-terracotta px-5 py-2.5 text-sm font-semibold text-cream"
+          className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white"
         >
           View orders
         </Link>
@@ -52,18 +52,18 @@ export default async function AdminDashboardPage() {
               <Link
                 key={order.documentId}
                 href={`/admin/orders/${order.documentId}`}
-                className="flex items-center justify-between rounded-lg border border-clay bg-white px-4 py-3 hover:border-terracotta"
+                className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 hover:border-blue-300"
               >
                 <div>
-                  <p className="font-semibold text-ink">{order.orderNumber}</p>
-                  <p className="text-sm text-stone">{order.email}</p>
+                  <p className="font-semibold text-slate-950">{order.orderNumber}</p>
+                  <p className="text-sm text-slate-500">{order.email}</p>
                 </div>
-                <span className="rounded-full bg-sand px-3 py-1 text-xs font-semibold text-bark">
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
                   {order.status}
                 </span>
               </Link>
             ))}
-            {openOrders.length === 0 && <p className="text-sm text-stone">No open orders.</p>}
+            {openOrders.length === 0 && <p className="text-sm text-slate-500">No open orders.</p>}
           </div>
         </Panel>
 
@@ -73,18 +73,18 @@ export default async function AdminDashboardPage() {
               <Link
                 key={product.documentId}
                 href={`/admin/products/${product.documentId}`}
-                className="flex items-center justify-between rounded-lg border border-clay bg-white px-4 py-3 hover:border-terracotta"
+                className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 hover:border-blue-300"
               >
                 <div>
-                  <p className="font-semibold text-ink">{product.name}</p>
-                  <p className="text-sm text-stone">{product.category}</p>
+                  <p className="font-semibold text-slate-950">{product.name}</p>
+                  <p className="text-sm text-slate-500">{product.category}</p>
                 </div>
-                <span className="rounded-full bg-terracotta/10 px-3 py-1 text-xs font-semibold text-terracotta-deep">
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
                   {product.stock ?? 0} left
                 </span>
               </Link>
             ))}
-            {lowStock.length === 0 && <p className="text-sm text-stone">Inventory looks healthy.</p>}
+            {lowStock.length === 0 && <p className="text-sm text-slate-500">Inventory looks healthy.</p>}
           </div>
         </Panel>
       </section>
@@ -94,10 +94,10 @@ export default async function AdminDashboardPage() {
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
-    <div className="rounded-xl border border-clay bg-cream p-5">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone">{label}</p>
-      <p className="mt-3 text-3xl font-bold text-ink">{value}</p>
-      {detail && <p className="mt-1 text-sm text-stone">{detail}</p>}
+    <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+      <p className="mt-3 text-3xl font-bold text-slate-950">{value}</p>
+      {detail && <p className="mt-1 text-sm text-slate-500">{detail}</p>}
     </div>
   );
 }
@@ -112,10 +112,10 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-clay bg-cream p-5">
+    <section className="rounded-xl border border-slate-200 bg-white p-5">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="font-display text-2xl text-ink">{title}</h2>
-        <Link href={href} className="text-sm font-semibold text-terracotta">
+        <h2 className="text-xl font-bold text-slate-950">{title}</h2>
+        <Link href={href} className="text-sm font-semibold text-blue-600">
           Open
         </Link>
       </div>

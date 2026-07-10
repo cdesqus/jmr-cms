@@ -5,6 +5,7 @@ const STRAPI_URL =
   process.env.STRAPI_URL ??
   process.env.NEXT_PUBLIC_STRAPI_URL ??
   "http://localhost:9014";
+const ADMIN_API_SECRET = process.env.JAMORA_ADMIN_API_SECRET;
 
 export type AdminOrderStatus =
   | "pending"
@@ -72,6 +73,9 @@ async function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
     headers: {
       "content-type": "application/json",
+      ...(ADMIN_API_SECRET
+        ? { "x-jamora-admin-secret": ADMIN_API_SECRET }
+        : {}),
       ...(init?.headers ?? {}),
     },
   });

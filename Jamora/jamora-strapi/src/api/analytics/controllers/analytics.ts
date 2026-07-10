@@ -18,6 +18,16 @@ function asBoolean(value: unknown, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function requireAdminSecret(ctx: any) {
+  const secret = process.env.JAMORA_ADMIN_API_SECRET;
+  if (!secret) return true;
+  if (ctx.get("x-jamora-admin-secret") === secret) return true;
+
+  ctx.status = 401;
+  ctx.body = { error: "Admin API secret required." };
+  return false;
+}
+
 function asOrderStatus(value: unknown) {
   const status = asString(value).toLowerCase();
   return [
@@ -226,6 +236,8 @@ export default {
   },
 
   async adminOrders(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
     const orders = await strapi.documents("api::order.order").findMany({
       fields: [
         "documentId",
@@ -253,6 +265,8 @@ export default {
   },
 
   async adminUpdateOrder(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
     const body = ctx.request.body ?? {};
     const data: Record<string, unknown> = {};
     const status = asOrderStatus(body.status);
@@ -270,6 +284,8 @@ export default {
   },
 
   async adminProducts(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
     const products = await strapi.documents("api::product.product").findMany({
       fields: [
         "documentId",
@@ -300,6 +316,8 @@ export default {
   },
 
   async adminUpdateProduct(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
     const body = ctx.request.body ?? {};
     const data: Record<string, unknown> = {};
     if (typeof body.name === "string") data.name = body.name.trim();

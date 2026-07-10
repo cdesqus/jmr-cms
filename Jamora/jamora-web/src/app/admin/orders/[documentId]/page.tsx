@@ -20,25 +20,25 @@ export default async function AdminOrderDetailPage({
 
   return (
     <div className="space-y-6">
-      <Link href="/admin/orders" className="text-sm font-semibold text-terracotta">
+      <Link href="/admin/orders" className="text-sm font-semibold text-blue-600">
         Back to orders
       </Link>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-terracotta">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">
             Order
           </p>
-          <h1 className="mt-2 font-display text-4xl text-ink">
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
             {order.orderNumber}
           </h1>
-          <p className="mt-1 text-stone">{order.email}</p>
+          <p className="mt-1 text-slate-500">{order.email}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {order.trackingPreviewUrl && (
             <Link
               href={order.trackingPreviewUrl}
               target="_blank"
-              className="rounded-full border border-clay bg-white px-4 py-2 text-sm font-semibold text-bark"
+              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
             >
               Preview tracking
             </Link>
@@ -47,7 +47,7 @@ export default async function AdminOrderDetailPage({
             <Link
               href={order.deliveryLabelUrl}
               target="_blank"
-              className="rounded-full bg-terracotta px-4 py-2 text-sm font-semibold text-cream"
+              className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
             >
               Print label
             </Link>
@@ -58,14 +58,14 @@ export default async function AdminOrderDetailPage({
       <AdminOrderActions order={order} />
 
       <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-xl border border-clay bg-cream p-5">
-          <h2 className="font-display text-2xl text-ink">Items</h2>
-          <div className="mt-4 divide-y divide-clay">
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="text-xl font-bold text-slate-950">Items</h2>
+          <div className="mt-4 divide-y divide-slate-200">
             {items.map((item, index) => (
               <div key={`${item.name}-${index}`} className="flex justify-between py-3">
                 <div>
                   <p className="font-semibold">{item.name}</p>
-                  <p className="text-sm text-stone">Qty {item.qty ?? 0}</p>
+                  <p className="text-sm text-slate-500">Qty {item.qty ?? 0}</p>
                 </div>
                 <p className="font-semibold">
                   {formatAdminMoney(item.lineTotalCents ?? 0)}
@@ -75,23 +75,23 @@ export default async function AdminOrderDetailPage({
           </div>
         </div>
 
-        <div className="rounded-xl border border-clay bg-cream p-5">
-          <h2 className="font-display text-2xl text-ink">Shipping</h2>
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="text-xl font-bold text-slate-950">Shipping</h2>
           <dl className="mt-4 space-y-3 text-sm">
             <div>
-              <dt className="font-semibold text-bark">Customer</dt>
+              <dt className="font-semibold text-slate-700">Customer</dt>
               <dd>{order.customerName}</dd>
             </div>
             <div>
-              <dt className="font-semibold text-bark">Address</dt>
+              <dt className="font-semibold text-slate-700">Address</dt>
               <dd className="whitespace-pre-line">{order.shippingAddressText}</dd>
             </div>
             <div>
-              <dt className="font-semibold text-bark">Total</dt>
+              <dt className="font-semibold text-slate-700">Total</dt>
               <dd>{formatAdminMoney(order.totalCents)}</dd>
             </div>
             <div>
-              <dt className="font-semibold text-bark">Estimated profit</dt>
+              <dt className="font-semibold text-slate-700">Estimated profit</dt>
               <dd>{formatAdminMoney(order.estimatedProfitCents)}</dd>
             </div>
           </dl>

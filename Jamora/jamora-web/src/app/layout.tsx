@@ -1,12 +1,7 @@
 import type { Metadata } from "next";
 import { Fraunces, Inter } from "next/font/google";
 import "./globals.css";
-import { CartProvider } from "@/components/cart-context";
-import { SiteHeader } from "@/components/site-header";
-import { SiteFooter } from "@/components/site-footer";
-import { CartDrawer } from "@/components/cart-drawer";
-import { CookieConsent } from "@/components/cookie-consent";
-import { VisitTracker } from "@/components/visit-tracker";
+import { AppChrome } from "@/components/app-chrome";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -38,14 +33,7 @@ export default function RootLayout({
       className={`${inter.variable} ${fraunces.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <CartProvider>
-          <SiteHeader />
-          <main className="flex-1">{children}</main>
-          <SiteFooter />
-          <CartDrawer />
-          <CookieConsent />
-          <VisitTracker />
-        </CartProvider>
+        <AppChrome>{children}</AppChrome>
       </body>
     </html>
   );

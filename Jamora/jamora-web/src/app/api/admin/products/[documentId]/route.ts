@@ -4,6 +4,7 @@ const STRAPI_URL =
   process.env.STRAPI_URL ??
   process.env.NEXT_PUBLIC_STRAPI_URL ??
   "http://localhost:9014";
+const ADMIN_API_SECRET = process.env.JAMORA_ADMIN_API_SECRET;
 
 export async function PATCH(
   request: Request,
@@ -15,11 +16,15 @@ export async function PATCH(
     `${STRAPI_URL}/api/jamora/admin/products/${encodeURIComponent(documentId)}`,
     {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(ADMIN_API_SECRET
+          ? { "x-jamora-admin-secret": ADMIN_API_SECRET }
+          : {}),
+      },
       body: JSON.stringify(body),
     },
   );
   const json = await res.json().catch(() => ({}));
   return NextResponse.json(json, { status: res.status });
 }
-

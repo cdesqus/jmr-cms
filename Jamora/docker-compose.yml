@@ -50,6 +50,7 @@ services:
       JWT_SECRET: ${STRAPI_JWT_SECRET:?set STRAPI_JWT_SECRET in .env}
       JAMORA_COST_RATIO: ${JAMORA_COST_RATIO:-0.42}
       JAMORA_STOREFRONT_URL: ${JAMORA_STOREFRONT_URL:-http://localhost:3095}
+      JAMORA_ADMIN_API_SECRET: ${JAMORA_ADMIN_API_SECRET:-}
     volumes:
       - strapi_uploads:/app/public/uploads
     ports:
@@ -65,6 +66,10 @@ services:
     environment:
       NODE_ENV: production
       STRAPI_URL: http://strapi:1337
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@jamora.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ADMIN_SESSION_TOKEN: ${ADMIN_SESSION_TOKEN:-jamora-admin-dev-session}
+      JAMORA_ADMIN_API_SECRET: ${JAMORA_ADMIN_API_SECRET:-}
     ports:
       - "${STOREFRONT_PORT:-3095}:3000"
 

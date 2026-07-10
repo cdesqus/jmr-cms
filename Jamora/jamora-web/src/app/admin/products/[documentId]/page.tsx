@@ -16,17 +16,17 @@ export default async function AdminProductDetailPage({
 
   return (
     <div className="space-y-6">
-      <Link href="/admin/products" className="text-sm font-semibold text-terracotta">
+      <Link href="/admin/products" className="text-sm font-semibold text-blue-600">
         Back to products
       </Link>
       <div className="grid gap-6 xl:grid-cols-[320px_1fr]">
-        <div className="rounded-xl border border-clay bg-cream p-5">
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
           <ProductVisual
             product={adminProductToProduct(product)}
             className="aspect-[4/5] w-full"
           />
-          <h1 className="mt-5 font-display text-3xl text-ink">{product.name}</h1>
-          <p className="mt-1 text-sm text-stone">{product.slug}</p>
+          <h1 className="mt-5 text-3xl font-bold tracking-tight text-slate-950">{product.name}</h1>
+          <p className="mt-1 text-sm text-slate-500">{product.slug}</p>
         </div>
         <AdminProductForm product={product} />
       </div>

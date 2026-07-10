@@ -6,10 +6,10 @@ export default async function AdminAnalyticsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-terracotta">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">
           Performance
         </p>
-        <h1 className="mt-2 font-display text-4xl text-ink">Analytics</h1>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">Analytics</h1>
       </div>
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <Metric label="Total visits" value={summary.visits.toLocaleString()} />
@@ -29,10 +29,10 @@ export default async function AdminAnalyticsPage() {
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
-    <div className="rounded-xl border border-clay bg-cream p-5">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone">{label}</p>
-      <p className="mt-3 text-3xl font-bold text-ink">{value}</p>
-      {detail && <p className="mt-1 text-sm text-stone">{detail}</p>}
+    <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+      <p className="mt-3 text-3xl font-bold text-slate-950">{value}</p>
+      {detail && <p className="mt-1 text-sm text-slate-500">{detail}</p>}
     </div>
   );
 }
