@@ -65,6 +65,16 @@ On first boot, open `http://<server>:9014/admin` and create the first Strapi
 admin user. The app also seeds the initial Jamora products if the CMS product
 table is empty.
 
+If you use a domain, point it to the same server IP and access:
+
+- Storefront: `http://your-domain:3095`
+- Strapi Admin: `http://your-domain:9014/admin`
+
+If `http://your-domain:9014/admin` shows the Jamora storefront 404 instead of
+Strapi, the domain/proxy/firewall is forwarding port `9014` to the wrong service.
+Check `docker compose ps` and any Nginx/Caddy/Cloudflare/NAT rule in front of
+the server.
+
 ---
 
 ## If You Are Migrating From The Old Medusa Attempt
