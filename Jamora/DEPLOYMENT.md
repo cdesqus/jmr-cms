@@ -65,15 +65,116 @@ On first boot, open `http://<server>:9014/admin` and create the first Strapi
 admin user. The app also seeds the initial Jamora products if the CMS product
 table is empty.
 
-If you use a domain, point it to the same server IP and access:
+If you use Nginx in front of the Docker host, keep the public domain on HTTPS
+and proxy Strapi's admin/API/plugin routes to port `9014` before the storefront
+catch-all:
 
-- Storefront: `http://your-domain:3095`
-- Strapi Admin: `http://your-domain:9014/admin`
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name jamora.kaumtech.com;
 
-If `http://your-domain:9014/admin` shows the Jamora storefront 404 instead of
-Strapi, the domain/proxy/firewall is forwarding port `9014` to the wrong service.
-Check `docker compose ps` and any Nginx/Caddy/Cloudflare/NAT rule in front of
-the server.
+    ssl_certificate     /etc/nginx/ssl/kaumtech.com.pem;
+    ssl_certificate_key /etc/nginx/ssl/kaumtech.com.key;
+
+    location ^~ /admin {
+        proxy_pass http://192.168.18.204:9014;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    location ^~ /api {
+        proxy_pass http://192.168.18.204:9014;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    location ^~ /uploads {
+        proxy_pass http://192.168.18.204:9014;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    location ^~ /content-manager {
+        proxy_pass http://192.168.18.204:9014;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    location ^~ /content-type-builder {
+        proxy_pass http://192.168.18.204:9014;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    location ^~ /upload {
+        proxy_pass http://192.168.18.204:9014;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    location ^~ /users-permissions {
+        proxy_pass http://192.168.18.204:9014;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    location / {
+        proxy_pass http://192.168.18.204:3095;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+Then set `STRAPI_PUBLIC_URL=https://jamora.kaumtech.com` in `.env`, restart the
+stack, and reload Nginx:
+
+```bash
+docker compose up -d
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
 ---
 

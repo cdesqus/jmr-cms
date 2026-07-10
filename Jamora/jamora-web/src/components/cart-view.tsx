@@ -1,17 +1,25 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { createMockOrder, saveMockOrder } from "@/lib/mock-orders";
 import { formatEUR } from "@/lib/products";
 import { useCart } from "@/components/cart-context";
 import { ProductVisual } from "@/components/product-visual";
 
 const FREE_SHIPPING_CENTS = 5000;
-
-// EU local payment methods surfaced at checkout (Phase-2 integration target).
 const PAYMENTS = ["Card", "iDEAL", "Bancontact", "Klarna", "Apple Pay", "Google Pay"];
 
 export function CartView() {
+  const router = useRouter();
   const { items, subtotalCents, setQty, remove, clear } = useCart();
+  const [customer, setCustomer] = useState({
+    name: "",
+    email: "",
+    address: "",
+  });
+  const [error, setError] = useState("");
 
   if (items.length === 0) {
     return (
@@ -27,9 +35,31 @@ export function CartView() {
     );
   }
 
-  const shipping =
-    subtotalCents >= FREE_SHIPPING_CENTS ? 0 : 495;
+  const shipping = subtotalCents >= FREE_SHIPPING_CENTS ? 0 : 495;
   const remainingForFree = FREE_SHIPPING_CENTS - subtotalCents;
+  const canCheckout =
+    customer.name.trim() && customer.email.trim() && customer.address.trim();
+
+  function handleCheckout() {
+    if (!canCheckout) {
+      setError("Please add your name, email, and shipping address.");
+      return;
+    }
+
+    const order = createMockOrder({
+      items,
+      subtotalCents,
+      shippingCents: shipping,
+      customer: {
+        name: customer.name.trim(),
+        email: customer.email.trim(),
+        address: customer.address.trim(),
+      },
+    });
+    saveMockOrder(order);
+    clear();
+    router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
+  }
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[1.6fr_1fr]">
@@ -63,7 +93,7 @@ export function CartView() {
                       onClick={() => setQty(item.product.id, item.qty - 1)}
                       className="px-3 py-1.5 text-bark hover:text-terracotta"
                     >
-                      −
+                      -
                     </button>
                     <span className="min-w-8 text-center text-sm">{item.qty}</span>
                     <button
@@ -96,7 +126,6 @@ export function CartView() {
         </button>
       </div>
 
-      {/* Summary */}
       <aside className="h-fit rounded-xl border border-clay/70 bg-sand/30 p-6 lg:sticky lg:top-24">
         <h2 className="font-display text-xl text-ink">Order summary</h2>
         <dl className="mt-4 space-y-2 text-sm">
@@ -122,16 +151,50 @@ export function CartView() {
           </p>
         )}
 
+        <div className="mt-5 space-y-3 border-t border-clay/60 pt-5">
+          <label className="block text-xs font-semibold uppercase text-stone">
+            Full name
+            <input
+              value={customer.name}
+              onChange={(e) => setCustomer((c) => ({ ...c, name: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
+              autoComplete="name"
+            />
+          </label>
+          <label className="block text-xs font-semibold uppercase text-stone">
+            Email
+            <input
+              value={customer.email}
+              onChange={(e) => setCustomer((c) => ({ ...c, email: e.target.value }))}
+              className="mt-1 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
+              type="email"
+              autoComplete="email"
+            />
+          </label>
+          <label className="block text-xs font-semibold uppercase text-stone">
+            Shipping address
+            <textarea
+              value={customer.address}
+              onChange={(e) =>
+                setCustomer((c) => ({ ...c, address: e.target.value }))
+              }
+              className="mt-1 min-h-20 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
+              autoComplete="shipping street-address"
+            />
+          </label>
+        </div>
+
+        {error && <p className="mt-3 text-sm text-terracotta-deep">{error}</p>}
+
         <button
           type="button"
-          disabled
-          className="mt-5 w-full cursor-not-allowed rounded-full bg-terracotta px-6 py-3 text-sm font-semibold text-cream opacity-90"
-          title="Payment integration ships in Phase 2"
+          onClick={handleCheckout}
+          className="mt-5 w-full rounded-full bg-terracotta px-6 py-3 text-sm font-semibold text-cream hover:bg-terracotta-deep"
         >
-          Proceed to checkout
+          Mock paid checkout
         </button>
         <p className="mt-2 text-center text-xs text-stone">
-          Secure checkout with Stripe / Adyen — coming in Phase 2.
+          Test mode: order is marked as paid without charging a card.
         </p>
 
         <div className="mt-4 flex flex-wrap justify-center gap-2">
