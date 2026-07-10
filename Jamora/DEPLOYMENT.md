@@ -139,6 +139,8 @@ Common causes:
 - `.env` secrets are missing.
 - Postgres volume was created with a different `POSTGRES_PASSWORD`.
 - Port `9014` or `5439` is already used on the server.
+- The Strapi upload volume/folder was not created yet; rebuild after the latest
+  Dockerfile and compose changes.
 
 For disposable dev data:
 

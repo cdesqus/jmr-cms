@@ -24,6 +24,7 @@ FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app ./
+RUN mkdir -p /app/public/uploads && chmod -R 777 /app/public
 EXPOSE 1337
 HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=20 \
   CMD node -e "const net=require('net'); const socket=net.connect(1337, '127.0.0.1'); socket.on('connect', () => process.exit(0)); socket.on('error', () => process.exit(1)); setTimeout(() => process.exit(1), 3000)"
