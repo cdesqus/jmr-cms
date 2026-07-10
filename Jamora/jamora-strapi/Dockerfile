@@ -6,7 +6,8 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json ./
-RUN npm install --package-lock=false --legacy-peer-deps --no-audit --no-fund
+RUN npm install --package-lock=false --legacy-peer-deps --no-audit --no-fund \
+  && npm dedupe --legacy-peer-deps --no-audit --no-fund
 
 FROM node:20-slim AS builder
 WORKDIR /app

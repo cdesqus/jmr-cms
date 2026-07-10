@@ -7,7 +7,6 @@ import { useCart } from "@/components/cart-context";
 const NAV = [
   { href: "/", label: "Home" },
   { href: "/shop", label: "Shop" },
-  { href: "/track", label: "Track" },
   { href: "/about", label: "Our Story" },
   { href: "/contact", label: "Contact" },
 ];
@@ -38,6 +37,12 @@ export function SiteHeader() {
         </nav>
 
         <div className="flex items-center gap-3">
+          <Link
+            href="/track"
+            className="hidden rounded-full border border-clay bg-white/60 px-4 py-2 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta sm:inline-flex"
+          >
+            Track
+          </Link>
           <button
             type="button"
             onClick={openCart}
@@ -65,6 +70,13 @@ export function SiteHeader() {
 
       {mobileOpen && (
         <nav className="border-t border-clay/60 bg-cream px-5 py-3 md:hidden">
+          <Link
+            href="/track"
+            onClick={() => setMobileOpen(false)}
+            className="block py-2 text-sm font-medium text-bark hover:text-terracotta sm:hidden"
+          >
+            Track order
+          </Link>
           {NAV.map((item) => (
             <Link
               key={item.label}
