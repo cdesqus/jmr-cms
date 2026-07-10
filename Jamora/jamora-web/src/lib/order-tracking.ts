@@ -11,7 +11,9 @@ interface StrapiTrackedOrder {
   status?: string;
   totalCents?: number;
   items?: MockOrder["items"];
+  itemsSummary?: string;
   shippingAddress?: { address?: string } | Record<string, unknown>;
+  shippingAddressText?: string;
   estimatedDelivery?: string;
   createdAt?: string;
 }
@@ -28,11 +30,24 @@ function isStatus(value: unknown): value is MockOrderStatus {
 function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
   const shippingAddress = order.shippingAddress ?? {};
   const address =
+    typeof order.shippingAddressText === "string"
+      ? order.shippingAddressText
+      :
     typeof shippingAddress === "object" &&
     "address" in shippingAddress &&
     typeof shippingAddress.address === "string"
       ? shippingAddress.address
       : "";
+  const parsedItems = (() => {
+    if (Array.isArray(order.items)) return order.items;
+    if (!order.itemsSummary) return [];
+    try {
+      const parsed = JSON.parse(order.itemsSummary) as MockOrder["items"];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })();
 
   return {
     id: String(order.documentId ?? order.id ?? order.orderNumber),
@@ -45,7 +60,7 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
       email: order.email ?? "",
       address,
     },
-    items: Array.isArray(order.items) ? order.items : [],
+    items: parsedItems,
     subtotalCents: order.totalCents ?? 0,
     shippingCents: 0,
     totalCents: order.totalCents ?? 0,
@@ -65,4 +80,3 @@ export async function fetchTrackedOrder(query: string): Promise<MockOrder | null
   const json = (await res.json()) as { order?: StrapiTrackedOrder };
   return json.order ? mapTrackedOrder(json.order) : null;
 }
-

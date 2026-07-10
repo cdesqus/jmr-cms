@@ -81,10 +81,11 @@ export default {
         totalCents,
         estimatedProfitCents,
         stripeSessionId: asString(body.stripeSessionId, "mock-paid-checkout"),
-        items,
-        shippingAddress: body.customer?.address
-          ? { address: body.customer.address }
-          : body.shippingAddress ?? {},
+        itemsSummary: JSON.stringify(items, null, 2),
+        shippingAddressText: asString(
+          body.customer?.address,
+          asString(body.shippingAddress?.address),
+        ),
         estimatedDelivery: body.estimatedDelivery,
       },
     });
@@ -113,8 +114,8 @@ export default {
         "status",
         "currency",
         "totalCents",
-        "items",
-        "shippingAddress",
+        "itemsSummary",
+        "shippingAddressText",
         "estimatedDelivery",
         "createdAt",
       ],
