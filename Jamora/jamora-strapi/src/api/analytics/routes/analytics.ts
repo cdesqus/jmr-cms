@@ -32,5 +32,29 @@ export default {
         auth: false,
       },
     },
+    {
+      method: "GET",
+      path: "/jamora/admin/orders",
+      handler: "analytics.adminOrders",
+      config: { auth: false },
+    },
+    {
+      method: "PATCH",
+      path: "/jamora/admin/orders/:documentId",
+      handler: "analytics.adminUpdateOrder",
+      config: { auth: false },
+    },
+    {
+      method: "GET",
+      path: "/jamora/admin/products",
+      handler: "analytics.adminProducts",
+      config: { auth: false },
+    },
+    {
+      method: "PATCH",
+      path: "/jamora/admin/products/:documentId",
+      handler: "analytics.adminUpdateProduct",
+      config: { auth: false },
+    },
   ],
 };

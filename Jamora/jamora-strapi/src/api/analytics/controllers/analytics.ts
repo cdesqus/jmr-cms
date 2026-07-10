@@ -14,6 +14,33 @@ function asNumber(value: unknown, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function asBoolean(value: unknown, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function asOrderStatus(value: unknown) {
+  const status = asString(value).toLowerCase();
+  return [
+    "pending",
+    "paid",
+    "processing",
+    "shipped",
+    "fulfilled",
+    "failed",
+    "refunded",
+  ].includes(status)
+    ? status
+    : undefined;
+}
+
+function parseListText(value: unknown) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  return asString(value)
+    .split(/\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function centsToEur(cents: number) {
   return Math.round(cents) / 100;
 }
@@ -196,5 +223,107 @@ export default {
       estimatedMargin: revenueCents > 0 ? Math.round((profitCents / revenueCents) * 1000) / 10 : 0,
       costRatio: safeCostRatio,
     };
+  },
+
+  async adminOrders(ctx) {
+    const orders = await strapi.documents("api::order.order").findMany({
+      fields: [
+        "documentId",
+        "orderNumber",
+        "trackingNumber",
+        "carrier",
+        "customerName",
+        "email",
+        "status",
+        "currency",
+        "totalCents",
+        "estimatedProfitCents",
+        "itemsSummary",
+        "shippingAddressText",
+        "trackingPreviewUrl",
+        "deliveryLabelUrl",
+        "estimatedDelivery",
+        "createdAt",
+      ],
+      sort: { createdAt: "desc" },
+      limit: 1000,
+    });
+
+    ctx.body = { orders };
+  },
+
+  async adminUpdateOrder(ctx) {
+    const body = ctx.request.body ?? {};
+    const data: Record<string, unknown> = {};
+    const status = asOrderStatus(body.status);
+    if (status) data.status = status;
+    if (typeof body.trackingNumber === "string") data.trackingNumber = body.trackingNumber.trim();
+    if (typeof body.carrier === "string") data.carrier = body.carrier.trim();
+    if (typeof body.estimatedDelivery === "string") data.estimatedDelivery = body.estimatedDelivery;
+
+    const order = await strapi.documents("api::order.order").update({
+      documentId: ctx.params.documentId,
+      data: data as any,
+    });
+
+    ctx.body = { ok: true, order };
+  },
+
+  async adminProducts(ctx) {
+    const products = await strapi.documents("api::product.product").findMany({
+      fields: [
+        "documentId",
+        "slug",
+        "name",
+        "botanical",
+        "category",
+        "priceCents",
+        "tagline",
+        "description",
+        "ingredients",
+        "allergens",
+        "benefits",
+        "howToUse",
+        "certifications",
+        "netWeight",
+        "featured",
+        "gradient",
+        "stock",
+        "publishedAt",
+        "updatedAt",
+      ],
+      sort: { name: "asc" },
+      limit: 1000,
+    });
+
+    ctx.body = { products };
+  },
+
+  async adminUpdateProduct(ctx) {
+    const body = ctx.request.body ?? {};
+    const data: Record<string, unknown> = {};
+    if (typeof body.name === "string") data.name = body.name.trim();
+    if (typeof body.slug === "string") data.slug = body.slug.trim();
+    if (typeof body.botanical === "string") data.botanical = body.botanical.trim();
+    if (["energy", "digestion", "balance"].includes(asString(body.category))) data.category = body.category;
+    if (typeof body.priceCents === "number") data.priceCents = Math.max(0, Math.round(body.priceCents));
+    if (typeof body.stock === "number") data.stock = Math.max(0, Math.round(body.stock));
+    if (typeof body.featured === "boolean") data.featured = asBoolean(body.featured);
+    if (typeof body.tagline === "string") data.tagline = body.tagline.trim();
+    if (typeof body.description === "string") data.description = body.description.trim();
+    if (typeof body.howToUse === "string") data.howToUse = body.howToUse.trim();
+    if (typeof body.netWeight === "string") data.netWeight = body.netWeight.trim();
+    if ("ingredients" in body) data.ingredients = parseListText(body.ingredients);
+    if ("allergens" in body) data.allergens = parseListText(body.allergens);
+    if ("benefits" in body) data.benefits = parseListText(body.benefits);
+    if ("certifications" in body) data.certifications = parseListText(body.certifications);
+
+    const product = await strapi.documents("api::product.product").update({
+      documentId: ctx.params.documentId,
+      data: data as any,
+      status: "published",
+    } as any);
+
+    ctx.body = { ok: true, product };
   },
 };
