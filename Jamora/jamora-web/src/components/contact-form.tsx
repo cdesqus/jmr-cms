@@ -1,12 +1,19 @@
 "use client";
 
 import { useState } from "react";
+import { useLocale } from "@/components/use-locale";
+import { UI_TEXT } from "@/lib/i18n";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
-const TOPICS = ["General question", "My order", "Ingredients & allergens", "Wholesale"];
+const TOPICS = {
+  en: ["General question", "My order", "Ingredients & allergens", "Wholesale"],
+  ro: ["Intrebare generala", "Comanda mea", "Ingrediente si alergeni", "Wholesale"],
+};
 
 export function ContactForm() {
+  const locale = useLocale();
+  const text = UI_TEXT[locale];
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -39,16 +46,14 @@ export function ContactForm() {
   if (status === "success") {
     return (
       <div className="flex h-full flex-col justify-center rounded-xl border border-herb/40 bg-herb/5 p-8">
-        <h2 className="font-display text-2xl text-ink">Message sent 🌿</h2>
-        <p className="mt-2 text-bark">
-          Thank you for reaching out. We&rsquo;ll reply within two business days.
-        </p>
+        <h2 className="font-display text-2xl text-ink">{text.messageSent}</h2>
+        <p className="mt-2 text-bark">{text.messageSentBody}</p>
         <button
           type="button"
           onClick={() => setStatus("idle")}
           className="mt-6 w-fit rounded-full border border-clay bg-white/60 px-5 py-2.5 text-sm font-semibold text-bark hover:border-terracotta hover:text-terracotta"
         >
-          Send another message
+          {text.sendAnother}
         </button>
       </div>
     );
@@ -57,25 +62,25 @@ export function ContactForm() {
   return (
     <form onSubmit={handleSubmit} className="rounded-xl border border-clay/70 bg-white/40 p-6 sm:p-8">
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Name" required>
+        <Field label={text.name} required>
           <input {...inputProps} name="name" required autoComplete="name" />
         </Field>
-        <Field label="Email" required>
+        <Field label={text.email} required>
           <input {...inputProps} name="email" type="email" required autoComplete="email" />
         </Field>
       </div>
 
-      <Field label="Topic" className="mt-5">
-        <select {...inputProps} name="topic" defaultValue={TOPICS[0]}>
-          {TOPICS.map((t) => (
-            <option key={t} value={t}>
-              {t}
+      <Field label={text.topic} className="mt-5">
+        <select {...inputProps} name="topic" defaultValue={TOPICS[locale][0]}>
+          {TOPICS[locale].map((topic) => (
+            <option key={topic} value={topic}>
+              {topic}
             </option>
           ))}
         </select>
       </Field>
 
-      <Field label="Message" required className="mt-5">
+      <Field label={text.message} required className="mt-5">
         <textarea
           {...inputProps}
           name="message"
@@ -96,7 +101,7 @@ export function ContactForm() {
         disabled={status === "submitting"}
         className="mt-6 inline-flex items-center justify-center rounded-full bg-terracotta px-7 py-3 text-sm font-semibold text-cream transition-colors hover:bg-terracotta-deep disabled:opacity-70"
       >
-        {status === "submitting" ? "Sending…" : "Send message"}
+        {status === "submitting" ? text.sending : text.sendMessage}
       </button>
     </form>
   );
