@@ -11,8 +11,9 @@ import { VisitTracker } from "@/components/visit-tracker";
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAdmin = pathname?.startsWith("/admin");
+  const isPrintUtility = pathname?.startsWith("/delivery-label");
 
-  if (isAdmin) return <>{children}</>;
+  if (isAdmin || isPrintUtility) return <>{children}</>;
 
   return (
     <CartProvider>

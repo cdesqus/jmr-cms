@@ -6,12 +6,31 @@ import {
   getAnalyticsSummary,
 } from "@/lib/admin-api";
 import { AdminDashboardChart } from "@/components/admin-dashboard-chart";
+import type { AdminOrder, AdminProduct, AnalyticsSummary } from "@/lib/admin-api";
+
+const EMPTY_SUMMARY: AnalyticsSummary = {
+  visits: 0,
+  visitsToday: 0,
+  sales: 0,
+  revenueCents: 0,
+  todayRevenueCents: 0,
+  estimatedProfitCents: 0,
+  estimatedMargin: 0,
+};
+
+async function safe<T>(loader: () => Promise<T>, fallback: T) {
+  try {
+    return await loader();
+  } catch {
+    return fallback;
+  }
+}
 
 export default async function AdminDashboardPage() {
   const [summary, orders, products] = await Promise.all([
-    getAnalyticsSummary(),
-    getAdminOrders(),
-    getAdminProducts(),
+    safe(getAnalyticsSummary, EMPTY_SUMMARY),
+    safe<AdminOrder[]>(getAdminOrders, []),
+    safe<AdminProduct[]>(getAdminProducts, []),
   ]);
   const openOrders = orders.filter((order) =>
     ["paid", "processing", "shipped"].includes(order.status),

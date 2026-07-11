@@ -363,7 +363,6 @@ export default {
         "certifications",
         "netWeight",
         "featured",
-        "image",
         "gradient",
         "stock",
         "minStock",
@@ -371,11 +370,6 @@ export default {
         "publishedAt",
         "updatedAt",
       ],
-      populate: {
-        image: {
-          fields: ["url", "alternativeText", "name"],
-        },
-      },
       sort: { name: "asc" },
       limit: 1000,
     });

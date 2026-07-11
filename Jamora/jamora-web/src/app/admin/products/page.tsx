@@ -8,7 +8,7 @@ import { ProductVisual } from "@/components/product-visual";
 import { AdminStockForm } from "@/components/admin-stock-form";
 
 export default async function AdminProductsPage() {
-  const products = await getAdminProducts();
+  const products = await getAdminProducts().catch(() => []);
 
   return (
     <div className="space-y-6">
@@ -28,6 +28,12 @@ export default async function AdminProductsPage() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
+        {products.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500 xl:col-span-2">
+            Product catalogue belum bisa dimuat. Cek Strapi logs atau coba lagi
+            setelah backend selesai rebuild.
+          </div>
+        ) : null}
         {products.map((product) => (
           <article
             key={product.documentId}

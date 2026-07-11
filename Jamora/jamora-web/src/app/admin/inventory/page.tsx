@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getAdminProducts } from "@/lib/admin-api";
 
 export default async function AdminInventoryPage() {
-  const products = await getAdminProducts();
+  const products = await getAdminProducts().catch(() => []);
 
   return (
     <div className="space-y-6">
