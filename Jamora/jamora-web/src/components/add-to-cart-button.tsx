@@ -1,6 +1,8 @@
 "use client";
 
 import { useCart } from "@/components/cart-context";
+import { useLocale } from "@/components/use-locale";
+import { UI_TEXT } from "@/lib/i18n";
 import type { Product } from "@/lib/products";
 
 export function AddToCartButton({
@@ -15,6 +17,7 @@ export function AddToCartButton({
   className?: string;
 }) {
   const { add } = useCart();
+  const locale = useLocale();
   const outOfStock = typeof product.stock === "number" && product.stock <= 0;
 
   const base =
@@ -31,7 +34,7 @@ export function AddToCartButton({
       onClick={() => add(product, qty)}
       className={`${base} ${styles} ${className} disabled:cursor-not-allowed disabled:opacity-50`}
     >
-      {outOfStock ? "Out of stock" : "Add to cart"}
+      {outOfStock ? UI_TEXT[locale].outOfStock : UI_TEXT[locale].addToCart}
     </button>
   );
 }

@@ -2,9 +2,11 @@ import { CATEGORY_META, type Category, type Certification } from "@/lib/products
 
 export function CategoryPill({
   category,
+  label,
   className = "",
 }: {
   category: Category;
+  label?: string;
   className?: string;
 }) {
   const meta = CATEGORY_META[category];
@@ -17,7 +19,7 @@ export function CategoryPill({
         className="inline-block h-1.5 w-1.5 rounded-full"
         style={{ background: meta.colorVar }}
       />
-      {meta.label}
+      {label ?? meta.label}
     </span>
   );
 }

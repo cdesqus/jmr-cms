@@ -1,10 +1,22 @@
+"use client";
+
 import Link from "next/link";
+import { useLocale } from "@/components/use-locale";
+import { UI_TEXT, categoryLabel, productText } from "@/lib/i18n";
 import { formatEUR, type Product } from "@/lib/products";
 import { ProductVisual } from "@/components/product-visual";
 import { CategoryPill } from "@/components/badges";
 import { AddToCartButton } from "@/components/add-to-cart-button";
 
 export function ProductCard({ product }: { product: Product }) {
+  const locale = useLocale();
+  const stockLabel =
+    typeof product.stock === "number"
+      ? product.stock > 0
+        ? `${product.stock} ${UI_TEXT[locale].inStock}`
+        : UI_TEXT[locale].outOfStock
+      : null;
+
   return (
     <article className="group flex flex-col overflow-hidden rounded-xl border border-clay/70 bg-white/50 transition-colors hover:border-terracotta/50">
       <Link
@@ -20,7 +32,10 @@ export function ProductCard({ product }: { product: Product }) {
       </Link>
       <div className="flex flex-1 flex-col gap-3 p-5">
         <div className="flex items-center justify-between">
-          <CategoryPill category={product.category} />
+          <CategoryPill
+            category={product.category}
+            label={categoryLabel(product.category, locale)}
+          />
           <span className="text-sm font-semibold text-ink">
             {formatEUR(product.priceCents)}
           </span>
@@ -31,12 +46,10 @@ export function ProductCard({ product }: { product: Product }) {
               {product.name}
             </Link>
           </h3>
-          <p className="mt-1 text-sm text-stone">{product.tagline}</p>
-          {typeof product.stock === "number" && (
-            <p className="mt-2 text-xs font-medium text-bark">
-              {product.stock > 0 ? `${product.stock} in stock` : "Out of stock"}
-            </p>
-          )}
+          <p className="mt-1 text-sm text-stone">
+            {productText(product.slug, locale, "tagline", product.tagline)}
+          </p>
+          {stockLabel && <p className="mt-2 text-xs font-medium text-bark">{stockLabel}</p>}
         </div>
         <div className="mt-auto pt-1">
           <AddToCartButton product={product} variant="soft" />

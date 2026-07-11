@@ -24,20 +24,15 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-[#f5f7fb] text-slate-950">
       <aside
         className={[
-          "fixed inset-y-0 left-0 hidden border-r border-slate-200 bg-white py-6 transition-[width] duration-200 lg:block",
+          "fixed inset-y-0 left-0 hidden h-screen flex-col overflow-hidden border-r border-slate-200 bg-white py-4 transition-[width] duration-200 lg:flex",
           expanded ? "w-64 px-5" : "w-20 px-3",
         ].join(" ")}
       >
-        <div
-          className={[
-            "flex items-center gap-3",
-            "justify-center",
-          ].join(" ")}
-        >
+        <div className="shrink-0">
           <Link
             href="/admin"
             className={[
-              "flex items-center gap-3 font-bold tracking-tight",
+              "flex items-center justify-center gap-3 font-bold tracking-tight",
               expanded ? "text-2xl" : "text-lg",
             ].join(" ")}
             title="Jamora Admin"
@@ -64,7 +59,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             {expanded ? "<" : ">"}
           </button>
         </div>
-        <nav className="mt-3 space-y-1">
+        <nav className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
           {NAV.map((item) => {
             const active =
               pathname === item.href ||
@@ -92,8 +87,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         </nav>
         <div
           className={[
-            "absolute bottom-6 space-y-2",
-            expanded ? "left-5 right-5" : "left-3 right-3",
+            "mt-4 shrink-0 space-y-2 border-t border-slate-100 pt-4",
           ].join(" ")}
         >
           <Link
@@ -109,7 +103,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           {expanded ? <AdminLogoutButton /> : null}
         </div>
       </aside>
-      <div className={expanded ? "lg:pl-64" : "lg:pl-20"}>
+      <div className={[expanded ? "lg:pl-64" : "lg:pl-20", "min-w-0 transition-[padding] duration-200"].join(" ")}>
         <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-5 py-4 backdrop-blur lg:hidden">
           <div className="text-xl font-bold">Jamora Admin</div>
           <nav className="mt-3 flex gap-2 overflow-x-auto pb-1">
@@ -127,7 +121,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <AdminLogoutButton />
           </div>
         </header>
-        <main className="px-5 py-8 lg:px-8">{children}</main>
+        <main className="min-w-0 max-w-full overflow-x-hidden px-4 py-6 sm:px-5 lg:px-6 xl:px-8">
+          {children}
+        </main>
       </div>
     </div>
   );

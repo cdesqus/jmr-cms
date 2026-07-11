@@ -7,7 +7,7 @@ function setLocaleCookie(locale: Locale) {
   document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000; samesite=lax`;
 }
 
-export function LanguageSwitcher() {
+export function LanguageSwitcher({ className = "" }: { className?: string }) {
   const [locale, setLocale] = useState<Locale>("en");
 
   useEffect(() => {
@@ -28,15 +28,18 @@ export function LanguageSwitcher() {
   }
 
   return (
-    <div className="flex rounded-full border border-clay/80 bg-white/70 p-0.5 text-[10px] font-black text-bark shadow-sm">
+    <div
+      className={`flex rounded-full border border-clay/70 bg-white/75 p-px text-[9px] font-black text-bark shadow-sm backdrop-blur ${className}`}
+      aria-label="Language selector"
+    >
       {(["en", "ro"] as Locale[]).map((item) => (
         <button
           key={item}
           type="button"
           onClick={() => choose(item)}
           className={[
-            "rounded-full px-2 py-0.5 uppercase leading-5",
-            locale === item ? "bg-terracotta text-cream" : "hover:text-terracotta",
+            "rounded-full px-1.5 py-0 uppercase leading-4 transition-colors",
+            locale === item ? "bg-terracotta text-cream" : "text-bark/65 hover:text-terracotta",
           ].join(" ")}
         >
           {item}
