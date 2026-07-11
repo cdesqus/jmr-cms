@@ -17,6 +17,7 @@ export function AdminContentForm({ content }: { content: StoreContent }) {
     certifications: listToText(merged.certifications),
   });
   const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -24,13 +25,18 @@ export function AdminContentForm({ content }: { content: StoreContent }) {
 
   async function save() {
     setSaving(true);
+    setMessage("");
     try {
-      await fetch("/admin/api/content", {
+      const res = await fetch("/admin/api/content", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(form),
       });
+      if (!res.ok) throw new Error("Save failed");
+      setMessage("Saved. Storefront cache refreshed.");
       router.refresh();
+    } catch {
+      setMessage("Save failed. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -67,6 +73,34 @@ export function AdminContentForm({ content }: { content: StoreContent }) {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-lg font-bold text-slate-950">Romanian homepage</h2>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <Field label="Eyebrow RO" value={form.heroEyebrowRo} onChange={(v) => set("heroEyebrowRo", v)} />
+          <Field label="Title RO" value={form.heroTitleRo} onChange={(v) => set("heroTitleRo", v)} />
+          <Field
+            label="Highlighted title RO"
+            value={form.heroHighlightRo}
+            onChange={(v) => set("heroHighlightRo", v)}
+          />
+          <Field
+            label="Primary CTA RO"
+            value={form.primaryCtaLabelRo}
+            onChange={(v) => set("primaryCtaLabelRo", v)}
+          />
+          <Field
+            label="Secondary CTA RO"
+            value={form.secondaryCtaLabelRo}
+            onChange={(v) => set("secondaryCtaLabelRo", v)}
+          />
+        </div>
+        <TextArea
+          label="Description RO"
+          value={form.heroDescriptionRo}
+          onChange={(v) => set("heroDescriptionRo", v)}
+        />
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-lg font-bold text-slate-950">Sections</h2>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <Field label="Pillars eyebrow" value={form.pillarsEyebrow} onChange={(v) => set("pillarsEyebrow", v)} />
@@ -88,6 +122,23 @@ export function AdminContentForm({ content }: { content: StoreContent }) {
         />
       </section>
 
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-lg font-bold text-slate-950">Romanian sections</h2>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <Field label="Pillars eyebrow RO" value={form.pillarsEyebrowRo} onChange={(v) => set("pillarsEyebrowRo", v)} />
+          <Field label="Pillars title RO" value={form.pillarsTitleRo} onChange={(v) => set("pillarsTitleRo", v)} />
+          <Field label="Featured eyebrow RO" value={form.featuredEyebrowRo} onChange={(v) => set("featuredEyebrowRo", v)} />
+          <Field label="Featured title RO" value={form.featuredTitleRo} onChange={(v) => set("featuredTitleRo", v)} />
+          <Field label="Story eyebrow RO" value={form.storyEyebrowRo} onChange={(v) => set("storyEyebrowRo", v)} />
+          <Field label="Story title RO" value={form.storyTitleRo} onChange={(v) => set("storyTitleRo", v)} />
+        </div>
+        <TextArea
+          label="Story description RO"
+          value={form.storyDescriptionRo}
+          onChange={(v) => set("storyDescriptionRo", v)}
+        />
+      </section>
+
       <button
         type="button"
         onClick={save}
@@ -96,6 +147,9 @@ export function AdminContentForm({ content }: { content: StoreContent }) {
       >
         {saving ? "Saving content..." : "Save content"}
       </button>
+      {message ? (
+        <p className="text-sm font-semibold text-slate-500">{message}</p>
+      ) : null}
     </div>
   );
 }

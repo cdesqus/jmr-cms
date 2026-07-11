@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { CATEGORY_META, type Category } from "@/lib/products";
 import { getFeaturedProducts } from "@/lib/catalog";
-import { getPublicStoreContent } from "@/lib/store-content";
+import { getPublicStoreContent, localizeStoreContent } from "@/lib/store-content";
+import { LOCALE_COOKIE, UI_TEXT, asLocale } from "@/lib/i18n";
 import { ProductCard } from "@/components/product-card";
 import { ProductVisual } from "@/components/product-visual";
 
@@ -27,10 +29,14 @@ const TESTIMONIALS = [
 ];
 
 export default async function Home() {
-  const [featured, content] = await Promise.all([
+  const cookieStore = await cookies();
+  const locale = asLocale(cookieStore.get(LOCALE_COOKIE)?.value);
+  const ui = UI_TEXT[locale];
+  const [featured, rawContent] = await Promise.all([
     getFeaturedProducts(3),
     getPublicStoreContent(),
   ]);
+  const content = localizeStoreContent(rawContent, locale);
   const categories = Object.keys(CATEGORY_META) as Category[];
 
   return (
@@ -108,7 +114,7 @@ export default async function Home() {
                   </p>
                   <p className="mt-3 text-sm text-bark">{meta.blurb}</p>
                   <span className="mt-5 inline-flex items-center gap-1 text-sm font-semibold text-terracotta">
-                    Shop {meta.label}
+                    {ui.shopPrefix} {meta.label}
                     <span className="transition-transform group-hover:translate-x-1">-&gt;</span>
                   </span>
                 </Link>
@@ -130,7 +136,7 @@ export default async function Home() {
             href="/shop"
             className="hidden text-sm font-semibold text-terracotta hover:text-terracotta-deep sm:inline"
           >
-            View all -&gt;
+            {ui.viewAll} -&gt;
           </Link>
         </div>
         <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -143,9 +149,9 @@ export default async function Home() {
       <section className="border-y border-clay/50 bg-sand/30">
         <div className="mx-auto max-w-6xl px-5 py-12">
           <div className="max-w-xl">
-            <p className="eyebrow text-stone">Loved in Europe</p>
+            <p className="eyebrow text-stone">{ui.testimonialsEyebrow}</p>
             <h2 className="mt-3 font-display text-3xl text-ink sm:text-4xl">
-              A quiet ritual, thousands of mornings.
+              {ui.testimonialsTitle}
             </h2>
           </div>
           <div className="mt-8 grid gap-5 md:grid-cols-3">
@@ -187,9 +193,9 @@ export default async function Home() {
           </div>
           <dl className="grid grid-cols-3 gap-4 text-center">
             {[
-              { n: "100%", l: "Indonesian origin" },
-              { n: "0", l: "Artificial additives" },
-              { n: "EU", l: "Compliance verified" },
+              { n: "100%", l: ui.statOrigin },
+              { n: "0", l: ui.statAdditives },
+              { n: "EU", l: ui.statCompliance },
             ].map((stat) => (
               <div key={stat.l} className="rounded-xl bg-cream/5 p-5">
                 <dt className="font-display text-3xl text-amber">{stat.n}</dt>

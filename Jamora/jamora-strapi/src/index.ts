@@ -46,6 +46,13 @@ async function seedStoreContent(strapi: any) {
         "Premium jamu - Indonesia's living herbal tradition - refined to European standards of purity, transparency, and taste.",
       primaryCtaLabel: "Explore the collection",
       secondaryCtaLabel: "Our story",
+      heroEyebrowRo: "Energie · Digestie · Echilibru",
+      heroTitleRo: "100% produs in Indonezia,",
+      heroHighlightRo: "standardizat pentru Europa.",
+      heroDescriptionRo:
+        "Jamu premium - traditia vie a plantelor indoneziene - rafinat pentru standarde europene de puritate, transparenta si gust.",
+      primaryCtaLabelRo: "Exploreaza colectia",
+      secondaryCtaLabelRo: "Povestea noastra",
       pillarsEyebrow: "Three pillars",
       pillarsTitle: "One tradition, three ways to feel well.",
       featuredEyebrow: "Best sellers",
@@ -54,6 +61,14 @@ async function seedStoreContent(strapi: any) {
       storyTitle: "Traceable botanicals, standardised potency.",
       storyDescription:
         "Every batch is single-origin, lab-verified for active compounds, and documented from the Javanese highlands to your kitchen.",
+      pillarsEyebrowRo: "Trei directii",
+      pillarsTitleRo: "O traditie, trei moduri de a te simti bine.",
+      featuredEyebrowRo: "Cele mai iubite",
+      featuredTitleRo: "Apreciate in Europa",
+      storyEyebrowRo: "De la radacina la ceasca",
+      storyTitleRo: "Plante trasabile, putere standardizata.",
+      storyDescriptionRo:
+        "Fiecare lot are origine unica, este verificat in laborator pentru compusi activi si documentat din zonele inalte ale Javei pana in bucataria ta.",
       certifications: ["Organic", "Vegan", "EU Compliant", "GMP", "Non-GMO"],
       publishedAt: new Date(),
     },

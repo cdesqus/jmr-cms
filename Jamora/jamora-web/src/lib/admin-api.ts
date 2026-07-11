@@ -69,6 +69,12 @@ export interface StoreContent {
   heroDescription?: string;
   primaryCtaLabel?: string;
   secondaryCtaLabel?: string;
+  heroEyebrowRo?: string;
+  heroTitleRo?: string;
+  heroHighlightRo?: string;
+  heroDescriptionRo?: string;
+  primaryCtaLabelRo?: string;
+  secondaryCtaLabelRo?: string;
   pillarsEyebrow?: string;
   pillarsTitle?: string;
   featuredEyebrow?: string;
@@ -76,6 +82,13 @@ export interface StoreContent {
   storyEyebrow?: string;
   storyTitle?: string;
   storyDescription?: string;
+  pillarsEyebrowRo?: string;
+  pillarsTitleRo?: string;
+  featuredEyebrowRo?: string;
+  featuredTitleRo?: string;
+  storyEyebrowRo?: string;
+  storyTitleRo?: string;
+  storyDescriptionRo?: string;
   certifications?: string[];
   updatedAt?: string;
 }

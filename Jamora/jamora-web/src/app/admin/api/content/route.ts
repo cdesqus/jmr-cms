@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
@@ -19,5 +20,8 @@ export async function PATCH(request: Request) {
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({}));
+  if (res.ok) {
+    revalidatePath("/");
+  }
   return NextResponse.json(json, { status: res.status });
 }

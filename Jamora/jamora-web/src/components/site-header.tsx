@@ -1,19 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCart } from "@/components/cart-context";
+import { LanguageSwitcher } from "@/components/language-switcher";
+import { LOCALE_COOKIE, UI_TEXT, asLocale, type Locale } from "@/lib/i18n";
 
 const NAV = [
-  { href: "/", label: "Home" },
-  { href: "/shop", label: "Shop" },
-  { href: "/about", label: "Our Story" },
-  { href: "/contact", label: "Contact" },
+  { href: "/", label: "home" },
+  { href: "/shop", label: "shop" },
+  { href: "/about", label: "story" },
+  { href: "/contact", label: "contact" },
 ];
 
 export function SiteHeader() {
   const { count, openCart } = useCart();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [locale, setLocale] = useState<Locale>("en");
+  const text = UI_TEXT[locale];
+
+  useEffect(() => {
+    const cookieLocale = document.cookie
+      .split("; ")
+      .find((item) => item.startsWith(`${LOCALE_COOKIE}=`))
+      ?.split("=")[1];
+    setLocale(asLocale(cookieLocale ?? (navigator.language.toLowerCase().startsWith("ro") ? "ro" : "en")));
+  }, []);
 
   return (
     <header className="sticky top-0 z-40 border-b border-clay/60 bg-cream/85 backdrop-blur">
@@ -31,24 +43,25 @@ export function SiteHeader() {
               href={item.href}
               className="text-sm font-medium text-bark transition-colors hover:text-terracotta"
             >
-              {item.label}
+              {text[item.label]}
             </Link>
           ))}
         </nav>
 
         <div className="flex items-center gap-3">
+          <LanguageSwitcher />
           <Link
             href="/track"
             className="hidden rounded-full border border-clay bg-white/60 px-4 py-2 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta sm:inline-flex"
           >
-            Track
+            {text.track}
           </Link>
           <button
             type="button"
             onClick={openCart}
             className="relative rounded-full border border-clay bg-white/60 px-4 py-2 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta"
           >
-            Cart
+            {text.cart}
             {count > 0 && (
               <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-terracotta px-1 text-[0.65rem] font-bold text-cream">
                 {count}
@@ -75,7 +88,7 @@ export function SiteHeader() {
             onClick={() => setMobileOpen(false)}
             className="block py-2 text-sm font-medium text-bark hover:text-terracotta sm:hidden"
           >
-            Track order
+            {text.trackOrder}
           </Link>
           {NAV.map((item) => (
             <Link
@@ -84,7 +97,7 @@ export function SiteHeader() {
               onClick={() => setMobileOpen(false)}
               className="block py-2 text-sm font-medium text-bark hover:text-terracotta"
             >
-              {item.label}
+              {text[item.label]}
             </Link>
           ))}
         </nav>
