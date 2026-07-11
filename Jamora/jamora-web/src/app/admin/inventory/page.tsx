@@ -20,6 +20,7 @@ export default async function AdminInventoryPage() {
               <th className="px-4 py-3">Product</th>
               <th className="px-4 py-3">Category</th>
               <th className="px-4 py-3">Stock</th>
+              <th className="px-4 py-3">Threshold</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3"></th>
             </tr>
@@ -27,22 +28,35 @@ export default async function AdminInventoryPage() {
           <tbody className="divide-y divide-slate-200">
             {products.map((product) => {
               const stock = product.stock ?? 0;
+              const minStock = product.minStock ?? 10;
+              const maxStock = product.maxStock ?? 100;
               return (
                 <tr key={product.documentId} className="bg-white/60">
                   <td className="px-4 py-3 font-semibold">{product.name}</td>
                   <td className="px-4 py-3">{product.category}</td>
                   <td className="px-4 py-3">{stock}</td>
+                  <td className="px-4 py-3 text-slate-500">
+                    min {minStock} · max {maxStock}
+                  </td>
                   <td className="px-4 py-3">
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
                         stock === 0
-                          ? "bg-blue-50 text-blue-800"
-                          : stock <= 10
-                          ? "bg-amber/20 text-slate-700"
-                          : "bg-herb/10 text-herb-deep"
+                          ? "bg-red-50 text-red-700"
+                          : stock <= minStock
+                            ? "bg-amber-50 text-amber-700"
+                            : stock > maxStock
+                              ? "bg-blue-50 text-blue-700"
+                              : "bg-emerald-50 text-emerald-700"
                       }`}
                     >
-                      {stock === 0 ? "Out" : stock <= 10 ? "Low" : "Healthy"}
+                      {stock === 0
+                        ? "Out"
+                        : stock <= minStock
+                          ? "Low"
+                          : stock > maxStock
+                            ? "Over max"
+                            : "Healthy"}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -62,4 +76,3 @@ export default async function AdminInventoryPage() {
     </div>
   );
 }
-

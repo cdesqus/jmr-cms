@@ -40,6 +40,7 @@ interface StrapiProductFields {
   featured?: boolean;
   stock?: number;
   gradient?: unknown;
+  image?: { url?: string } | { data?: { attributes?: { url?: string } } };
 }
 
 type StrapiEntity<T extends object> = T & {
@@ -76,6 +77,14 @@ function toGradient(value: unknown): [string, string] {
   return [colors[0] ?? "#c25a2b", colors[1] ?? "#9f461f"];
 }
 
+function toImageUrl(value: StrapiProductFields["image"]) {
+  let rawUrl: string | undefined;
+  if (value && "url" in value) rawUrl = value.url;
+  if (value && "data" in value) rawUrl = value.data?.attributes?.url;
+  if (!rawUrl) return undefined;
+  return rawUrl.startsWith("http") ? rawUrl : `${STRAPI_URL}${rawUrl}`;
+}
+
 function mapProduct(entity: StrapiEntity<StrapiProductFields>): Product | null {
   const fields = entity.attributes ?? entity;
   if (!fields.slug || !fields.name || !isCategory(fields.category)) return null;
@@ -97,6 +106,7 @@ function mapProduct(entity: StrapiEntity<StrapiProductFields>): Product | null {
     netWeight: fields.netWeight ?? "",
     featured: fields.featured ?? false,
     stock: fields.stock ?? 0,
+    imageUrl: toImageUrl(fields.image),
     gradient: toGradient(fields.gradient),
   };
 }
@@ -115,7 +125,7 @@ export async function getAllProducts(): Promise<Product[]> {
   try {
     const { data } = await strapiFetch<{
       data: StrapiEntity<StrapiProductFields>[];
-    }>("/api/products?pagination[pageSize]=100&sort=slug:asc");
+    }>("/api/products?pagination[pageSize]=100&sort=slug:asc&populate=image");
     const mapped = data.map(mapProduct).filter((p): p is Product => p !== null);
     return mapped.length > 0 ? mapped : MOCK_PRODUCTS;
   } catch {

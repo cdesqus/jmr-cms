@@ -28,7 +28,14 @@
     "certifications": { "type": "json" },
     "netWeight": { "type": "string" },
     "featured": { "type": "boolean", "default": false },
+    "image": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": ["images"]
+    },
     "gradient": { "type": "json" },
-    "stock": { "type": "integer", "default": 0, "min": 0 }
+    "stock": { "type": "integer", "default": 0, "min": 0 },
+    "minStock": { "type": "integer", "default": 10, "min": 0 },
+    "maxStock": { "type": "integer", "default": 100, "min": 0 }
   }
 }

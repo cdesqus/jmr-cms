@@ -36,15 +36,15 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
   }
 
   return (
-    <div className="rounded-xl border border-clay bg-cream p-5">
-      <h2 className="font-display text-2xl text-ink">Fulfilment controls</h2>
+    <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <h2 className="text-xl font-bold text-slate-950">Fulfilment controls</h2>
       <div className="mt-4 grid gap-4 md:grid-cols-3">
-        <label className="text-sm font-semibold text-bark">
+        <label className="text-sm font-semibold text-slate-700">
           Status
           <select
             value={status}
             onChange={(e) => setStatus(e.target.value as AdminOrderStatus)}
-            className="mt-1 w-full rounded-lg border border-clay bg-white px-3 py-2 font-normal"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-normal outline-none focus:border-blue-500"
           >
             {STATUSES.map((item) => (
               <option key={item} value={item}>
@@ -53,20 +53,20 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
             ))}
           </select>
         </label>
-        <label className="text-sm font-semibold text-bark">
+        <label className="text-sm font-semibold text-slate-700">
           Carrier
           <input
             value={carrier}
             onChange={(e) => setCarrier(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-clay bg-white px-3 py-2 font-normal"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-normal outline-none focus:border-blue-500"
           />
         </label>
-        <label className="text-sm font-semibold text-bark">
+        <label className="text-sm font-semibold text-slate-700">
           Tracking number
           <input
             value={trackingNumber}
             onChange={(e) => setTrackingNumber(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-clay bg-white px-3 py-2 font-normal"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-normal outline-none focus:border-blue-500"
           />
         </label>
       </div>
@@ -74,7 +74,7 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
         type="button"
         onClick={save}
         disabled={saving}
-        className="mt-5 rounded-full bg-terracotta px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-60"
+        className="mt-5 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
       >
         {saving ? "Saving..." : "Save fulfilment"}
       </button>

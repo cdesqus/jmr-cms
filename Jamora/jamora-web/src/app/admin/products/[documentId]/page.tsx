@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { adminProductToProduct, getAdminProducts } from "@/lib/admin-api";
 import { ProductVisual } from "@/components/product-visual";
 import { AdminProductForm } from "@/components/admin-product-form";
+import { AdminStockForm } from "@/components/admin-stock-form";
 
 export default async function AdminProductDetailPage({
   params,
@@ -27,6 +28,7 @@ export default async function AdminProductDetailPage({
           />
           <h1 className="mt-5 text-3xl font-bold tracking-tight text-slate-950">{product.name}</h1>
           <p className="mt-1 text-sm text-slate-500">{product.slug}</p>
+          <AdminStockForm product={product} />
         </div>
         <AdminProductForm product={product} />
       </div>

@@ -28,6 +28,13 @@ export function ProductVisual({
       className={`relative overflow-hidden ${rounded} ${className}`}
       aria-hidden="true"
     >
+      {product.imageUrl ? (
+        <img
+          src={product.imageUrl}
+          alt=""
+          className="h-full w-full object-cover"
+        />
+      ) : (
       <svg
         className="h-full w-full"
         viewBox="0 0 400 500"
@@ -181,6 +188,7 @@ export function ProductVisual({
           </text>
         </g>
       </svg>
+      )}
     </div>
   );
 }

@@ -51,6 +51,66 @@ function parseListText(value: unknown) {
     .filter(Boolean);
 }
 
+function contentData(body: Record<string, unknown>) {
+  const data: Record<string, unknown> = {};
+  for (const field of [
+    "heroEyebrow",
+    "heroTitle",
+    "heroHighlight",
+    "heroDescription",
+    "primaryCtaLabel",
+    "secondaryCtaLabel",
+    "pillarsEyebrow",
+    "pillarsTitle",
+    "featuredEyebrow",
+    "featuredTitle",
+    "storyEyebrow",
+    "storyTitle",
+    "storyDescription",
+  ]) {
+    if (typeof body[field] === "string") data[field] = body[field].trim();
+  }
+  if ("certifications" in body) data.certifications = parseListText(body.certifications);
+  return data;
+}
+
+function productData(body: Record<string, unknown>, mode: "create" | "update") {
+  const data: Record<string, unknown> = {};
+  if (typeof body.name === "string") data.name = body.name.trim();
+  if (typeof body.slug === "string") data.slug = body.slug.trim();
+  if (typeof body.botanical === "string") data.botanical = body.botanical.trim();
+  if (["energy", "digestion", "balance"].includes(asString(body.category))) data.category = body.category;
+  if (typeof body.priceCents === "number") data.priceCents = Math.max(0, Math.round(body.priceCents));
+  if (typeof body.stock === "number") data.stock = Math.max(0, Math.round(body.stock));
+  if (typeof body.minStock === "number") data.minStock = Math.max(0, Math.round(body.minStock));
+  if (typeof body.maxStock === "number") data.maxStock = Math.max(0, Math.round(body.maxStock));
+  if (typeof body.featured === "boolean") data.featured = asBoolean(body.featured);
+  if (typeof body.tagline === "string") data.tagline = body.tagline.trim();
+  if (typeof body.description === "string") data.description = body.description.trim();
+  if (typeof body.howToUse === "string") data.howToUse = body.howToUse.trim();
+  if (typeof body.netWeight === "string") data.netWeight = body.netWeight.trim();
+  if ("ingredients" in body) data.ingredients = parseListText(body.ingredients);
+  if ("allergens" in body) data.allergens = parseListText(body.allergens);
+  if ("benefits" in body) data.benefits = parseListText(body.benefits);
+  if ("certifications" in body) data.certifications = parseListText(body.certifications);
+  if ("gradient" in body) data.gradient = parseListText(body.gradient);
+  if (typeof body.imageId === "number") data.image = body.imageId;
+
+  if (mode === "create") {
+    data.name ||= "New Jamora Product";
+    data.slug ||= asString(data.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    data.category ||= "energy";
+    data.priceCents ||= 0;
+    data.netWeight ||= "30 sachets · 90 g";
+    data.stock ||= 0;
+    data.minStock ||= 10;
+    data.maxStock ||= 100;
+    data.gradient ||= ["#e2913f", "#c25a2b"];
+  }
+
+  return data;
+}
+
 function centsToEur(cents: number) {
   return Math.round(cents) / 100;
 }
@@ -303,11 +363,19 @@ export default {
         "certifications",
         "netWeight",
         "featured",
+        "image",
         "gradient",
         "stock",
+        "minStock",
+        "maxStock",
         "publishedAt",
         "updatedAt",
       ],
+      populate: {
+        image: {
+          fields: ["url", "alternativeText", "name"],
+        },
+      },
       sort: { name: "asc" },
       limit: 1000,
     });
@@ -319,22 +387,7 @@ export default {
     if (!requireAdminSecret(ctx)) return;
 
     const body = ctx.request.body ?? {};
-    const data: Record<string, unknown> = {};
-    if (typeof body.name === "string") data.name = body.name.trim();
-    if (typeof body.slug === "string") data.slug = body.slug.trim();
-    if (typeof body.botanical === "string") data.botanical = body.botanical.trim();
-    if (["energy", "digestion", "balance"].includes(asString(body.category))) data.category = body.category;
-    if (typeof body.priceCents === "number") data.priceCents = Math.max(0, Math.round(body.priceCents));
-    if (typeof body.stock === "number") data.stock = Math.max(0, Math.round(body.stock));
-    if (typeof body.featured === "boolean") data.featured = asBoolean(body.featured);
-    if (typeof body.tagline === "string") data.tagline = body.tagline.trim();
-    if (typeof body.description === "string") data.description = body.description.trim();
-    if (typeof body.howToUse === "string") data.howToUse = body.howToUse.trim();
-    if (typeof body.netWeight === "string") data.netWeight = body.netWeight.trim();
-    if ("ingredients" in body) data.ingredients = parseListText(body.ingredients);
-    if ("allergens" in body) data.allergens = parseListText(body.allergens);
-    if ("benefits" in body) data.benefits = parseListText(body.benefits);
-    if ("certifications" in body) data.certifications = parseListText(body.certifications);
+    const data = productData(body, "update");
 
     const product = await strapi.documents("api::product.product").update({
       documentId: ctx.params.documentId,
@@ -343,5 +396,87 @@ export default {
     } as any);
 
     ctx.body = { ok: true, product };
+  },
+
+  async adminCreateProduct(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
+    const body = ctx.request.body ?? {};
+    const product = await strapi.documents("api::product.product").create({
+      data: {
+        ...productData(body, "create"),
+        publishedAt: new Date(),
+      } as any,
+      status: "published",
+    } as any);
+
+    ctx.body = { ok: true, product };
+  },
+
+  async adminUpload(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
+    const files = ctx.request.files?.files;
+    if (!files) {
+      ctx.status = 400;
+      ctx.body = { error: "Missing upload file." };
+      return;
+    }
+
+    const uploaded = await strapi.plugin("upload").service("upload").upload({
+      data: {},
+      files,
+    });
+
+    ctx.body = { ok: true, files: uploaded };
+  },
+
+  async content(ctx) {
+    const content = await strapi.documents("api::store-content.store-content").findFirst({
+      fields: [
+        "documentId",
+        "heroEyebrow",
+        "heroTitle",
+        "heroHighlight",
+        "heroDescription",
+        "primaryCtaLabel",
+        "secondaryCtaLabel",
+        "pillarsEyebrow",
+        "pillarsTitle",
+        "featuredEyebrow",
+        "featuredTitle",
+        "storyEyebrow",
+        "storyTitle",
+        "storyDescription",
+        "certifications",
+        "updatedAt",
+      ],
+    });
+
+    ctx.body = { content };
+  },
+
+  async adminUpdateContent(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
+    const body = ctx.request.body ?? {};
+    const existing = await strapi.documents("api::store-content.store-content").findFirst({
+      fields: ["documentId"],
+    });
+    const data = contentData(body);
+    const content = existing?.documentId
+      ? await strapi.documents("api::store-content.store-content").update({
+          documentId: existing.documentId,
+          data,
+          status: "published",
+        } as any)
+      : await strapi.documents("api::store-content.store-content").create({
+          data: {
+            ...data,
+            publishedAt: new Date(),
+          },
+        } as any);
+
+    ctx.body = { ok: true, content };
   },
 };

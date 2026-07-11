@@ -1,0 +1,28 @@
+{
+  "kind": "singleType",
+  "collectionName": "store_contents",
+  "info": {
+    "singularName": "store-content",
+    "pluralName": "store-contents",
+    "displayName": "Store Content"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "heroEyebrow": { "type": "string" },
+    "heroTitle": { "type": "string" },
+    "heroHighlight": { "type": "string" },
+    "heroDescription": { "type": "text" },
+    "primaryCtaLabel": { "type": "string" },
+    "secondaryCtaLabel": { "type": "string" },
+    "pillarsEyebrow": { "type": "string" },
+    "pillarsTitle": { "type": "string" },
+    "featuredEyebrow": { "type": "string" },
+    "featuredTitle": { "type": "string" },
+    "storyEyebrow": { "type": "string" },
+    "storyTitle": { "type": "string" },
+    "storyDescription": { "type": "text" },
+    "certifications": { "type": "json" }
+  }
+}

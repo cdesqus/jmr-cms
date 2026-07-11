@@ -5,6 +5,7 @@ import {
   getAdminProducts,
   getAnalyticsSummary,
 } from "@/lib/admin-api";
+import { AdminDashboardChart } from "@/components/admin-dashboard-chart";
 
 export default async function AdminDashboardPage() {
   const [summary, orders, products] = await Promise.all([
@@ -15,7 +16,9 @@ export default async function AdminDashboardPage() {
   const openOrders = orders.filter((order) =>
     ["paid", "processing", "shipped"].includes(order.status),
   );
-  const lowStock = products.filter((product) => (product.stock ?? 0) <= 10);
+  const lowStock = products.filter(
+    (product) => (product.stock ?? 0) <= (product.minStock ?? 10),
+  );
 
   return (
     <div className="space-y-8">
@@ -45,8 +48,10 @@ export default async function AdminDashboardPage() {
         />
       </section>
 
+      <AdminDashboardChart orders={orders} />
+
       <section className="grid gap-6 xl:grid-cols-2">
-        <Panel title="Orders to handle" href="/admin/shipping">
+        <Panel title="Orders to handle" href="/admin/orders">
           <div className="space-y-3">
             {openOrders.slice(0, 6).map((order) => (
               <Link
@@ -77,9 +82,11 @@ export default async function AdminDashboardPage() {
               >
                 <div>
                   <p className="font-semibold text-slate-950">{product.name}</p>
-                  <p className="text-sm text-slate-500">{product.category}</p>
+                  <p className="text-sm text-slate-500">
+                    min {product.minStock ?? 10} · max {product.maxStock ?? 100}
+                  </p>
                 </div>
-                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
+                <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
                   {product.stock ?? 0} left
                 </span>
               </Link>
@@ -123,4 +130,3 @@ function Panel({
     </section>
   );
 }
-

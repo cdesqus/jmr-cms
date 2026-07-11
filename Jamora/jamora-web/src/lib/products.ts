@@ -32,6 +32,7 @@ export interface Product {
   netWeight: string;
   featured?: boolean;
   stock?: number;
+  imageUrl?: string;
   /** Two-stop gradient used for the botanical placeholder visual. */
   gradient: [string, string];
 }

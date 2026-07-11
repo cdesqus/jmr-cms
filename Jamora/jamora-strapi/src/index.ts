@@ -3,6 +3,8 @@ import { products } from "./seed/products";
 export default {
   async bootstrap({ strapi }) {
     await seedProducts(strapi);
+    await seedStoreContent(strapi);
+    await backfillProductStockThresholds(strapi);
     await enablePublicProductRead(strapi);
     await configureOrderListView(strapi);
   },
@@ -26,6 +28,56 @@ async function seedProducts(strapi: any) {
   }
 
   strapi.log.info(`Seeded ${products.length} Jamora products`);
+}
+
+async function seedStoreContent(strapi: any) {
+  const existing = await strapi.documents("api::store-content.store-content").findFirst({
+    fields: ["documentId"],
+  });
+
+  if (existing) return;
+
+  await strapi.documents("api::store-content.store-content").create({
+    data: {
+      heroEyebrow: "Energi · Digestie · Echlibru",
+      heroTitle: "100% Made in Indonesia,",
+      heroHighlight: "standardised for Europe.",
+      heroDescription:
+        "Premium jamu - Indonesia's living herbal tradition - refined to European standards of purity, transparency, and taste.",
+      primaryCtaLabel: "Explore the collection",
+      secondaryCtaLabel: "Our story",
+      pillarsEyebrow: "Three pillars",
+      pillarsTitle: "One tradition, three ways to feel well.",
+      featuredEyebrow: "Best sellers",
+      featuredTitle: "Loved across Europe",
+      storyEyebrow: "From root to cup",
+      storyTitle: "Traceable botanicals, standardised potency.",
+      storyDescription:
+        "Every batch is single-origin, lab-verified for active compounds, and documented from the Javanese highlands to your kitchen.",
+      certifications: ["Organic", "Vegan", "EU Compliant", "GMP", "Non-GMO"],
+      publishedAt: new Date(),
+    },
+  });
+}
+
+async function backfillProductStockThresholds(strapi: any) {
+  const existing = await strapi.documents("api::product.product").findMany({
+    fields: ["documentId", "minStock", "maxStock"],
+    limit: 1000,
+  });
+
+  for (const product of existing) {
+    if (typeof product.minStock === "number" && typeof product.maxStock === "number") continue;
+
+    await strapi.documents("api::product.product").update({
+      documentId: product.documentId,
+      data: {
+        minStock: typeof product.minStock === "number" ? product.minStock : 10,
+        maxStock: typeof product.maxStock === "number" ? product.maxStock : 100,
+      } as any,
+      status: "published",
+    } as any);
+  }
 }
 
 async function enablePublicProductRead(strapi: any) {

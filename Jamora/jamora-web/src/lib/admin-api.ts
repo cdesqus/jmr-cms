@@ -51,9 +51,32 @@ export interface AdminProduct {
   certifications?: string[];
   netWeight?: string;
   featured?: boolean;
+  image?: { url?: string; alternativeText?: string; name?: string } | null;
+  imageUrl?: string;
   gradient?: string[];
   stock?: number;
+  minStock?: number;
+  maxStock?: number;
   publishedAt?: string;
+  updatedAt?: string;
+}
+
+export interface StoreContent {
+  documentId?: string;
+  heroEyebrow?: string;
+  heroTitle?: string;
+  heroHighlight?: string;
+  heroDescription?: string;
+  primaryCtaLabel?: string;
+  secondaryCtaLabel?: string;
+  pillarsEyebrow?: string;
+  pillarsTitle?: string;
+  featuredEyebrow?: string;
+  featuredTitle?: string;
+  storyEyebrow?: string;
+  storyTitle?: string;
+  storyDescription?: string;
+  certifications?: string[];
   updatedAt?: string;
 }
 
@@ -83,6 +106,11 @@ async function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function absoluteStrapiUrl(url?: string) {
+  if (!url) return undefined;
+  return url.startsWith("http") ? url : `${STRAPI_URL}${url}`;
+}
+
 export async function getAdminOrders() {
   const { orders } = await adminFetch<{ orders: AdminOrder[] }>(
     "/api/jamora/admin/orders",
@@ -94,11 +122,21 @@ export async function getAdminProducts() {
   const { products } = await adminFetch<{ products: AdminProduct[] }>(
     "/api/jamora/admin/products",
   );
-  return products;
+  return products.map((product) => ({
+    ...product,
+    imageUrl: absoluteStrapiUrl(product.image?.url),
+  }));
 }
 
 export async function getAnalyticsSummary() {
   return adminFetch<AnalyticsSummary>("/api/jamora/analytics/summary");
+}
+
+export async function getStoreContent() {
+  const { content } = await adminFetch<{ content: StoreContent | null }>(
+    "/api/jamora/content",
+  );
+  return content ?? {};
 }
 
 export function formatAdminMoney(cents = 0) {
@@ -133,11 +171,12 @@ export function adminProductToProduct(product: AdminProduct): Product {
     allergens: product.allergens ?? [],
     benefits: product.benefits ?? [],
     howToUse: product.howToUse ?? "",
-    certifications: [],
-    netWeight: product.netWeight ?? "",
-    featured: product.featured,
-    stock: product.stock,
-    gradient: [
+  certifications: [],
+  netWeight: product.netWeight ?? "",
+  featured: product.featured,
+  stock: product.stock,
+  imageUrl: product.imageUrl,
+  gradient: [
       product.gradient?.[0] ?? "#c25a2b",
       product.gradient?.[1] ?? "#9f461f",
     ],
