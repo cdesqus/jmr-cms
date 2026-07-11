@@ -48,8 +48,7 @@ export function SiteHeader() {
           ))}
         </nav>
 
-        <div className="flex items-center gap-3">
-          <LanguageSwitcher />
+        <div className="flex items-center gap-2">
           <Link
             href="/track"
             className="hidden rounded-full border border-clay bg-white/60 px-4 py-2 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta sm:inline-flex"
@@ -68,6 +67,7 @@ export function SiteHeader() {
               </span>
             )}
           </button>
+          <LanguageSwitcher />
           <button
             type="button"
             aria-label="Toggle menu"

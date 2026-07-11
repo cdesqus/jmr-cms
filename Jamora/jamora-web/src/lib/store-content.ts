@@ -54,20 +54,29 @@ export function mergeStoreContent(content?: StoreContent | null) {
 }
 
 export function localizeStoreContent(content: ReturnType<typeof mergeStoreContent>, locale: Locale) {
+  function pick(key: keyof typeof DEFAULT_STORE_CONTENT & string) {
+    if (locale === "ro") {
+      const roKey = `${key}Ro` as keyof typeof DEFAULT_STORE_CONTENT;
+      const roValue = content[roKey] ?? DEFAULT_STORE_CONTENT[roKey];
+      if (typeof roValue === "string" && roValue.trim()) return roValue;
+    }
+    return localized(content, locale, key);
+  }
+
   return {
-    heroEyebrow: localized(content, locale, "heroEyebrow"),
-    heroTitle: localized(content, locale, "heroTitle"),
-    heroHighlight: localized(content, locale, "heroHighlight"),
-    heroDescription: localized(content, locale, "heroDescription"),
-    primaryCtaLabel: localized(content, locale, "primaryCtaLabel"),
-    secondaryCtaLabel: localized(content, locale, "secondaryCtaLabel"),
-    pillarsEyebrow: localized(content, locale, "pillarsEyebrow"),
-    pillarsTitle: localized(content, locale, "pillarsTitle"),
-    featuredEyebrow: localized(content, locale, "featuredEyebrow"),
-    featuredTitle: localized(content, locale, "featuredTitle"),
-    storyEyebrow: localized(content, locale, "storyEyebrow"),
-    storyTitle: localized(content, locale, "storyTitle"),
-    storyDescription: localized(content, locale, "storyDescription"),
+    heroEyebrow: pick("heroEyebrow"),
+    heroTitle: pick("heroTitle"),
+    heroHighlight: pick("heroHighlight"),
+    heroDescription: pick("heroDescription"),
+    primaryCtaLabel: pick("primaryCtaLabel"),
+    secondaryCtaLabel: pick("secondaryCtaLabel"),
+    pillarsEyebrow: pick("pillarsEyebrow"),
+    pillarsTitle: pick("pillarsTitle"),
+    featuredEyebrow: pick("featuredEyebrow"),
+    featuredTitle: pick("featuredTitle"),
+    storyEyebrow: pick("storyEyebrow"),
+    storyTitle: pick("storyTitle"),
+    storyDescription: pick("storyDescription"),
     certifications: content.certifications,
   };
 }

@@ -28,14 +28,14 @@ export function LanguageSwitcher() {
   }
 
   return (
-    <div className="flex rounded-full border border-clay bg-white/60 p-0.5 text-xs font-bold text-bark">
+    <div className="flex rounded-full border border-clay/80 bg-white/70 p-0.5 text-[10px] font-black text-bark shadow-sm">
       {(["en", "ro"] as Locale[]).map((item) => (
         <button
           key={item}
           type="button"
           onClick={() => choose(item)}
           className={[
-            "rounded-full px-2.5 py-1 uppercase",
+            "rounded-full px-2 py-0.5 uppercase leading-5",
             locale === item ? "bg-terracotta text-cream" : "hover:text-terracotta",
           ].join(" ")}
         >
