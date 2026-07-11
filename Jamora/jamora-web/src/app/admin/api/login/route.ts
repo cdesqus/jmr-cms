@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { publicUrl } from "@/lib/public-url";
 
 const ADMIN_COOKIE = "jamora_admin_session";
 
@@ -34,10 +35,12 @@ export async function POST(request: Request) {
     const loginUrl = new URL("/admin/login", request.url);
     loginUrl.searchParams.set("error", "1");
     loginUrl.searchParams.set("next", next);
-    return NextResponse.redirect(loginUrl, { status: 303 });
+    return NextResponse.redirect(publicUrl(request, `${loginUrl.pathname}${loginUrl.search}`), {
+      status: 303,
+    });
   }
 
-  const response = NextResponse.redirect(new URL(next, request.url), {
+  const response = NextResponse.redirect(publicUrl(request, next), {
     status: 303,
   });
   response.cookies.set(ADMIN_COOKIE, sessionToken(), {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { publicUrl } from "@/lib/public-url";
 
 const ADMIN_COOKIE = "jamora_admin_session";
 
@@ -30,7 +31,7 @@ export function proxy(request: NextRequest) {
 
   if (isAdminApi) return jsonUnauthorized();
 
-  const loginUrl = new URL("/admin/login", request.url);
+  const loginUrl = publicUrl(request, "/admin/login");
   loginUrl.searchParams.set("next", pathname);
   return NextResponse.redirect(loginUrl);
 }
