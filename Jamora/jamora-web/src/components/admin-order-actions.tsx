@@ -24,7 +24,7 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
   async function save() {
     setSaving(true);
     try {
-      await fetch(`/api/admin/orders/${order.documentId}`, {
+      await fetch(`/admin/api/orders/${order.documentId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status, carrier, trackingNumber }),
@@ -81,4 +81,3 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
     </div>
   );
 }
-

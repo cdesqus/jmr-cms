@@ -16,10 +16,10 @@ function jsonUnauthorized() {
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isAdminPage = pathname.startsWith("/admin");
-  const isAdminApi = pathname.startsWith("/api/admin");
+  const isAdminApi = pathname.startsWith("/admin/api");
   const isLoginPage = pathname === "/admin/login";
   const isAuthEndpoint =
-    pathname === "/api/admin/login" || pathname === "/api/admin/logout";
+    pathname === "/admin/api/login" || pathname === "/admin/api/logout";
 
   if ((!isAdminPage && !isAdminApi) || isLoginPage || isAuthEndpoint) {
     return NextResponse.next();
@@ -36,5 +36,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/api/admin/:path*"],
+  matcher: ["/admin/:path*"],
 };

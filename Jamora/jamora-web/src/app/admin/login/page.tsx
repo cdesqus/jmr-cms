@@ -25,7 +25,7 @@ export default async function AdminLoginPage({
             Email atau password admin salah.
           </div>
         ) : null}
-        <form action="/api/admin/login" method="post" className="mt-6 space-y-4">
+        <form action="/admin/api/login" method="post" className="mt-6 space-y-4">
           <input type="hidden" name="next" value={next} />
           <label className="block text-sm font-semibold text-slate-700">
             Email

@@ -35,7 +35,7 @@ export function AdminProductForm({ product }: { product: AdminProduct }) {
   async function save() {
     setSaving(true);
     try {
-      await fetch(`/api/admin/products/${product.documentId}`, {
+      await fetch(`/admin/api/products/${product.documentId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(form),
@@ -185,4 +185,3 @@ function TextArea({
     </label>
   );
 }
-
