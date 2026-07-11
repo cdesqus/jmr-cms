@@ -347,29 +347,6 @@ export default {
     if (!requireAdminSecret(ctx)) return;
 
     const products = await strapi.documents("api::product.product").findMany({
-      fields: [
-        "documentId",
-        "slug",
-        "name",
-        "botanical",
-        "category",
-        "priceCents",
-        "tagline",
-        "description",
-        "ingredients",
-        "allergens",
-        "benefits",
-        "howToUse",
-        "certifications",
-        "netWeight",
-        "featured",
-        "gradient",
-        "stock",
-        "minStock",
-        "maxStock",
-        "publishedAt",
-        "updatedAt",
-      ],
       sort: { name: "asc" },
       limit: 1000,
     });

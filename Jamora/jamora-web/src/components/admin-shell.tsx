@@ -31,7 +31,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <div
           className={[
             "flex items-center gap-3",
-            expanded ? "justify-between" : "justify-center",
+            "justify-center",
           ].join(" ")}
         >
           <Link
@@ -47,22 +47,24 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             </span>
             {expanded ? <span>Jamora Admin</span> : null}
           </Link>
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-sm font-bold text-slate-600 hover:border-blue-300 hover:text-blue-700"
-            title={expanded ? "Collapse sidebar" : "Expand sidebar"}
-            aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
-          >
-            {expanded ? "<" : ">"}
-          </button>
         </div>
         {expanded ? (
           <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">
             Commerce operations
           </p>
         ) : null}
-        <nav className="mt-8 space-y-1">
+        <div className={expanded ? "mt-6 flex justify-end" : "mt-6 flex justify-center"}>
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:border-blue-300 hover:text-blue-700"
+            title={expanded ? "Collapse sidebar" : "Expand sidebar"}
+            aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
+          >
+            {expanded ? "<" : ">"}
+          </button>
+        </div>
+        <nav className="mt-3 space-y-1">
           {NAV.map((item) => {
             const active =
               pathname === item.href ||

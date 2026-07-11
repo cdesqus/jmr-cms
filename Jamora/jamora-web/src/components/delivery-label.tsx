@@ -35,6 +35,11 @@ export function DeliveryLabel({ orderNumber }: { orderNumber: string }) {
       </div>
     );
   }
+  const trackingUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/track?order=${encodeURIComponent(order.orderNumber)}`
+      : `/track?order=${encodeURIComponent(order.orderNumber)}`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=132x132&margin=8&data=${encodeURIComponent(trackingUrl)}`;
 
   return (
     <div>
@@ -95,12 +100,22 @@ export function DeliveryLabel({ orderNumber }: { orderNumber: string }) {
             </ul>
           </div>
 
-          <div className="mt-8 flex h-24 items-center justify-center border-2 border-dashed border-ink text-3xl font-bold tracking-[0.35em]">
-            {order.trackingNumber}
+          <div className="mt-8 grid gap-5 border-2 border-dashed border-ink p-4 md:grid-cols-[1fr_auto] md:items-center">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.2em]">Scan tracking</p>
+              <p className="mt-3 break-all text-3xl font-bold tracking-[0.25em]">
+                {order.trackingNumber}
+              </p>
+              <p className="mt-2 break-all text-xs text-stone">{trackingUrl}</p>
+            </div>
+            <img
+              src={qrUrl}
+              alt={`QR tracking code for ${order.orderNumber}`}
+              className="h-32 w-32 border border-ink bg-white p-1"
+            />
           </div>
         </div>
       </section>
     </div>
   );
 }
-

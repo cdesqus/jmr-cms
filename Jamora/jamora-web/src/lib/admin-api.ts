@@ -119,13 +119,18 @@ export async function getAdminOrders() {
 }
 
 export async function getAdminProducts() {
-  const { products } = await adminFetch<{ products: AdminProduct[] }>(
-    "/api/jamora/admin/products",
-  );
-  return products.map((product) => ({
-    ...product,
-    imageUrl: absoluteStrapiUrl(product.image?.url),
-  }));
+  try {
+    const { products } = await adminFetch<{ products: AdminProduct[] }>(
+      "/api/jamora/admin/products",
+    );
+    return products.map((product) => ({
+      ...product,
+      imageUrl: absoluteStrapiUrl(product.image?.url),
+    }));
+  } catch (error) {
+    console.error(error);
+    return [];
+  }
 }
 
 export async function getAnalyticsSummary() {
