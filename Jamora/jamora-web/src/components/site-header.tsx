@@ -29,7 +29,6 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-clay/60 bg-cream/85 backdrop-blur">
-      <LanguageSwitcher className="absolute right-3 top-1 md:right-5" />
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
         <Link href="/" className="flex items-baseline gap-2">
           <span className="font-display text-2xl font-semibold tracking-tight text-ink">
@@ -49,7 +48,7 @@ export function SiteHeader() {
           ))}
         </nav>
 
-        <div className="flex items-center gap-2 pr-10 md:pr-12">
+        <div className="flex items-center gap-2">
           <Link
             href="/track"
             className="hidden rounded-full border border-clay bg-white/60 px-4 py-2 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta sm:inline-flex"
@@ -59,7 +58,7 @@ export function SiteHeader() {
           <button
             type="button"
             onClick={openCart}
-            className="relative rounded-full border border-clay bg-white/60 px-4 py-2 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta"
+            className="relative rounded-full border border-clay bg-white/60 px-3.5 py-1.5 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta sm:px-4 sm:py-2"
           >
             {text.cart}
             {count > 0 && (
@@ -68,6 +67,7 @@ export function SiteHeader() {
               </span>
             )}
           </button>
+          <LanguageSwitcher />
           <button
             type="button"
             aria-label="Toggle menu"

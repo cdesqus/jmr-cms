@@ -121,7 +121,7 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-2 overflow-x-auto">
+          <div className="flex flex-wrap gap-2">
             {(["all", ...STATUSES] as const).map((status) => {
               const count =
                 status === "all"
@@ -152,26 +152,21 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
       </section>
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <table className="w-full min-w-[980px] text-left text-sm">
-          <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
-            <tr>
-              <th className="w-10 px-4 py-3">
-                <input
-                  type="checkbox"
-                  checked={filtered.length > 0 && filtered.every((order) => selected[order.documentId])}
-                  onChange={(event) => toggleAll(event.target.checked)}
-                  aria-label="Select all visible orders"
-                />
-              </th>
-              <th className="px-4 py-3">Order</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Fulfilment</th>
-              <th className="px-4 py-3 text-right">Total</th>
-              <th className="px-4 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
+        <div className="hidden grid-cols-[32px_minmax(145px,1fr)_minmax(155px,1fr)_minmax(96px,0.55fr)_minmax(150px,1fr)_minmax(84px,0.45fr)_minmax(116px,0.55fr)] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs uppercase tracking-[0.12em] text-slate-500 xl:grid">
+          <input
+            type="checkbox"
+            checked={filtered.length > 0 && filtered.every((order) => selected[order.documentId])}
+            onChange={(event) => toggleAll(event.target.checked)}
+            aria-label="Select all visible orders"
+          />
+          <span>Order</span>
+          <span>Customer</span>
+          <span>Status</span>
+          <span>Fulfilment</span>
+          <span className="text-right">Total</span>
+          <span className="text-right">Actions</span>
+        </div>
+        <div className="divide-y divide-slate-100">
             {filtered.map((order) => {
               const items = parseOrderItems(order.itemsSummary);
               const labelUrl =
@@ -180,8 +175,11 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
                   ? `/delivery-label/${encodeURIComponent(order.orderNumber)}`
                   : undefined);
               return (
-                <tr key={order.documentId} className="align-top hover:bg-slate-50/60">
-                  <td className="px-4 py-4">
+                <article
+                  key={order.documentId}
+                  className="grid grid-cols-[28px_1fr_auto] gap-3 px-4 py-4 text-sm hover:bg-slate-50/60 md:grid-cols-[28px_minmax(180px,1.2fr)_minmax(180px,1fr)_minmax(120px,0.6fr)] xl:grid-cols-[32px_minmax(145px,1fr)_minmax(155px,1fr)_minmax(96px,0.55fr)_minmax(150px,1fr)_minmax(84px,0.45fr)_minmax(116px,0.55fr)] xl:items-start"
+                >
+                  <div className="pt-1 xl:pt-0">
                     <input
                       type="checkbox"
                       checked={Boolean(selected[order.documentId])}
@@ -193,11 +191,14 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
                       }
                       aria-label={`Select ${order.orderNumber}`}
                     />
-                  </td>
-                  <td className="px-4 py-4">
+                  </div>
+                  <div className="min-w-0">
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400 xl:hidden">
+                      Order
+                    </p>
                     <Link
                       href={`/admin/orders/${order.documentId}`}
-                      className="font-bold text-slate-950 hover:text-blue-700"
+                      className="break-words font-bold text-slate-950 hover:text-blue-700"
                     >
                       {order.orderNumber ?? order.documentId}
                     </Link>
@@ -208,8 +209,11 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
                           }).format(new Date(order.createdAt))
                         : "No date"}
                     </p>
-                  </td>
-                  <td className="px-4 py-4">
+                  </div>
+                  <div className="col-span-2 min-w-0 md:col-span-1">
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400 xl:hidden">
+                      Customer
+                    </p>
                     <p className="font-semibold text-slate-800">
                       {order.customerName || "Customer"}
                     </p>
@@ -219,8 +223,11 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
                     <p className="mt-1 max-w-[260px] truncate text-xs text-slate-400">
                       {order.shippingAddressText || "No address"}
                     </p>
-                  </td>
-                  <td className="px-4 py-4">
+                  </div>
+                  <div className="col-start-2 min-w-0 md:col-start-auto">
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400 xl:hidden">
+                      Status
+                    </p>
                     <span
                       className={[
                         "rounded-full px-3 py-1 text-xs font-bold capitalize",
@@ -229,8 +236,11 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
                     >
                       {order.status}
                     </span>
-                  </td>
-                  <td className="px-4 py-4">
+                  </div>
+                  <div className="col-span-2 min-w-0 md:col-span-1">
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400 xl:hidden">
+                      Fulfilment
+                    </p>
                     <p className="font-semibold text-slate-800">
                       {order.carrier || "Jamora EU Fulfilment"}
                     </p>
@@ -240,12 +250,18 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
                     <p className="mt-1 text-xs text-slate-400">
                       {items.length} item type{items.length === 1 ? "" : "s"}
                     </p>
-                  </td>
-                  <td className="px-4 py-4 text-right font-bold">
+                  </div>
+                  <div className="col-start-2 min-w-0 font-bold md:col-start-auto xl:text-right">
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400 xl:hidden">
+                      Total
+                    </p>
                     {formatAdminMoney(order.totalCents)}
-                  </td>
-                  <td className="px-4 py-4">
-                    <div className="flex justify-end gap-2">
+                  </div>
+                  <div className="col-span-2 min-w-0 md:col-span-1">
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400 xl:hidden">
+                      Actions
+                    </p>
+                    <div className="flex flex-wrap gap-2 xl:justify-end">
                       <Link
                         href={`/admin/orders/${order.documentId}`}
                         className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:border-blue-300 hover:text-blue-700"
@@ -262,19 +278,16 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
                         </Link>
                       ) : null}
                     </div>
-                  </td>
-                </tr>
+                  </div>
+                </article>
               );
             })}
             {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
-                  No orders match this filter.
-                </td>
-              </tr>
+              <div className="px-4 py-10 text-center text-sm text-slate-400">
+                No orders match this filter.
+              </div>
             ) : null}
-          </tbody>
-        </table>
+        </div>
       </section>
     </div>
   );
