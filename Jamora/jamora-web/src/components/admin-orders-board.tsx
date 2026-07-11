@@ -40,11 +40,26 @@ const STATUS_STYLE: Record<AdminOrderStatus, string> = {
 export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
   const router = useRouter();
   const [visible, setVisible] = useState<AdminOrderStatus | "all">("all");
+  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
+  const normalizedQuery = query.trim().toLowerCase();
   const filtered = useMemo(
-    () => orders.filter((order) => visible === "all" || order.status === visible),
-    [orders, visible],
+    () =>
+      orders.filter((order) => {
+        const matchesStatus = visible === "all" || order.status === visible;
+        const haystack = [
+          order.orderNumber,
+          order.customerName,
+          order.email,
+          order.trackingNumber,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return matchesStatus && (!normalizedQuery || haystack.includes(normalizedQuery));
+      }),
+    [orders, visible, normalizedQuery],
   );
   const selectedOrders = orders.filter((order) => selected[order.documentId]);
   const selectedStatuses = Array.from(new Set(selectedOrders.map((order) => order.status)));
@@ -81,6 +96,31 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
     <div className="space-y-4">
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="relative min-w-[260px] flex-1 md:max-w-md">
+            <span className="sr-only">Search orders</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search no order, customer, email..."
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none focus:border-blue-500 focus:bg-white"
+            />
+          </label>
+          <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+            <span className="font-semibold text-slate-700">
+              {selectedOrders.length} selected
+            </span>
+            <button
+              type="button"
+              onClick={() => void advanceSelected()}
+              disabled={!bulkNext || saving}
+              className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40"
+            >
+              {bulkNext ? `Move to ${bulkNext}` : "Select one status"}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-2 overflow-x-auto">
             {(["all", ...STATUSES] as const).map((status) => {
               const count =
@@ -105,19 +145,9 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
             })}
           </div>
 
-          <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
-            <span className="font-semibold text-slate-700">
-              {selectedOrders.length} selected
-            </span>
-            <button
-              type="button"
-              onClick={() => void advanceSelected()}
-              disabled={!bulkNext || saving}
-              className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40"
-            >
-              {bulkNext ? `Move to ${bulkNext}` : "Select one status"}
-            </button>
-          </div>
+          <p className="text-xs font-semibold text-slate-400">
+            Showing {filtered.length} of {orders.length}
+          </p>
         </div>
       </section>
 

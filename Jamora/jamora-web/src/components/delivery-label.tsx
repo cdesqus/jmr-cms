@@ -89,7 +89,7 @@ export function DeliveryLabel({ orderNumber }: { orderNumber: string }) {
           </div>
 
           <div className="py-6">
-            <p className="text-xs font-bold uppercase tracking-[0.2em]">Contents</p>
+            <p className="text-xs font-bold uppercase tracking-[0.2em]">Items</p>
             <ul className="mt-3 space-y-2">
               {order.items.map((item) => (
                 <li key={item.productId} className="flex justify-between text-lg">
@@ -102,11 +102,17 @@ export function DeliveryLabel({ orderNumber }: { orderNumber: string }) {
 
           <div className="mt-8 grid gap-5 border-2 border-dashed border-ink p-4 md:grid-cols-[1fr_auto] md:items-center">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.2em]">Scan tracking</p>
-              <p className="mt-3 break-all text-3xl font-bold tracking-[0.25em]">
-                {order.trackingNumber}
+              <p className="text-xs font-bold uppercase tracking-[0.2em]">Handling note</p>
+              <p className="mt-3 text-3xl font-bold tracking-[0.08em]">
+                Handle with care
               </p>
-              <p className="mt-2 break-all text-xs text-stone">{trackingUrl}</p>
+              <p className="mt-2 max-w-lg text-sm text-stone">
+                Please keep this parcel dry, upright, and away from direct heat.
+                Botanical wellness goods inside.
+              </p>
+              <p className="mt-3 break-all text-xs font-semibold text-stone">
+                Tracking: {order.trackingNumber}
+              </p>
             </div>
             <img
               src={qrUrl}

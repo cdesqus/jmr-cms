@@ -35,6 +35,21 @@ export default async function AdminDashboardPage() {
   const openOrders = orders.filter((order) =>
     ["paid", "processing", "shipped"].includes(order.status),
   );
+  const revenueOrders = orders.filter((order) =>
+    ["paid", "processing", "shipped", "fulfilled"].includes(order.status),
+  );
+  const revenueCents = revenueOrders.reduce(
+    (sum, order) => sum + (order.totalCents ?? 0),
+    0,
+  );
+  const estimatedProfitCents = revenueOrders.reduce((sum, order) => {
+    if (typeof order.estimatedProfitCents === "number") {
+      return sum + order.estimatedProfitCents;
+    }
+    return sum + Math.round((order.totalCents ?? 0) * 0.58);
+  }, 0);
+  const estimatedMargin =
+    revenueCents > 0 ? Math.round((estimatedProfitCents / revenueCents) * 1000) / 10 : 0;
   const lowStock = products.filter(
     (product) => (product.stock ?? 0) <= (product.minStock ?? 10),
   );
@@ -58,12 +73,12 @@ export default async function AdminDashboardPage() {
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Metric label="Visits today" value={summary.visitsToday.toLocaleString()} />
-        <Metric label="Sales" value={summary.sales.toLocaleString()} />
-        <Metric label="Omzet" value={formatAdminMoney(summary.revenueCents)} />
+        <Metric label="Sales" value={revenueOrders.length.toLocaleString()} />
+        <Metric label="Omzet" value={formatAdminMoney(revenueCents)} />
         <Metric
           label="Est. profit"
-          value={formatAdminMoney(summary.estimatedProfitCents)}
-          detail={`${summary.estimatedMargin}% margin`}
+          value={formatAdminMoney(estimatedProfitCents)}
+          detail={`${estimatedMargin}% margin`}
         />
       </section>
 
