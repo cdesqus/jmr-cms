@@ -101,8 +101,8 @@ export function OrderDetail({
       <div className="rounded-xl border border-clay/70 bg-white/40 p-8">
         <h2 className="font-display text-2xl text-ink">Order not found</h2>
         <p className="mt-2 text-stone">
-          This demo keeps orders in the same browser that created them. Try the
-          order number again, or create a new mock checkout.
+          We could not find that order number or tracking number in the
+          fulfilment dashboard. Check the code and try again.
         </p>
         <Link
           href="/cart"

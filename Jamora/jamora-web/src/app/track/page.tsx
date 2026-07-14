@@ -20,7 +20,7 @@ export default async function TrackPage({
       <h1 className="mt-3 font-display text-4xl text-ink">Track your Jamora order</h1>
       <p className="mt-3 max-w-2xl text-stone">
         Enter the order number or tracking number from your confirmation page.
-        In this test build, orders are stored in the browser that created them.
+        We will look it up from the Jamora fulfilment dashboard.
       </p>
       <TrackingView initialQuery={order ?? ""} />
     </div>
