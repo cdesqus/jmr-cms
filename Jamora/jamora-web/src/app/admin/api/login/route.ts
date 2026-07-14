@@ -40,13 +40,14 @@ export async function POST(request: Request) {
     });
   }
 
-  const response = NextResponse.redirect(publicUrl(request, next), {
+  const redirectUrl = publicUrl(request, next);
+  const response = NextResponse.redirect(redirectUrl, {
     status: 303,
   });
   response.cookies.set(ADMIN_COOKIE, sessionToken(), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: redirectUrl.protocol === "https:",
     path: "/",
     maxAge: 60 * 60 * 12,
   });
