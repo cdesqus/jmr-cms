@@ -29,6 +29,24 @@
   --radius-xl: 1.25rem;
 }
 
+@media print {
+  body:has(.admin-print-document) aside,
+  body:has(.admin-print-document) > div > header {
+    display: none !important;
+  }
+
+  body:has(.admin-print-document) main {
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  body:has(.admin-print-document) main,
+  body:has(.admin-print-document) .lg\:pl-64,
+  body:has(.admin-print-document) .lg\:pl-20 {
+    padding-left: 0 !important;
+  }
+}
+
 html {
   scroll-behavior: smooth;
 }

@@ -14,6 +14,7 @@ export type Certification =
 export interface Product {
   id: string;
   slug: string;
+  sku?: string;
   name: string;
   /** Botanical / Indonesian name shown as a subtitle. */
   botanical: string;

@@ -15,6 +15,13 @@ import { ProductVisual } from "@/components/product-visual";
 const FREE_SHIPPING_CENTS = 5000;
 const PAYMENTS = ["Card", "iDEAL", "Bancontact", "Klarna", "Apple Pay", "Google Pay"];
 
+interface AppliedCoupon {
+  code: string;
+  name: string;
+  discountCents: number;
+  signature: string;
+}
+
 export function CartView() {
   const router = useRouter();
   const { items, subtotalCents, setQty, remove, clear } = useCart();
@@ -24,6 +31,11 @@ export function CartView() {
     address: "",
   });
   const [error, setError] = useState("");
+  const [couponCode, setCouponCode] = useState("");
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
+  const [couponMessage, setCouponMessage] = useState("");
+  const [checkingCoupon, setCheckingCoupon] = useState(false);
+  const [checkingOut, setCheckingOut] = useState(false);
 
   if (items.length === 0) {
     return (
@@ -41,8 +53,61 @@ export function CartView() {
 
   const shipping = subtotalCents >= FREE_SHIPPING_CENTS ? 0 : 495;
   const remainingForFree = FREE_SHIPPING_CENTS - subtotalCents;
+  const cartSignature = items.map((item) => `${item.product.slug}:${item.qty}`).sort().join("|");
+  const normalizedCouponCode = couponCode.trim().toUpperCase();
+  const activeCoupon = appliedCoupon?.signature === cartSignature && appliedCoupon.code === normalizedCouponCode
+    ? appliedCoupon
+    : null;
+  const discountCents = activeCoupon?.discountCents ?? 0;
   const canCheckout =
     customer.name.trim() && customer.email.trim() && customer.address.trim();
+
+  async function validateCoupon(code: string) {
+    const response = await fetch("/api/jamora/promotions/validate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        code,
+        subtotalCents,
+        items: items.map((item) => ({
+          slug: item.product.slug,
+          qty: item.qty,
+          unitPriceCents: item.product.priceCents,
+          lineTotalCents: item.lineTotalCents,
+        })),
+      }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || !json.valid) {
+      throw new Error(json.error ?? "Coupon could not be applied.");
+    }
+    return json as {
+      promotion: { code: string; name: string };
+      discountCents: number;
+    };
+  }
+
+  async function applyCoupon() {
+    if (!normalizedCouponCode) return;
+    setCheckingCoupon(true);
+    setCouponMessage("");
+    try {
+      const result = await validateCoupon(normalizedCouponCode);
+      setCouponCode(result.promotion.code);
+      setAppliedCoupon({
+        code: result.promotion.code,
+        name: result.promotion.name,
+        discountCents: result.discountCents,
+        signature: cartSignature,
+      });
+      setCouponMessage(`${result.promotion.name} applied.`);
+    } catch (caught) {
+      setAppliedCoupon(null);
+      setCouponMessage(caught instanceof Error ? caught.message : "Coupon could not be applied.");
+    } finally {
+      setCheckingCoupon(false);
+    }
+  }
 
   async function handleCheckout() {
     if (!canCheckout) {
@@ -50,20 +115,64 @@ export function CartView() {
       return;
     }
 
-    const order = createMockOrder({
-      items,
-      subtotalCents,
-      shippingCents: shipping,
-      customer: {
-        name: customer.name.trim(),
-        email: customer.email.trim(),
-        address: customer.address.trim(),
-      },
-    });
-    saveMockOrder(order);
-    await syncMockOrderToStrapi(order);
-    clear();
-    router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
+    setCheckingOut(true);
+    setError("");
+    try {
+      let checkoutCoupon = activeCoupon;
+      if (activeCoupon) {
+        const refreshed = await validateCoupon(activeCoupon.code);
+        checkoutCoupon = {
+          code: refreshed.promotion.code,
+          name: refreshed.promotion.name,
+          discountCents: refreshed.discountCents,
+          signature: cartSignature,
+        };
+      }
+
+      const reservationResponse = await fetch("/api/jamora/inventory/reserve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: customer.email.trim(),
+          items: items.map((item) => ({
+            productId: item.product.id,
+            sku: item.product.sku,
+            slug: item.product.slug,
+            name: item.product.name,
+            qty: item.qty,
+            unitPriceCents: item.product.priceCents,
+            lineTotalCents: item.lineTotalCents,
+          })),
+        }),
+      });
+      const reservation = await reservationResponse.json().catch(() => ({}));
+      if (!reservationResponse.ok || !reservation.reservationToken) {
+        throw new Error(reservation.error ?? "Stock could not be reserved.");
+      }
+
+      const order = createMockOrder({
+        items,
+        subtotalCents,
+        shippingCents: shipping,
+        discountCents: checkoutCoupon?.discountCents,
+        promotionCode: checkoutCoupon?.code,
+        reservationToken: reservation.reservationToken,
+        customer: {
+          name: customer.name.trim(),
+          email: customer.email.trim(),
+          address: customer.address.trim(),
+        },
+      });
+      const synced = await syncMockOrderToStrapi(order);
+      if (!synced.ok) throw new Error(synced.error);
+      saveMockOrder(order);
+      clear();
+      router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Checkout could not be completed.");
+    } finally {
+      setCheckingOut(false);
+    }
   }
 
   return (
@@ -144,9 +253,15 @@ export function CartView() {
               {shipping === 0 ? "Free" : formatEUR(shipping)}
             </dd>
           </div>
+          {discountCents > 0 ? (
+            <div className="flex justify-between text-herb-deep">
+              <dt>Discount ({activeCoupon?.code})</dt>
+              <dd>-{formatEUR(discountCents)}</dd>
+            </div>
+          ) : null}
           <div className="flex justify-between border-t border-clay/60 pt-2 font-semibold">
             <dt className="text-ink">Total</dt>
-            <dd className="text-ink">{formatEUR(subtotalCents + shipping)}</dd>
+            <dd className="text-ink">{formatEUR(Math.max(0, subtotalCents - discountCents + shipping))}</dd>
           </div>
         </dl>
 
@@ -155,6 +270,37 @@ export function CartView() {
             Add {formatEUR(remainingForFree)} more for free EU shipping.
           </p>
         )}
+
+        <div className="mt-4 border-t border-clay/60 pt-4">
+          <label className="text-xs font-semibold uppercase text-stone">Coupon code</label>
+          <div className="mt-1 flex gap-2">
+            <input
+              value={couponCode}
+              onChange={(event) => setCouponCode(event.target.value.toUpperCase())}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void applyCoupon();
+              }}
+              placeholder="WELCOME10"
+              className="min-w-0 flex-1 rounded-lg border border-clay bg-cream px-3 py-2 text-sm font-semibold uppercase text-ink outline-none focus:border-terracotta"
+            />
+            <button
+              type="button"
+              onClick={applyCoupon}
+              disabled={checkingCoupon || !normalizedCouponCode}
+              className="rounded-lg border border-terracotta px-4 py-2 text-sm font-semibold text-terracotta disabled:opacity-50"
+            >
+              {checkingCoupon ? "Checking..." : "Apply"}
+            </button>
+          </div>
+          {couponMessage ? (
+            <p className={`mt-2 text-xs ${activeCoupon ? "text-herb-deep" : "text-terracotta-deep"}`}>
+              {couponMessage}
+            </p>
+          ) : null}
+          {appliedCoupon && !activeCoupon ? (
+            <p className="mt-2 text-xs text-terracotta-deep">Cart changed. Apply the coupon again.</p>
+          ) : null}
+        </div>
 
         <div className="mt-5 space-y-3 border-t border-clay/60 pt-5">
           <label className="block text-xs font-semibold uppercase text-stone">
@@ -194,9 +340,10 @@ export function CartView() {
         <button
           type="button"
           onClick={handleCheckout}
-          className="mt-5 w-full rounded-full bg-terracotta px-6 py-3 text-sm font-semibold text-cream hover:bg-terracotta-deep"
+          disabled={checkingOut}
+          className="mt-5 w-full rounded-full bg-terracotta px-6 py-3 text-sm font-semibold text-cream hover:bg-terracotta-deep disabled:opacity-60"
         >
-          Mock paid checkout
+          {checkingOut ? "Reserving stock..." : "Mock paid checkout"}
         </button>
         <p className="mt-2 text-center text-xs text-stone">
           Test mode: order is marked as paid without charging a card.

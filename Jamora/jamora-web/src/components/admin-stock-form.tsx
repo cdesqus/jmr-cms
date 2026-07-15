@@ -9,6 +9,8 @@ export function AdminStockForm({ product }: { product: AdminProduct }) {
   const [stock, setStock] = useState(product.stock ?? 0);
   const [minStock, setMinStock] = useState(product.minStock ?? 10);
   const [maxStock, setMaxStock] = useState(product.maxStock ?? 100);
+  const [reason, setReason] = useState("manual_adjustment");
+  const [reference, setReference] = useState("");
   const [saving, setSaving] = useState(false);
   const isLow = stock <= minStock;
   const isOver = stock > maxStock;
@@ -19,7 +21,13 @@ export function AdminStockForm({ product }: { product: AdminProduct }) {
       await fetch(`/admin/api/products/${product.documentId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ stock, minStock, maxStock }),
+        body: JSON.stringify({
+          stock,
+          minStock,
+          maxStock,
+          stockReason: reason,
+          stockReference: reference,
+        }),
       });
       router.refresh();
     } finally {
@@ -55,6 +63,29 @@ export function AdminStockForm({ product }: { product: AdminProduct }) {
         >
           {saving ? "Saving..." : "Save stock"}
         </button>
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-[0.8fr_1.2fr]">
+        <label className="text-xs font-semibold text-slate-600">
+          Adjustment reason
+          <select
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-normal"
+          >
+            <option value="manual_adjustment">Manual adjustment</option>
+            <option value="restock">Restock received</option>
+            <option value="correction">Stock count correction</option>
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-slate-600">
+          Reference / note
+          <input
+            value={reference}
+            onChange={(event) => setReference(event.target.value)}
+            placeholder="PO number, stock count, or reason"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm font-normal"
+          />
+        </label>
       </div>
     </div>
   );

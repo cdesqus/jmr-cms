@@ -10,7 +10,12 @@ interface StrapiTrackedOrder {
   email?: string;
   status?: string;
   totalCents?: number;
+  subtotalCents?: number;
+  shippingCents?: number;
+  discountCents?: number;
+  promotionCode?: string;
   items?: MockOrder["items"];
+  statusHistory?: MockOrder["statusHistory"];
   itemsSummary?: string;
   shippingAddress?: { address?: string } | Record<string, unknown>;
   shippingAddressText?: string;
@@ -66,12 +71,15 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
       address,
     },
     items: parsedItems,
-    subtotalCents: order.totalCents ?? 0,
-    shippingCents: 0,
+    subtotalCents: order.subtotalCents ?? order.totalCents ?? 0,
+    shippingCents: order.shippingCents ?? 0,
+    discountCents: order.discountCents ?? 0,
+    promotionCode: order.promotionCode,
     totalCents: order.totalCents ?? 0,
     createdAt: order.createdAt ?? new Date().toISOString(),
     estimatedDelivery: order.estimatedDelivery ?? new Date().toISOString(),
     emailConfirmationSent: true,
+    statusHistory: Array.isArray(order.statusHistory) ? order.statusHistory : [],
   };
 }
 

@@ -10,6 +10,8 @@ const NAV = [
   { href: "/admin/orders", label: "Orders", icon: "orders" },
   { href: "/admin/products", label: "Products", icon: "products" },
   { href: "/admin/inventory", label: "Inventory", icon: "inventory" },
+  { href: "/admin/promotions", label: "Promotions", icon: "promotions" },
+  { href: "/admin/returns", label: "Returns", icon: "returns" },
   { href: "/admin/content", label: "Content", icon: "content" },
   { href: "/admin/settings", label: "Settings", icon: "settings" },
 ];
@@ -177,6 +179,25 @@ function FlatIcon({ name }: { name: string }) {
         <path d="M8 8h8" />
         <path d="M8 12h8" />
         <path d="M8 16h4" />
+      </svg>
+    );
+  }
+  if (name === "promotions") {
+    return (
+      <svg {...common}>
+        <path d="M4 7.5V5h2.5a2.5 2.5 0 0 0 5 0H20v5.5a2.5 2.5 0 0 0 0 5V19h-8.5a2.5 2.5 0 0 0-5 0H4v-5.5a2.5 2.5 0 0 0 0-5Z" />
+        <path d="m9 15 6-6" />
+        <circle cx="9" cy="9" r=".75" fill="currentColor" stroke="none" />
+        <circle cx="15" cy="15" r=".75" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+  if (name === "returns") {
+    return (
+      <svg {...common}>
+        <path d="M9 7H5v-4" />
+        <path d="M5 7a8 8 0 1 1-1 8" />
+        <path d="m5 7 4-4" />
       </svg>
     );
   }

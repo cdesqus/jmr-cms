@@ -25,6 +25,7 @@ interface StrapiProductFields {
   documentId?: string;
   id?: number | string;
   slug?: string;
+  sku?: string;
   name?: string;
   botanical?: string;
   category?: string;
@@ -92,6 +93,7 @@ function mapProduct(entity: StrapiEntity<StrapiProductFields>): Product | null {
   return {
     id: String(fields.documentId ?? fields.id ?? entity.documentId ?? entity.id ?? fields.slug),
     slug: fields.slug,
+    sku: fields.sku,
     name: fields.name,
     botanical: fields.botanical ?? "",
     category: fields.category,

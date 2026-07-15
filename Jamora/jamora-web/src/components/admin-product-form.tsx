@@ -13,6 +13,7 @@ export function AdminProductForm({ product }: { product: AdminProduct }) {
   const [form, setForm] = useState({
     name: product.name,
     slug: product.slug,
+    sku: product.sku ?? "",
     botanical: product.botanical ?? "",
     category: product.category,
     priceCents: product.priceCents,
@@ -77,6 +78,7 @@ export function AdminProductForm({ product }: { product: AdminProduct }) {
       <div className="grid gap-4 md:grid-cols-2">
         <Field label="Name" value={form.name} onChange={(v) => set("name", v)} />
         <Field label="Slug" value={form.slug} onChange={(v) => set("slug", v)} />
+        <Field label="SKU" value={form.sku} onChange={(v) => set("sku", v.toUpperCase())} />
         <Field
           label="Botanical"
           value={form.botanical}

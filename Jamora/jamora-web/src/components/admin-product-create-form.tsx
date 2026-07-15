@@ -26,6 +26,7 @@ export function AdminProductCreateForm() {
   const [form, setForm] = useState({
     name: "",
     slug: "",
+    sku: "",
     botanical: "",
     category: "energy" as Category,
     priceCents: 0,
@@ -45,6 +46,9 @@ export function AdminProductCreateForm() {
       ...current,
       [key]: value,
       ...(key === "name" && !current.slug ? { slug: slugify(String(value)) } : {}),
+      ...(key === "name" && !current.sku
+        ? { sku: `JM-${slugify(String(value)).replace(/-/g, "").slice(0, 12).toUpperCase()}` }
+        : {}),
     }));
   }
 
@@ -70,6 +74,7 @@ export function AdminProductCreateForm() {
       <div className="grid gap-4 md:grid-cols-2">
         <Field label="Name" value={form.name} onChange={(v) => set("name", v)} />
         <Field label="Slug" value={form.slug} onChange={(v) => set("slug", slugify(v))} />
+        <Field label="SKU" value={form.sku} onChange={(v) => set("sku", v.toUpperCase())} />
         <Field label="Botanical" value={form.botanical} onChange={(v) => set("botanical", v)} />
         <label className="text-sm font-semibold text-slate-700">
           Category

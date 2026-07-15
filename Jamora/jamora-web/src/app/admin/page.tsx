@@ -4,9 +4,10 @@ import {
   getAdminOrders,
   getAdminProducts,
   getAnalyticsSummary,
+  getInventoryBatches,
 } from "@/lib/admin-api";
 import { AdminDashboardChart } from "@/components/admin-dashboard-chart";
-import type { AdminOrder, AdminProduct, AnalyticsSummary } from "@/lib/admin-api";
+import type { AdminOrder, AdminProduct, AnalyticsSummary, InventoryBatch } from "@/lib/admin-api";
 
 const EMPTY_SUMMARY: AnalyticsSummary = {
   visits: 0,
@@ -27,10 +28,11 @@ async function safe<T>(loader: () => Promise<T>, fallback: T) {
 }
 
 export default async function AdminDashboardPage() {
-  const [summary, orders, products] = await Promise.all([
+  const [summary, orders, products, batches] = await Promise.all([
     safe(getAnalyticsSummary, EMPTY_SUMMARY),
     safe<AdminOrder[]>(getAdminOrders, []),
     safe<AdminProduct[]>(getAdminProducts, []),
+    safe<InventoryBatch[]>(getInventoryBatches, []),
   ]);
   const openOrders = orders.filter((order) =>
     ["paid", "processing", "shipped"].includes(order.status),
@@ -53,6 +55,9 @@ export default async function AdminDashboardPage() {
   const lowStock = products.filter(
     (product) => (product.stock ?? 0) <= (product.minStock ?? 10),
   );
+  const expiringBatches = batches.filter((batch) => {
+    return batch.status === "active" && (batch.daysUntilExpiry ?? Number.POSITIVE_INFINITY) <= 90;
+  });
 
   return (
     <div className="space-y-8">
@@ -84,7 +89,7 @@ export default async function AdminDashboardPage() {
 
       <AdminDashboardChart orders={orders} />
 
-      <section className="grid gap-6 xl:grid-cols-2">
+      <section className="grid gap-6 xl:grid-cols-3">
         <Panel title="Orders to handle" href="/admin/orders">
           <div className="space-y-3">
             {openOrders.slice(0, 6).map((order) => (
@@ -126,6 +131,18 @@ export default async function AdminDashboardPage() {
               </Link>
             ))}
             {lowStock.length === 0 && <p className="text-sm text-slate-500">Inventory looks healthy.</p>}
+          </div>
+        </Panel>
+
+        <Panel title="Expiry alerts" href="/admin/inventory/batches">
+          <div className="space-y-3">
+            {expiringBatches.slice(0, 6).map((batch) => (
+              <Link key={batch.documentId} href="/admin/inventory/batches" className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 hover:border-blue-300">
+                <div><p className="font-semibold text-slate-950">{batch.productName}</p><p className="text-sm text-slate-500">{batch.batchNumber}</p></div>
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">{new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(new Date(batch.expiryDate))}</span>
+              </Link>
+            ))}
+            {expiringBatches.length === 0 ? <p className="text-sm text-slate-500">No batches expire within 90 days.</p> : null}
           </div>
         </Panel>
       </section>

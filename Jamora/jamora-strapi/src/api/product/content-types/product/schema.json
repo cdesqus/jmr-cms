@@ -11,6 +11,7 @@
   },
   "attributes": {
     "slug": { "type": "uid", "targetField": "name", "required": true },
+    "sku": { "type": "string" },
     "name": { "type": "string", "required": true },
     "botanical": { "type": "string" },
     "category": {

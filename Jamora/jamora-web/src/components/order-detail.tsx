@@ -179,6 +179,28 @@ export function OrderDetail({
         </section>
       )}
 
+      {order.statusHistory && order.statusHistory.length > 0 ? (
+        <section className="rounded-xl border border-clay/70 bg-white/40 p-6">
+          <h2 className="font-display text-2xl text-ink">Shipment updates</h2>
+          <div className="mt-4 space-y-4">
+            {[...order.statusHistory].reverse().map((event) => (
+              <div key={event.id} className="grid grid-cols-[12px_1fr] gap-3">
+                <span className="mt-1.5 h-2.5 w-2.5 rounded-full bg-terracotta" />
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold capitalize text-ink">
+                      {event.type === "status" ? event.status : "Order update"}
+                    </p>
+                    <span className="text-xs text-stone">{formatDate(event.createdAt)}</span>
+                  </div>
+                  {event.note ? <p className="mt-1 text-sm text-stone">{event.note}</p> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-xl border border-clay/70 bg-white/40 p-6">
           <h2 className="font-display text-2xl text-ink">Items</h2>
@@ -218,6 +240,12 @@ export function OrderDetail({
                 {order.shippingCents === 0 ? "Free" : formatEUR(order.shippingCents)}
               </dd>
             </div>
+            {order.discountCents > 0 ? (
+              <div className="flex justify-between text-herb-deep">
+                <dt>Discount {order.promotionCode ? `(${order.promotionCode})` : ""}</dt>
+                <dd>-{formatEUR(order.discountCents)}</dd>
+              </div>
+            ) : null}
             <div className="flex justify-between border-t border-clay/60 pt-2 font-semibold">
               <dt className="text-ink">Total paid</dt>
               <dd className="text-ink">{formatEUR(order.totalCents)}</dd>

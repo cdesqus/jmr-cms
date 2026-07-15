@@ -1,0 +1,19 @@
+{
+  "kind": "collectionType",
+  "collectionName": "inventory_batches",
+  "info": { "singularName": "inventory-batch", "pluralName": "inventory-batches", "displayName": "Inventory Batch" },
+  "options": { "draftAndPublish": false },
+  "attributes": {
+    "productDocumentId": { "type": "string", "required": true },
+    "productName": { "type": "string", "required": true },
+    "sku": { "type": "string" },
+    "slug": { "type": "string", "required": true },
+    "batchNumber": { "type": "string", "required": true, "unique": true },
+    "quantity": { "type": "integer", "required": true, "min": 0 },
+    "reservedQuantity": { "type": "integer", "default": 0, "min": 0 },
+    "productionDate": { "type": "date" },
+    "expiryDate": { "type": "date", "required": true },
+    "certificateUrl": { "type": "string" },
+    "status": { "type": "enumeration", "enum": ["active", "quarantined", "depleted"], "default": "active", "required": true }
+  }
+}

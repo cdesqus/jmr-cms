@@ -1,0 +1,28 @@
+{
+  "kind": "collectionType",
+  "collectionName": "inventory_movements",
+  "info": {
+    "singularName": "inventory-movement",
+    "pluralName": "inventory-movements",
+    "displayName": "Inventory Movement"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "productDocumentId": { "type": "string", "required": true },
+    "productName": { "type": "string", "required": true },
+    "sku": { "type": "string" },
+    "slug": { "type": "string" },
+    "delta": { "type": "integer", "required": true },
+    "balanceAfter": { "type": "integer", "required": true, "min": 0 },
+    "reason": {
+      "type": "enumeration",
+      "enum": ["sale", "manual_adjustment", "restock", "correction", "initial_stock", "refund"],
+      "default": "manual_adjustment",
+      "required": true
+    },
+    "reference": { "type": "string" },
+    "actor": { "type": "string", "default": "System" }
+  }
+}

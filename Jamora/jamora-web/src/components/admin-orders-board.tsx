@@ -65,6 +65,13 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
   const selectedStatuses = Array.from(new Set(selectedOrders.map((order) => order.status)));
   const bulkSource = selectedStatuses.length === 1 ? selectedStatuses[0] : undefined;
   const bulkNext = bulkSource ? NEXT_STATUS[bulkSource] : undefined;
+  const readyForBulk = bulkNext !== "shipped" || selectedOrders.every(
+    (order) =>
+      Boolean(order.packedBy) &&
+      Array.isArray(order.fulfilmentChecklist) &&
+      order.fulfilmentChecklist.length > 0 &&
+      order.fulfilmentChecklist.every((item) => item.checked),
+  );
 
   function toggleAll(checked: boolean) {
     const next = { ...selected };
@@ -112,10 +119,14 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
             <button
               type="button"
               onClick={() => void advanceSelected()}
-              disabled={!bulkNext || saving}
+              disabled={!bulkNext || !readyForBulk || saving}
               className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40"
             >
-              {bulkNext ? `Move to ${bulkNext}` : "Select one status"}
+              {bulkNext === "shipped" && !readyForBulk
+                ? "Complete packing first"
+                : bulkNext
+                  ? `Move to ${bulkNext}`
+                  : "Select one status"}
             </button>
           </div>
         </div>
@@ -168,7 +179,7 @@ export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
         </div>
         <div className="divide-y divide-slate-100">
             {filtered.map((order) => {
-              const items = parseOrderItems(order.itemsSummary);
+              const items = parseOrderItems(order);
               const labelUrl =
                 order.deliveryLabelUrl ??
                 (order.orderNumber

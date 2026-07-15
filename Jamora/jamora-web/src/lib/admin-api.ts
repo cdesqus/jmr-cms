@@ -16,6 +16,25 @@ export type AdminOrderStatus =
   | "failed"
   | "refunded";
 
+export interface AdminOrderItem {
+  productId?: string;
+  sku?: string;
+  slug?: string;
+  name: string;
+  qty: number;
+  unitPriceCents: number;
+  lineTotalCents: number;
+}
+
+export interface OrderTimelineEvent {
+  id: string;
+  type: "status" | "note";
+  status?: AdminOrderStatus;
+  note?: string;
+  actor?: string;
+  createdAt: string;
+}
+
 export interface AdminOrder {
   documentId: string;
   orderNumber?: string;
@@ -25,8 +44,20 @@ export interface AdminOrder {
   email?: string;
   status: AdminOrderStatus;
   currency?: string;
+  subtotalCents?: number;
+  shippingCents?: number;
+  discountCents?: number;
+  promotionCode?: string;
   totalCents?: number;
   estimatedProfitCents?: number;
+  invoiceNumber?: string;
+  items?: AdminOrderItem[];
+  statusHistory?: OrderTimelineEvent[];
+  reservationToken?: string;
+  batchAllocations?: BatchAllocation[];
+  fulfilmentChecklist?: FulfilmentChecklistItem[];
+  packedBy?: string;
+  packedAt?: string;
   itemsSummary?: string;
   shippingAddressText?: string;
   trackingPreviewUrl?: string;
@@ -35,9 +66,29 @@ export interface AdminOrder {
   createdAt?: string;
 }
 
+export interface BatchAllocation {
+  productDocumentId?: string;
+  slug: string;
+  sku?: string;
+  name: string;
+  batchDocumentId?: string | null;
+  batchNumber: string;
+  expiryDate?: string;
+  qty: number;
+}
+
+export interface FulfilmentChecklistItem {
+  productId?: string;
+  sku?: string;
+  name: string;
+  qty: number;
+  checked: boolean;
+}
+
 export interface AdminProduct {
   documentId: string;
   slug: string;
+  sku?: string;
   name: string;
   botanical?: string;
   category: "energy" | "digestion" | "balance";
@@ -59,6 +110,78 @@ export interface AdminProduct {
   maxStock?: number;
   publishedAt?: string;
   updatedAt?: string;
+}
+
+export interface InventoryMovement {
+  documentId: string;
+  productDocumentId: string;
+  productName: string;
+  sku?: string;
+  slug?: string;
+  delta: number;
+  balanceAfter: number;
+  reason: "sale" | "manual_adjustment" | "restock" | "correction" | "initial_stock" | "refund";
+  reference?: string;
+  actor?: string;
+  createdAt: string;
+}
+
+export interface AdminPromotion {
+  documentId: string;
+  name: string;
+  code: string;
+  discountType: "percentage" | "fixed";
+  discountValue: number;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  usageLimit?: number;
+  usageCount?: number;
+  minimumSpendCents?: number;
+  productSlugs?: string[];
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface InventoryBatch {
+  documentId: string;
+  productDocumentId: string;
+  productName: string;
+  sku?: string;
+  slug: string;
+  batchNumber: string;
+  quantity: number;
+  reservedQuantity: number;
+  productionDate?: string;
+  expiryDate: string;
+  daysUntilExpiry?: number | null;
+  certificateUrl?: string;
+  status: "active" | "quarantined" | "depleted";
+  createdAt?: string;
+}
+
+export interface ReturnRequest {
+  documentId: string;
+  returnNumber: string;
+  orderDocumentId: string;
+  orderNumber: string;
+  email?: string;
+  items: AdminOrderItem[];
+  reason: string;
+  status: "requested" | "approved" | "rejected" | "received" | "refunded";
+  restock: boolean;
+  adminNote?: string;
+  createdAt?: string;
+}
+
+export interface NotificationLog {
+  documentId: string;
+  recipient: string;
+  template: string;
+  subject: string;
+  status: "simulated" | "sent" | "failed";
+  orderNumber?: string;
+  createdAt: string;
 }
 
 export interface StoreContent {
@@ -146,6 +269,41 @@ export async function getAdminProducts() {
   }
 }
 
+export async function getInventoryMovements() {
+  const { movements } = await adminFetch<{ movements: InventoryMovement[] }>(
+    "/api/jamora/admin/inventory-movements",
+  );
+  return movements;
+}
+
+export async function getAdminPromotions() {
+  const { promotions } = await adminFetch<{ promotions: AdminPromotion[] }>(
+    "/api/jamora/admin/promotions",
+  );
+  return promotions;
+}
+
+export async function getInventoryBatches() {
+  const { batches } = await adminFetch<{ batches: InventoryBatch[] }>(
+    "/api/jamora/admin/inventory-batches",
+  );
+  return batches;
+}
+
+export async function getAdminReturns() {
+  const { returns } = await adminFetch<{ returns: ReturnRequest[] }>(
+    "/api/jamora/admin/returns",
+  );
+  return returns;
+}
+
+export async function getAdminNotifications() {
+  const { notifications } = await adminFetch<{ notifications: NotificationLog[] }>(
+    "/api/jamora/admin/notifications",
+  );
+  return notifications;
+}
+
 export async function getAnalyticsSummary() {
   return adminFetch<AnalyticsSummary>("/api/jamora/analytics/summary");
 }
@@ -161,14 +319,12 @@ export function formatAdminMoney(cents = 0) {
   return formatEUR(cents);
 }
 
-export function parseOrderItems(itemsSummary?: string) {
+export function parseOrderItems(order: Pick<AdminOrder, "items" | "itemsSummary">) {
+  if (Array.isArray(order.items)) return order.items;
+  const itemsSummary = order.itemsSummary;
   if (!itemsSummary) return [];
   try {
-    const parsed = JSON.parse(itemsSummary) as {
-      name?: string;
-      qty?: number;
-      lineTotalCents?: number;
-    }[];
+    const parsed = JSON.parse(itemsSummary) as AdminOrderItem[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -179,6 +335,7 @@ export function adminProductToProduct(product: AdminProduct): Product {
   return {
     id: product.documentId,
     slug: product.slug,
+    sku: product.sku,
     name: product.name,
     botanical: product.botanical ?? "",
     category: product.category,

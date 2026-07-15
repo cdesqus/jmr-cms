@@ -5,6 +5,7 @@ export default {
     await seedProducts(strapi);
     await seedStoreContent(strapi);
     await backfillProductStockThresholds(strapi);
+    await backfillProductSkus(strapi);
     await enablePublicProductRead(strapi);
     await configureOrderListView(strapi);
   },
@@ -28,6 +29,26 @@ async function seedProducts(strapi: any) {
   }
 
   strapi.log.info(`Seeded ${products.length} Jamora products`);
+}
+
+async function backfillProductSkus(strapi: any) {
+  const existing = await strapi.documents("api::product.product").findMany({
+    fields: ["documentId", "slug", "sku"],
+    limit: 1000,
+  });
+
+  for (const product of existing) {
+    if (product.sku) continue;
+    const sku = `JM-${String(product.slug ?? product.documentId)
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(0, 12)
+      .toUpperCase()}`;
+    await strapi.documents("api::product.product").update({
+      documentId: product.documentId,
+      data: { sku } as any,
+      status: "published",
+    } as any);
+  }
 }
 
 async function seedStoreContent(strapi: any) {

@@ -22,6 +22,7 @@ export interface MockOrder {
   };
   items: {
     productId: string;
+    sku?: string;
     slug: string;
     name: string;
     qty: number;
@@ -30,10 +31,21 @@ export interface MockOrder {
   }[];
   subtotalCents: number;
   shippingCents: number;
+  discountCents: number;
+  promotionCode?: string;
+  reservationToken?: string;
   totalCents: number;
   createdAt: string;
   estimatedDelivery: string;
   emailConfirmationSent: boolean;
+  statusHistory?: {
+    id: string;
+    type: "status" | "note";
+    status?: MockOrderStatus;
+    note?: string;
+    actor?: string;
+    createdAt: string;
+  }[];
 }
 
 const ORDERS_KEY = "jamora.mock-orders.v1";
@@ -43,6 +55,9 @@ export function createMockOrder(input: {
   items: CartItem[];
   subtotalCents: number;
   shippingCents: number;
+  discountCents?: number;
+  promotionCode?: string;
+  reservationToken?: string;
   customer: MockOrder["customer"];
 }): MockOrder {
   const now = new Date();
@@ -60,6 +75,7 @@ export function createMockOrder(input: {
     customer: input.customer,
     items: input.items.map((item) => ({
       productId: item.product.id,
+      sku: item.product.sku,
       slug: item.product.slug,
       name: item.product.name,
       qty: item.qty,
@@ -68,10 +84,26 @@ export function createMockOrder(input: {
     })),
     subtotalCents: input.subtotalCents,
     shippingCents: input.shippingCents,
-    totalCents: input.subtotalCents + input.shippingCents,
+    discountCents: input.discountCents ?? 0,
+    promotionCode: input.promotionCode,
+    reservationToken: input.reservationToken,
+    totalCents: Math.max(
+      0,
+      input.subtotalCents - (input.discountCents ?? 0) + input.shippingCents,
+    ),
     createdAt: now.toISOString(),
     estimatedDelivery: delivery.toISOString(),
     emailConfirmationSent: true,
+    statusHistory: [
+      {
+        id: `evt-${id}`,
+        type: "status",
+        status: "paid",
+        note: "Payment confirmed in test mode.",
+        actor: "Checkout",
+        createdAt: now.toISOString(),
+      },
+    ],
   };
 }
 
@@ -83,13 +115,17 @@ export function saveMockOrder(order: MockOrder) {
 
 export async function syncMockOrderToStrapi(order: MockOrder) {
   try {
-    await fetch("/api/jamora/orders/mock-paid", {
+    const response = await fetch("/api/jamora/orders/mock-paid", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(order),
     });
+    const json = await response.json().catch(() => ({}));
+    return response.ok
+      ? { ok: true as const }
+      : { ok: false as const, error: json.error ?? "Order could not be created." };
   } catch {
-    // Analytics/order sync is best-effort in test mode.
+    return { ok: false as const, error: "Order service is unavailable." };
   }
 }
 
