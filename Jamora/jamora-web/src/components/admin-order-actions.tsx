@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { parseOrderItems, type AdminOrder, type AdminOrderStatus, type FulfilmentChecklistItem } from "@/lib/admin-api";
+import { parseOrderItems, type AdminOrder, type AdminOrderStatus, type AdminProduct, type FulfilmentChecklistItem } from "@/lib/admin-api";
 
 const STATUSES: AdminOrderStatus[] = [
   "pending",
@@ -14,28 +14,19 @@ const STATUSES: AdminOrderStatus[] = [
   "refunded",
 ];
 
-export function AdminOrderActions({ order }: { order: AdminOrder }) {
+export function AdminOrderActions({ order, products }: { order: AdminOrder; products: AdminProduct[] }) {
   const router = useRouter();
   const [status, setStatus] = useState<AdminOrderStatus>(order.status);
   const [carrier, setCarrier] = useState(order.carrier ?? "Jamora EU Fulfilment");
   const [trackingNumber, setTrackingNumber] = useState(order.trackingNumber ?? "");
   const [note, setNote] = useState("");
   const [packedBy, setPackedBy] = useState(order.packedBy ?? "");
-  const [checklist, setChecklist] = useState<FulfilmentChecklistItem[]>(
-    Array.isArray(order.fulfilmentChecklist) && order.fulfilmentChecklist.length > 0
-      ? order.fulfilmentChecklist
-      : parseOrderItems(order).map((item) => ({
-          productId: item.productId,
-          sku: item.sku,
-          name: item.name,
-          qty: item.qty,
-          checked: false,
-        })),
-  );
+  const [checklist, setChecklist] = useState<FulfilmentChecklistItem[]>(() => buildChecklist(order, products));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [scanCode, setScanCode] = useState("");
   const [scanMessage, setScanMessage] = useState("");
+  const [scanMatched, setScanMatched] = useState<boolean | null>(null);
 
   function scan() {
     const code = scanCode.trim().toLowerCase();
@@ -49,6 +40,7 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
     );
     if (index < 0) {
       setScanMessage(`Code ${scanCode} does not match this order.`);
+      setScanMatched(false);
       setScanCode("");
       return;
     }
@@ -58,6 +50,7 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
       return { ...item, scannedQty, checked: scannedQty >= item.qty };
     }));
     setScanMessage(`${checklist[index].name} scanned.`);
+    setScanMatched(true);
     setScanCode("");
   }
 
@@ -127,22 +120,23 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
       </label>
       <div className="mt-5 border-t border-slate-200 pt-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div><h3 className="font-bold text-slate-950">Pick & pack checklist</h3><p className="text-xs text-slate-500">Verify every line before the parcel moves to shipped.</p></div>
+          <div><h3 className="font-bold text-slate-950">Pick & pack checklist</h3><p className="text-xs text-slate-500">Scan each physical product before the parcel moves to shipped.</p></div>
           {order.packedAt ? <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">Packed</span> : null}
         </div>
         <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-4">
-          <label className="text-sm font-bold text-slate-800">Scan SKU or batch barcode</label>
+          <label className="text-sm font-bold text-slate-800">Product barcode or allocated batch</label>
+          <p className="mt-1 text-xs text-slate-600">Use a USB barcode scanner, or type one of the expected codes shown below and press Enter.</p>
           <div className="mt-2 flex gap-2">
             <input autoFocus value={scanCode} onChange={(event) => setScanCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); scan(); } }} placeholder="Scan code and press Enter" className="min-w-0 flex-1 rounded-lg border border-blue-200 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-blue-500" />
             <button type="button" onClick={scan} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Scan</button>
           </div>
-          {scanMessage ? <p className="mt-2 text-xs font-semibold text-blue-800">{scanMessage}</p> : null}
+          {scanMessage ? <p className={`mt-2 text-xs font-semibold ${scanMatched ? "text-emerald-700" : "text-red-700"}`}>{scanMessage}</p> : null}
         </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {checklist.map((item, index) => (
             <label key={`${item.productId ?? item.name}-${index}`} className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-3 text-sm">
               <input type="checkbox" checked={item.checked} onChange={(event) => setChecklist((current) => current.map((line, lineIndex) => lineIndex === index ? { ...line, checked: event.target.checked, scannedQty: event.target.checked ? line.qty : 0 } : line))} />
-              <span className="min-w-0"><span className="block truncate font-semibold text-slate-800">{item.name}</span><span className="text-xs text-slate-500">{item.sku || "No SKU"} · scanned {item.scannedQty ?? 0} / {item.qty}</span></span>
+              <span className="min-w-0"><span className="block truncate font-semibold text-slate-800">{item.name}</span>{item.sku ? <span className="block font-mono text-xs font-semibold text-blue-700">Scan: {item.sku}</span> : <span className="block text-xs font-semibold text-amber-700">SKU missing in product master</span>}<span className="text-xs text-slate-500">Verified {item.scannedQty ?? 0} / {item.qty}</span></span>
             </label>
           ))}
         </div>
@@ -159,4 +153,30 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
       {error ? <p className="mt-3 text-sm font-semibold text-red-600">{error}</p> : null}
     </div>
   );
+}
+
+function buildChecklist(order: AdminOrder, products: AdminProduct[]) {
+  const orderItems = parseOrderItems(order);
+  const source: FulfilmentChecklistItem[] = Array.isArray(order.fulfilmentChecklist) && order.fulfilmentChecklist.length > 0
+    ? order.fulfilmentChecklist
+    : orderItems.map((item) => ({ productId: item.productId, sku: item.sku, name: item.name, qty: item.qty, checked: false }));
+
+  return source.map((item) => {
+    const normalizedName = item.name.trim().toLowerCase();
+    const orderItem = orderItems.find((candidate) =>
+      (item.productId && candidate.productId === item.productId) || candidate.name.trim().toLowerCase() === normalizedName,
+    );
+    const product = products.find((candidate) =>
+      (item.productId && candidate.documentId === item.productId) ||
+      (orderItem?.productId && candidate.documentId === orderItem.productId) ||
+      (orderItem?.slug && candidate.slug === orderItem.slug) ||
+      candidate.name.trim().toLowerCase() === normalizedName,
+    );
+    return {
+      ...item,
+      productId: item.productId || orderItem?.productId || product?.documentId,
+      sku: item.sku || orderItem?.sku || product?.sku,
+      scannedQty: item.scannedQty ?? (item.checked ? item.qty : 0),
+    };
+  });
 }

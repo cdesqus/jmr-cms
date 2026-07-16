@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   formatAdminMoney,
+  getAdminProducts,
   getAdminOrders,
   parseOrderItems,
 } from "@/lib/admin-api";
@@ -14,7 +15,7 @@ export default async function AdminOrderDetailPage({
   params: Promise<{ documentId: string }>;
 }) {
   const { documentId } = await params;
-  const orders = await getAdminOrders();
+  const [orders, products] = await Promise.all([getAdminOrders(), getAdminProducts()]);
   const order = orders.find((item) => item.documentId === documentId);
   if (!order) notFound();
   const items = parseOrderItems(order);
@@ -72,7 +73,7 @@ export default async function AdminOrderDetailPage({
         </div>
       </div>
 
-      <AdminOrderActions order={order} />
+      <AdminOrderActions order={order} products={products} />
 
       {order.batchAllocations && order.batchAllocations.length > 0 ? (
         <section className="rounded-xl border border-slate-200 bg-white p-5">
