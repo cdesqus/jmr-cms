@@ -1,19 +1,8 @@
 import { NextResponse } from "next/server";
 import { publicUrl } from "@/lib/public-url";
+import { adminAccounts, sessionForRole } from "@/lib/admin-auth";
 
 const ADMIN_COOKIE = "jamora_admin_session";
-
-function expectedEmail() {
-  return process.env.ADMIN_EMAIL ?? "admin@jamora.local";
-}
-
-function expectedPassword() {
-  return process.env.ADMIN_PASSWORD ?? "admin";
-}
-
-function sessionToken() {
-  return process.env.ADMIN_SESSION_TOKEN ?? "jamora-admin-dev-session";
-}
 
 function safeNext(value: FormDataEntryValue | null) {
   const next = typeof value === "string" ? value : "/admin";
@@ -28,10 +17,10 @@ export async function POST(request: Request) {
   const password = String(form.get("password") ?? "");
   const next = safeNext(form.get("next"));
 
-  if (
-    email !== expectedEmail().trim().toLowerCase() ||
-    password !== expectedPassword()
-  ) {
+  const account = adminAccounts().find((candidate) =>
+    candidate.email.trim().toLowerCase() === email && candidate.password === password,
+  );
+  if (!account) {
     const loginUrl = new URL("/admin/login", request.url);
     loginUrl.searchParams.set("error", "1");
     loginUrl.searchParams.set("next", next);
@@ -44,7 +33,7 @@ export async function POST(request: Request) {
   const response = NextResponse.redirect(redirectUrl, {
     status: 303,
   });
-  response.cookies.set(ADMIN_COOKIE, sessionToken(), {
+  response.cookies.set(ADMIN_COOKIE, sessionForRole(account.role), {
     httpOnly: true,
     sameSite: "lax",
     secure: redirectUrl.protocol === "https:",

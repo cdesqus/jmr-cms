@@ -4,21 +4,28 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { AdminLogoutButton } from "@/components/admin-logout-button";
+import type { AdminIdentity, AdminRole } from "@/lib/admin-auth";
 
 const NAV = [
-  { href: "/admin", label: "Dashboard", icon: "dashboard" },
-  { href: "/admin/orders", label: "Orders", icon: "orders" },
-  { href: "/admin/products", label: "Products", icon: "products" },
-  { href: "/admin/inventory", label: "Inventory", icon: "inventory" },
-  { href: "/admin/promotions", label: "Promotions", icon: "promotions" },
-  { href: "/admin/returns", label: "Returns", icon: "returns" },
-  { href: "/admin/content", label: "Content", icon: "content" },
-  { href: "/admin/settings", label: "Settings", icon: "settings" },
+  { href: "/admin", label: "Dashboard", icon: "dashboard", roles: ["owner", "warehouse", "content", "support"] },
+  { href: "/admin/orders", label: "Orders", icon: "orders", roles: ["owner", "warehouse", "support"] },
+  { href: "/admin/customers", label: "Customers", icon: "customers", roles: ["owner", "support"] },
+  { href: "/admin/products", label: "Products", icon: "products", roles: ["owner", "content"] },
+  { href: "/admin/inventory", label: "Inventory", icon: "inventory", roles: ["owner", "warehouse"] },
+  { href: "/admin/suppliers", label: "Suppliers", icon: "suppliers", roles: ["owner", "warehouse"] },
+  { href: "/admin/purchase-orders", label: "Purchase orders", icon: "purchase-orders", roles: ["owner", "warehouse"] },
+  { href: "/admin/promotions", label: "Promotions", icon: "promotions", roles: ["owner", "content"] },
+  { href: "/admin/returns", label: "Returns", icon: "returns", roles: ["owner", "support"] },
+  { href: "/admin/content", label: "Content", icon: "content", roles: ["owner", "content"] },
+  { href: "/admin/audit", label: "Audit log", icon: "audit", roles: ["owner"] },
+  { href: "/admin/settings", label: "Settings", icon: "settings", roles: ["owner"] },
 ];
 
-export function AdminShell({ children }: { children: React.ReactNode }) {
+export function AdminShell({ children, identity }: { children: React.ReactNode; identity: AdminIdentity | null }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(true);
+  const role: AdminRole = identity?.role ?? "owner";
+  const visibleNav = NAV.filter((item) => (item.roles as AdminRole[]).includes(role));
 
   if (pathname === "/admin/login") return <>{children}</>;
 
@@ -62,7 +69,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
         <nav className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
-          {NAV.map((item) => {
+          {visibleNav.map((item) => {
             const active =
               pathname === item.href ||
               (item.href !== "/admin" && pathname?.startsWith(item.href));
@@ -92,6 +99,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             "mt-4 shrink-0 space-y-2 border-t border-slate-100 pt-4",
           ].join(" ")}
         >
+          {expanded && identity ? (
+            <div className="mb-3 min-w-0">
+              <p className="truncate text-xs font-semibold text-slate-700">{identity.email}</p>
+              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-blue-600">{identity.label}</p>
+            </div>
+          ) : null}
           <Link
             href="/"
             title="Open storefront"
@@ -109,7 +122,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-5 py-4 backdrop-blur lg:hidden">
           <div className="text-xl font-bold">Jamora Admin</div>
           <nav className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {NAV.map((item) => (
+            {visibleNav.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
@@ -172,6 +185,16 @@ function FlatIcon({ name }: { name: string }) {
       </svg>
     );
   }
+  if (name === "customers") {
+    return (
+      <svg {...common}>
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3.5 19v-1.5A4.5 4.5 0 0 1 8 13h2a4.5 4.5 0 0 1 4.5 4.5V19" />
+        <path d="M16 5.5a3 3 0 0 1 0 5.8" />
+        <path d="M17 14a4 4 0 0 1 3.5 4v1" />
+      </svg>
+    );
+  }
   if (name === "inventory") {
     return (
       <svg {...common}>
@@ -181,6 +204,15 @@ function FlatIcon({ name }: { name: string }) {
         <path d="M8 16h4" />
       </svg>
     );
+  }
+  if (name === "suppliers") {
+    return <svg {...common}><path d="M4 20V8l8-4 8 4v12" /><path d="M8 20v-6h8v6" /><path d="M9 9h6" /></svg>;
+  }
+  if (name === "purchase-orders") {
+    return <svg {...common}><path d="M6 3h12v18H6z" /><path d="M9 8h6M9 12h6M9 16h4" /></svg>;
+  }
+  if (name === "audit") {
+    return <svg {...common}><path d="M12 3 5 6v5c0 4.6 2.8 8 7 10 4.2-2 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></svg>;
   }
   if (name === "promotions") {
     return (

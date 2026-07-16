@@ -73,8 +73,23 @@ export interface BatchAllocation {
   name: string;
   batchDocumentId?: string | null;
   batchNumber: string;
+  productionDate?: string;
   expiryDate?: string;
   qty: number;
+}
+
+export interface AdminCustomer {
+  email: string;
+  customerName: string;
+  shippingAddressText?: string;
+  orderCount: number;
+  paidOrderCount: number;
+  refundedOrderCount: number;
+  lifetimeValueCents: number;
+  lastOrderAt?: string;
+  lastOrderNumber?: string;
+  lastOrderDocumentId?: string;
+  lastOrderStatus?: AdminOrderStatus;
 }
 
 export interface FulfilmentChecklistItem {
@@ -82,6 +97,7 @@ export interface FulfilmentChecklistItem {
   sku?: string;
   name: string;
   qty: number;
+  scannedQty?: number;
   checked: boolean;
 }
 
@@ -135,6 +151,7 @@ export interface AdminPromotion {
   startsAt?: string | null;
   endsAt?: string | null;
   usageLimit?: number;
+  perCustomerLimit?: number;
   usageCount?: number;
   minimumSpendCents?: number;
   productSlugs?: string[];
@@ -156,8 +173,66 @@ export interface InventoryBatch {
   expiryDate: string;
   daysUntilExpiry?: number | null;
   certificateUrl?: string;
-  status: "active" | "quarantined" | "depleted";
+  supplierName?: string;
+  purchaseOrderNumber?: string;
+  recallReason?: string;
+  recalledAt?: string;
+  status: "active" | "quarantined" | "depleted" | "recalled";
   createdAt?: string;
+}
+
+export interface Supplier {
+  documentId: string;
+  name: string;
+  code: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  country?: string;
+  notes?: string;
+  active: boolean;
+}
+
+export interface PurchaseOrderItem {
+  productDocumentId: string;
+  productName: string;
+  sku?: string;
+  quantity: number;
+  batchNumber: string;
+  productionDate: string;
+  expiryDate: string;
+  certificateUrl?: string;
+}
+
+export interface PurchaseOrder {
+  documentId: string;
+  poNumber: string;
+  supplierDocumentId: string;
+  supplierName: string;
+  status: "draft" | "ordered" | "in_transit" | "received" | "cancelled";
+  items: PurchaseOrderItem[];
+  expectedDate?: string;
+  receivedAt?: string;
+  notes?: string;
+  createdAt?: string;
+}
+
+export interface AuditLog {
+  documentId: string;
+  action: string;
+  entityType: string;
+  entityId?: string;
+  entityLabel?: string;
+  actor: string;
+  role: string;
+  details?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface BatchTraceability {
+  batch: InventoryBatch;
+  impactedOrders: Pick<AdminOrder, "documentId" | "orderNumber" | "customerName" | "email" | "status" | "trackingNumber" | "createdAt">[];
+  impactedCustomers: number;
 }
 
 export interface ReturnRequest {
@@ -254,6 +329,13 @@ export async function getAdminOrders() {
   return orders;
 }
 
+export async function getAdminCustomers() {
+  const { customers } = await adminFetch<{ customers: AdminCustomer[] }>(
+    "/api/jamora/admin/customers",
+  );
+  return customers;
+}
+
 export async function getAdminProducts() {
   try {
     const { products } = await adminFetch<{ products: AdminProduct[] }>(
@@ -288,6 +370,21 @@ export async function getInventoryBatches() {
     "/api/jamora/admin/inventory-batches",
   );
   return batches;
+}
+
+export async function getSuppliers() {
+  const { suppliers } = await adminFetch<{ suppliers: Supplier[] }>("/api/jamora/admin/suppliers");
+  return suppliers;
+}
+
+export async function getPurchaseOrders() {
+  const { purchaseOrders } = await adminFetch<{ purchaseOrders: PurchaseOrder[] }>("/api/jamora/admin/purchase-orders");
+  return purchaseOrders;
+}
+
+export async function getAuditLogs() {
+  const { auditLogs } = await adminFetch<{ auditLogs: AuditLog[] }>("/api/jamora/admin/audit-logs");
+  return auditLogs;
 }
 
 export async function getAdminReturns() {

@@ -1,7 +1,12 @@
 import { getAdminOrders } from "@/lib/admin-api";
 import { AdminOrdersBoard } from "@/components/admin-orders-board";
 
-export default async function AdminOrdersPage() {
+export default async function AdminOrdersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ search?: string }>;
+}) {
+  const { search = "" } = await searchParams;
   const orders = await getAdminOrders().catch(() => []);
 
   return (
@@ -16,7 +21,7 @@ export default async function AdminOrdersPage() {
         </p>
       </div>
 
-      <AdminOrdersBoard orders={orders} />
+      <AdminOrdersBoard orders={orders} initialQuery={search} />
     </div>
   );
 }

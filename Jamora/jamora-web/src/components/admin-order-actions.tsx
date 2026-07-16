@@ -34,6 +34,32 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [scanCode, setScanCode] = useState("");
+  const [scanMessage, setScanMessage] = useState("");
+
+  function scan() {
+    const code = scanCode.trim().toLowerCase();
+    if (!code) return;
+    const allocation = (order.batchAllocations ?? []).find((item) =>
+      item.batchNumber.toLowerCase() === code || item.sku?.toLowerCase() === code,
+    );
+    const index = checklist.findIndex((item) =>
+      item.sku?.toLowerCase() === code ||
+      (allocation && ((allocation.sku && item.sku === allocation.sku) || item.name === allocation.name)),
+    );
+    if (index < 0) {
+      setScanMessage(`Code ${scanCode} does not match this order.`);
+      setScanCode("");
+      return;
+    }
+    setChecklist((current) => current.map((item, itemIndex) => {
+      if (itemIndex !== index) return item;
+      const scannedQty = Math.min(item.qty, (item.scannedQty ?? 0) + 1);
+      return { ...item, scannedQty, checked: scannedQty >= item.qty };
+    }));
+    setScanMessage(`${checklist[index].name} scanned.`);
+    setScanCode("");
+  }
 
   async function save() {
     setSaving(true);
@@ -104,11 +130,19 @@ export function AdminOrderActions({ order }: { order: AdminOrder }) {
           <div><h3 className="font-bold text-slate-950">Pick & pack checklist</h3><p className="text-xs text-slate-500">Verify every line before the parcel moves to shipped.</p></div>
           {order.packedAt ? <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">Packed</span> : null}
         </div>
+        <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-4">
+          <label className="text-sm font-bold text-slate-800">Scan SKU or batch barcode</label>
+          <div className="mt-2 flex gap-2">
+            <input autoFocus value={scanCode} onChange={(event) => setScanCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); scan(); } }} placeholder="Scan code and press Enter" className="min-w-0 flex-1 rounded-lg border border-blue-200 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-blue-500" />
+            <button type="button" onClick={scan} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Scan</button>
+          </div>
+          {scanMessage ? <p className="mt-2 text-xs font-semibold text-blue-800">{scanMessage}</p> : null}
+        </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {checklist.map((item, index) => (
             <label key={`${item.productId ?? item.name}-${index}`} className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-3 text-sm">
-              <input type="checkbox" checked={item.checked} onChange={(event) => setChecklist((current) => current.map((line, lineIndex) => lineIndex === index ? { ...line, checked: event.target.checked } : line))} />
-              <span className="min-w-0"><span className="block truncate font-semibold text-slate-800">{item.name}</span><span className="text-xs text-slate-500">{item.sku || "No SKU"} · Qty {item.qty}</span></span>
+              <input type="checkbox" checked={item.checked} onChange={(event) => setChecklist((current) => current.map((line, lineIndex) => lineIndex === index ? { ...line, checked: event.target.checked, scannedQty: event.target.checked ? line.qty : 0 } : line))} />
+              <span className="min-w-0"><span className="block truncate font-semibold text-slate-800">{item.name}</span><span className="text-xs text-slate-500">{item.sku || "No SKU"} · scanned {item.scannedQty ?? 0} / {item.qty}</span></span>
             </label>
           ))}
         </div>

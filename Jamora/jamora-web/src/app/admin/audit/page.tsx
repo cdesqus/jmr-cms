@@ -1,0 +1,9 @@
+import { getAuditLogs } from "@/lib/admin-api";
+
+export default async function AuditPage() {
+  const logs = await getAuditLogs().catch(() => []);
+  return <div className="space-y-6">
+    <div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">Security</p><h1 className="mt-2 text-3xl font-bold tracking-tight">Audit log</h1><p className="mt-2 text-sm text-slate-500">Immutable operational history for stock, orders, promotions, content, suppliers, and purchase orders.</p></div>
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white"><div className="hidden grid-cols-[170px_minmax(160px,1fr)_minmax(150px,1fr)_110px_minmax(160px,1fr)] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 lg:grid"><span>Time</span><span>Action</span><span>Entity</span><span>Role</span><span>Actor</span></div><div className="divide-y divide-slate-100">{logs.map((log) => <article key={log.documentId} className="grid gap-2 px-5 py-4 text-sm sm:grid-cols-2 lg:grid-cols-[170px_minmax(160px,1fr)_minmax(150px,1fr)_110px_minmax(160px,1fr)] lg:items-center lg:gap-4"><p className="text-xs text-slate-500">{new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(log.createdAt))}</p><p className="font-bold text-slate-900">{log.action.replaceAll(".", " ")}</p><div><p className="font-semibold text-slate-700">{log.entityLabel || log.entityType}</p><p className="text-xs text-slate-400">{log.entityType}</p></div><span className="w-fit rounded-full bg-blue-50 px-3 py-1 text-xs font-bold capitalize text-blue-700">{log.role}</span><p className="truncate text-slate-600">{log.actor}</p></article>)}{logs.length === 0 ? <p className="p-8 text-sm text-slate-500">No audited changes yet.</p> : null}</div></section>
+  </div>;
+}

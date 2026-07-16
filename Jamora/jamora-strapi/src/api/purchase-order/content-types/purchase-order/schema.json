@@ -1,0 +1,16 @@
+{
+  "kind": "collectionType",
+  "collectionName": "purchase_orders",
+  "info": { "singularName": "purchase-order", "pluralName": "purchase-orders", "displayName": "Purchase Order" },
+  "options": { "draftAndPublish": false },
+  "attributes": {
+    "poNumber": { "type": "string", "required": true, "unique": true },
+    "supplierDocumentId": { "type": "string", "required": true },
+    "supplierName": { "type": "string", "required": true },
+    "status": { "type": "enumeration", "enum": ["draft", "ordered", "in_transit", "received", "cancelled"], "default": "draft", "required": true },
+    "items": { "type": "json", "required": true },
+    "expectedDate": { "type": "date" },
+    "receivedAt": { "type": "datetime" },
+    "notes": { "type": "text" }
+  }
+}

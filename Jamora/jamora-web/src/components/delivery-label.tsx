@@ -91,12 +91,28 @@ export function DeliveryLabel({ orderNumber }: { orderNumber: string }) {
           <div className="py-6">
             <p className="text-xs font-bold uppercase tracking-[0.2em]">Items</p>
             <ul className="mt-3 space-y-2">
-              {order.items.map((item) => (
-                <li key={item.productId} className="flex justify-between text-lg">
-                  <span>{item.name}</span>
-                  <span>Qty {item.qty}</span>
-                </li>
-              ))}
+              {order.items.map((item) => {
+                const allocations = allocationsForItem(order, item);
+                return (
+                  <li key={item.productId} className="border-b border-ink/20 pb-3 last:border-0 last:pb-0">
+                    <div className="flex justify-between text-lg">
+                      <span>{item.name}</span>
+                      <span>Qty {item.qty}</span>
+                    </div>
+                    {allocations.length > 0 ? (
+                      <div className="mt-1 space-y-1 text-xs text-stone">
+                        {allocations.map((allocation, index) => (
+                          <p key={`${allocation.batchNumber}-${index}`}>
+                            Batch {allocation.batchNumber} · Production date {formatProductionDate(allocation.productionDate)} · Qty {allocation.qty}
+                          </p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-xs text-stone">Production date not recorded (legacy stock)</p>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
 
@@ -124,4 +140,19 @@ export function DeliveryLabel({ orderNumber }: { orderNumber: string }) {
       </section>
     </div>
   );
+}
+
+function allocationsForItem(order: MockOrder, item: MockOrder["items"][number]) {
+  return (order.batchAllocations ?? []).filter((allocation) =>
+    (allocation.slug && allocation.slug === item.slug) ||
+    (allocation.sku && item.sku && allocation.sku === item.sku) ||
+    allocation.name === item.name,
+  );
+}
+
+function formatProductionDate(value?: string) {
+  if (!value) return "not recorded";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(date);
 }

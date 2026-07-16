@@ -190,6 +190,9 @@ function promotionData(body: Record<string, unknown>, mode: "create" | "update")
   if (typeof body.usageLimit === "number") {
     data.usageLimit = Math.max(0, Math.round(body.usageLimit));
   }
+  if (typeof body.perCustomerLimit === "number") {
+    data.perCustomerLimit = Math.max(0, Math.round(body.perCustomerLimit));
+  }
   if (typeof body.active === "boolean") data.active = body.active;
   if (typeof body.startsAt === "string" || body.startsAt === null) data.startsAt = body.startsAt || null;
   if (typeof body.endsAt === "string" || body.endsAt === null) data.endsAt = body.endsAt || null;
@@ -202,16 +205,29 @@ function promotionData(body: Record<string, unknown>, mode: "create" | "update")
     data.discountValue ||= 10;
     data.minimumSpendCents ||= 0;
     data.usageLimit ||= 0;
+    data.perCustomerLimit ||= 0;
     data.productSlugs ||= [];
     if (!("active" in data)) data.active = true;
   }
   return data;
 }
 
+function promotionWindowError(data: Record<string, unknown>) {
+  const startsAt = data.startsAt ? new Date(asString(data.startsAt)).getTime() : null;
+  const endsAt = data.endsAt ? new Date(asString(data.endsAt)).getTime() : null;
+  if (startsAt !== null && !Number.isFinite(startsAt)) return "Promotion start date is invalid.";
+  if (endsAt !== null && !Number.isFinite(endsAt)) return "Promotion end date is invalid.";
+  if (startsAt !== null && endsAt !== null && startsAt >= endsAt) {
+    return "Promotion end date must be after its start date.";
+  }
+  return null;
+}
+
 async function evaluatePromotion(input: {
   code: unknown;
   items: any[];
   subtotalCents: number;
+  email?: unknown;
 }) {
   const code = normalizePromotionCode(input.code);
   if (!code) return { error: "Enter a coupon code." };
@@ -226,6 +242,7 @@ async function evaluatePromotion(input: {
       "startsAt",
       "endsAt",
       "usageLimit",
+      "perCustomerLimit",
       "usageCount",
       "minimumSpendCents",
       "productSlugs",
@@ -248,6 +265,25 @@ async function evaluatePromotion(input: {
   const usageCount = asNumber(promotion.usageCount);
   if (usageLimit > 0 && usageCount >= usageLimit) {
     return { error: "Coupon usage limit has been reached." };
+  }
+  const perCustomerLimit = asNumber(promotion.perCustomerLimit);
+  if (perCustomerLimit > 0) {
+    const email = asString(input.email).trim();
+    if (!email) {
+      return { error: "Enter your email before applying this coupon." };
+    }
+    const redemptions = await strapi.documents("api::order.order").findMany({
+      fields: ["documentId"],
+      filters: {
+        promotionCode: { $eqi: code },
+        email: { $eqi: email },
+        status: { $ne: "failed" },
+      },
+      limit: perCustomerLimit,
+    });
+    if (redemptions.length >= perCustomerLimit) {
+      return { error: "You have already used this coupon the maximum number of times." };
+    }
   }
   const subtotalCents = Math.max(0, Math.round(input.subtotalCents));
   if (subtotalCents < asNumber(promotion.minimumSpendCents)) {
@@ -311,6 +347,19 @@ const batchDocuments = () => (strapi.documents as any)("api::inventory-batch.inv
 const reservationDocuments = () => (strapi.documents as any)("api::stock-reservation.stock-reservation");
 const returnDocuments = () => (strapi.documents as any)("api::return-request.return-request");
 const notificationDocuments = () => (strapi.documents as any)("api::notification-log.notification-log");
+
+function adminIdentity(ctx: any) {
+  return {
+    actor: asString(ctx.get("x-jamora-admin-actor"), "Jamora Admin"),
+    role: asString(ctx.get("x-jamora-admin-role"), "owner"),
+  };
+}
+
+async function recordAudit(ctx: any, input: { action: string; entityType: string; entityId?: string; entityLabel?: string; details?: Record<string, unknown> }) {
+  await (strapi.documents as any)("api::audit-log.audit-log").create({
+    data: { ...input, ...adminIdentity(ctx), details: input.details ?? {} },
+  });
+}
 
 async function logNotification(input: {
   recipient: string;
@@ -414,6 +463,7 @@ async function createStockReservation(items: any[], email = "") {
           name: item.name,
           batchDocumentId: batch.documentId,
           batchNumber: batch.batchNumber,
+          productionDate: batch.productionDate,
           expiryDate: batch.expiryDate,
           qty: take,
         });
@@ -497,6 +547,29 @@ async function consumeReservation(token: string, orderNumber: string) {
     data: { status: "consumed", orderNumber },
   });
   return { allocations };
+}
+
+async function enrichBatchAllocations(value: unknown) {
+  const allocations = Array.isArray(value) ? value : [];
+  return Promise.all(
+    allocations.map(async (allocation: any) => {
+      if (allocation?.productionDate || !allocation?.batchDocumentId) {
+        return allocation;
+      }
+      const batch = await batchDocuments().findOne({
+        documentId: allocation.batchDocumentId,
+        fields: ["batchNumber", "productionDate", "expiryDate"],
+      });
+      return batch
+        ? {
+            ...allocation,
+            batchNumber: allocation.batchNumber || batch.batchNumber,
+            productionDate: batch.productionDate,
+            expiryDate: allocation.expiryDate || batch.expiryDate,
+          }
+        : allocation;
+    }),
+  );
 }
 
 async function decrementProductStock(items: any[], reference: string) {
@@ -599,6 +672,7 @@ export default {
           code: body.promotionCode,
           items,
           subtotalCents,
+          email: body.customer?.email,
         })
       : null;
     if (promotionResult && "error" in promotionResult) {
@@ -717,6 +791,7 @@ export default {
       code: body.code,
       items,
       subtotalCents: asNumber(body.subtotalCents),
+      email: body.email,
     });
     if ("error" in result) {
       ctx.status = 400;
@@ -791,9 +866,13 @@ export default {
       return;
     }
 
+    const batchAllocations = await enrichBatchAllocations(
+      (order as any).batchAllocations,
+    );
     ctx.body = {
       order: {
         ...order,
+        batchAllocations,
         statusHistory: parseHistory((order as any).statusHistory).filter(
           (event: any) => event?.type === "status",
         ),
@@ -891,6 +970,60 @@ export default {
     ctx.body = { orders };
   },
 
+  async adminCustomers(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+
+    const orders = await strapi.documents("api::order.order").findMany({
+      fields: [
+        "documentId",
+        "orderNumber",
+        "customerName",
+        "email",
+        "status",
+        "totalCents",
+        "shippingAddressText",
+        "createdAt",
+      ],
+      sort: { createdAt: "desc" },
+      limit: 10000,
+    });
+    const revenueStatuses = new Set(["paid", "processing", "shipped", "fulfilled"]);
+    const customers = new Map<string, any>();
+
+    for (const order of orders as any[]) {
+      const email = asString(order.email).trim();
+      const key = email.toLowerCase();
+      if (!key) continue;
+      const existing = customers.get(key) ?? {
+        email,
+        customerName: asString(order.customerName),
+        shippingAddressText: asString(order.shippingAddressText),
+        orderCount: 0,
+        paidOrderCount: 0,
+        refundedOrderCount: 0,
+        lifetimeValueCents: 0,
+        lastOrderAt: order.createdAt,
+        lastOrderNumber: order.orderNumber,
+        lastOrderDocumentId: order.documentId,
+        lastOrderStatus: order.status,
+      };
+
+      existing.orderCount += 1;
+      if (revenueStatuses.has(order.status)) {
+        existing.paidOrderCount += 1;
+        existing.lifetimeValueCents += Math.max(0, asNumber(order.totalCents));
+      }
+      if (order.status === "refunded") existing.refundedOrderCount += 1;
+      if (!existing.customerName && order.customerName) existing.customerName = order.customerName;
+      if (!existing.shippingAddressText && order.shippingAddressText) {
+        existing.shippingAddressText = order.shippingAddressText;
+      }
+      customers.set(key, existing);
+    }
+
+    ctx.body = { customers: Array.from(customers.values()) };
+  },
+
   async adminUpdateOrder(ctx) {
     if (!requireAdminSecret(ctx)) return;
 
@@ -936,6 +1069,7 @@ export default {
         sku: asString(item.sku),
         name: asString(item.name),
         qty: Math.max(0, asNumber(item.qty)),
+        scannedQty: Math.max(0, asNumber(item.scannedQty)),
         checked: Boolean(item.checked),
       }));
       const allChecked = (data.fulfilmentChecklist as any[]).length > 0 && (data.fulfilmentChecklist as any[]).every((item) => item.checked);
@@ -959,6 +1093,7 @@ export default {
       documentId: ctx.params.documentId,
       data: data as any,
     });
+    await recordAudit(ctx, { action: "order.updated", entityType: "order", entityId: order.documentId, entityLabel: (existing as any).orderNumber, details: { status: data.status, trackingNumber: data.trackingNumber, packedBy: data.packedBy } });
 
     if (status && status !== (existing as any).status) {
       const templates: Record<string, { template: string; subject: string }> = {
@@ -1025,6 +1160,7 @@ export default {
         actor: "Admin",
       });
     }
+    await recordAudit(ctx, { action: "product.updated", entityType: "product", entityId: product.documentId, entityLabel: product.name, details: { changedFields: Object.keys(data) } });
 
     ctx.body = { ok: true, product };
   },
@@ -1051,6 +1187,7 @@ export default {
         actor: "Admin",
       });
     }
+    await recordAudit(ctx, { action: "product.created", entityType: "product", entityId: product.documentId, entityLabel: product.name });
 
     ctx.body = { ok: true, product };
   },
@@ -1104,9 +1241,16 @@ export default {
       documentId: asString(body.productDocumentId),
       fields: ["documentId", "name", "sku", "slug", "stock"],
     });
-    if (!product || !asString(body.batchNumber) || !asString(body.expiryDate)) {
+    if (!product || !asString(body.batchNumber) || !asString(body.productionDate) || !asString(body.expiryDate)) {
       ctx.status = 400;
-      ctx.body = { error: "Product, batch number, and expiry date are required." };
+      ctx.body = { error: "Product, batch number, production date, and expiry date are required." };
+      return;
+    }
+    const batchNumber = asString(body.batchNumber).trim().toUpperCase();
+    const duplicate = await batchDocuments().findMany({ filters: { batchNumber: { $eqi: batchNumber } }, limit: 1 });
+    if (duplicate[0]) {
+      ctx.status = 409;
+      ctx.body = { error: `Batch ${batchNumber} already exists.` };
       return;
     }
     const quantity = Math.max(0, Math.round(asNumber(body.quantity)));
@@ -1116,7 +1260,7 @@ export default {
         productName: product.name,
         sku: (product as any).sku,
         slug: product.slug,
-        batchNumber: asString(body.batchNumber).trim().toUpperCase(),
+        batchNumber,
         quantity,
         reservedQuantity: 0,
         productionDate: asString(body.productionDate) || null,
@@ -1141,6 +1285,7 @@ export default {
         actor: "Batch receiving",
       });
     }
+    await recordAudit(ctx, { action: "batch.received", entityType: "inventory-batch", entityId: batch.documentId, entityLabel: batch.batchNumber, details: { product: product.name, quantity } });
     ctx.body = { ok: true, batch };
   },
 
@@ -1152,6 +1297,7 @@ export default {
     if (typeof body.certificateUrl === "string") data.certificateUrl = body.certificateUrl.trim();
     if (typeof body.expiryDate === "string") data.expiryDate = body.expiryDate;
     const batch = await batchDocuments().update({ documentId: ctx.params.documentId, data });
+    await recordAudit(ctx, { action: "batch.updated", entityType: "inventory-batch", entityId: batch.documentId, entityLabel: batch.batchNumber, details: data });
     ctx.body = { ok: true, batch };
   },
 
@@ -1281,6 +1427,12 @@ export default {
       ctx.body = { error: "Promotion code is required." };
       return;
     }
+    const windowError = promotionWindowError(data);
+    if (windowError) {
+      ctx.status = 400;
+      ctx.body = { error: windowError };
+      return;
+    }
     const duplicates = await (strapi.documents as any)("api::promotion.promotion").findMany({
       fields: ["documentId"],
       filters: { code: { $eqi: data.code } },
@@ -1294,16 +1446,45 @@ export default {
     const promotion = await (strapi.documents as any)("api::promotion.promotion").create({
       data: { ...data, usageCount: 0 },
     });
+    await recordAudit(ctx, { action: "promotion.created", entityType: "promotion", entityId: promotion.documentId, entityLabel: promotion.code });
     ctx.body = { ok: true, promotion };
   },
 
   async adminUpdatePromotion(ctx) {
     if (!requireAdminSecret(ctx)) return;
     const data = promotionData(ctx.request.body ?? {}, "update");
+    const existing = await (strapi.documents as any)("api::promotion.promotion").findOne({
+      documentId: ctx.params.documentId,
+      fields: ["documentId", "code", "startsAt", "endsAt"],
+    });
+    if (!existing) {
+      ctx.status = 404;
+      ctx.body = { error: "Promotion not found." };
+      return;
+    }
+    const windowError = promotionWindowError({ ...existing, ...data });
+    if (windowError) {
+      ctx.status = 400;
+      ctx.body = { error: windowError };
+      return;
+    }
+    if (data.code && data.code !== existing.code) {
+      const duplicates = await (strapi.documents as any)("api::promotion.promotion").findMany({
+        fields: ["documentId"],
+        filters: { code: { $eqi: data.code } },
+        limit: 2,
+      });
+      if (duplicates.some((promotion: any) => promotion.documentId !== existing.documentId)) {
+        ctx.status = 409;
+        ctx.body = { error: "Promotion code already exists." };
+        return;
+      }
+    }
     const promotion = await (strapi.documents as any)("api::promotion.promotion").update({
       documentId: ctx.params.documentId,
       data,
     });
+    await recordAudit(ctx, { action: "promotion.updated", entityType: "promotion", entityId: promotion.documentId, entityLabel: promotion.code, details: { changedFields: Object.keys(data) } });
     ctx.body = { ok: true, promotion };
   },
 
@@ -1383,6 +1564,8 @@ export default {
             publishedAt: new Date(),
           },
         } as any);
+
+    await recordAudit(ctx, { action: "content.updated", entityType: "store-content", entityId: content.documentId, entityLabel: "Storefront content", details: { changedFields: Object.keys(data) } });
 
     ctx.body = { ok: true, content };
   },

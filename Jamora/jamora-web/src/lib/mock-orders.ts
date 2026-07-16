@@ -29,6 +29,17 @@ export interface MockOrder {
     unitPriceCents: number;
     lineTotalCents: number;
   }[];
+  batchAllocations?: {
+    productDocumentId?: string;
+    slug: string;
+    sku?: string;
+    name: string;
+    batchDocumentId?: string | null;
+    batchNumber: string;
+    productionDate?: string;
+    expiryDate?: string;
+    qty: number;
+  }[];
   subtotalCents: number;
   shippingCents: number;
   discountCents: number;

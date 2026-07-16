@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { publicUrl } from "@/lib/public-url";
+import { canAccessAdminPath, identityForSession } from "@/lib/admin-auth";
 
 const ADMIN_COOKIE = "jamora_admin_session";
-
-function expectedSession() {
-  return process.env.ADMIN_SESSION_TOKEN ?? "jamora-admin-dev-session";
-}
 
 function jsonUnauthorized() {
   return NextResponse.json(
@@ -27,7 +24,12 @@ export function proxy(request: NextRequest) {
   }
 
   const session = request.cookies.get(ADMIN_COOKIE)?.value;
-  if (session && session === expectedSession()) return NextResponse.next();
+  const identity = identityForSession(session);
+  if (identity && canAccessAdminPath(identity.role, pathname)) return NextResponse.next();
+  if (identity && isAdminApi) {
+    return NextResponse.json({ error: "Your admin role cannot perform this action." }, { status: 403 });
+  }
+  if (identity) return NextResponse.redirect(publicUrl(request, "/admin"));
 
   if (isAdminApi) return jsonUnauthorized();
 

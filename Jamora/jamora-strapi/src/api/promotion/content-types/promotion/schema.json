@@ -22,6 +22,7 @@
     "startsAt": { "type": "datetime" },
     "endsAt": { "type": "datetime" },
     "usageLimit": { "type": "integer", "min": 0 },
+    "perCustomerLimit": { "type": "integer", "default": 0, "min": 0 },
     "usageCount": { "type": "integer", "default": 0, "min": 0 },
     "minimumSpendCents": { "type": "integer", "default": 0, "min": 0 },
     "productSlugs": { "type": "json" },

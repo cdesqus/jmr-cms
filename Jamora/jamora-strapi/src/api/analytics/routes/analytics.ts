@@ -63,6 +63,12 @@ export default {
       config: { auth: false },
     },
     {
+      method: "GET",
+      path: "/jamora/admin/customers",
+      handler: "analytics.adminCustomers",
+      config: { auth: false },
+    },
+    {
       method: "PATCH",
       path: "/jamora/admin/orders/:documentId",
       handler: "analytics.adminUpdateOrder",

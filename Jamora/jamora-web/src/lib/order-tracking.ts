@@ -16,6 +16,7 @@ interface StrapiTrackedOrder {
   promotionCode?: string;
   items?: MockOrder["items"];
   statusHistory?: MockOrder["statusHistory"];
+  batchAllocations?: MockOrder["batchAllocations"];
   itemsSummary?: string;
   shippingAddress?: { address?: string } | Record<string, unknown>;
   shippingAddressText?: string;
@@ -71,6 +72,9 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
       address,
     },
     items: parsedItems,
+    batchAllocations: Array.isArray(order.batchAllocations)
+      ? order.batchAllocations
+      : [],
     subtotalCents: order.subtotalCents ?? order.totalCents ?? 0,
     shippingCents: order.shippingCents ?? 0,
     discountCents: order.discountCents ?? 0,

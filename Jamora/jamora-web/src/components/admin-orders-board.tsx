@@ -37,10 +37,16 @@ const STATUS_STYLE: Record<AdminOrderStatus, string> = {
   refunded: "bg-purple-50 text-purple-700",
 };
 
-export function AdminOrdersBoard({ orders }: { orders: AdminOrder[] }) {
+export function AdminOrdersBoard({
+  orders,
+  initialQuery = "",
+}: {
+  orders: AdminOrder[];
+  initialQuery?: string;
+}) {
   const router = useRouter();
   const [visible, setVisible] = useState<AdminOrderStatus | "all">("all");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const normalizedQuery = query.trim().toLowerCase();

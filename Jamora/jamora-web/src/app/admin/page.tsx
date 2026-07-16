@@ -2,10 +2,12 @@ import Link from "next/link";
 import {
   formatAdminMoney,
   getAdminOrders,
+  getAdminCustomers,
   getAdminProducts,
   getAnalyticsSummary,
   getInventoryBatches,
 } from "@/lib/admin-api";
+import { getAdminIdentity } from "@/lib/admin-session";
 import { AdminDashboardChart } from "@/components/admin-dashboard-chart";
 import type { AdminOrder, AdminProduct, AnalyticsSummary, InventoryBatch } from "@/lib/admin-api";
 
@@ -28,11 +30,13 @@ async function safe<T>(loader: () => Promise<T>, fallback: T) {
 }
 
 export default async function AdminDashboardPage() {
-  const [summary, orders, products, batches] = await Promise.all([
+  const identity = await getAdminIdentity();
+  const [summary, orders, products, batches, customers] = await Promise.all([
     safe(getAnalyticsSummary, EMPTY_SUMMARY),
     safe<AdminOrder[]>(getAdminOrders, []),
     safe<AdminProduct[]>(getAdminProducts, []),
     safe<InventoryBatch[]>(getInventoryBatches, []),
+    safe(getAdminCustomers, []),
   ]);
   const openOrders = orders.filter((order) =>
     ["paid", "processing", "shipped"].includes(order.status),
@@ -58,6 +62,32 @@ export default async function AdminDashboardPage() {
   const expiringBatches = batches.filter((batch) => {
     return batch.status === "active" && (batch.daysUntilExpiry ?? Number.POSITIVE_INFINITY) <= 90;
   });
+
+  if (identity && identity.role !== "owner") {
+    const units = products.reduce((sum, product) => sum + (product.stock ?? 0), 0);
+    const featured = products.filter((product) => product.featured).length;
+    const roleData = identity.role === "warehouse"
+      ? {
+          title: "Warehouse workspace",
+          description: "Receive production, control stock, and fulfil customer orders.",
+          metrics: [["Orders to handle", openOrders.length], ["Units on hand", units], ["Low stock", lowStock.length], ["Expiry alerts", expiringBatches.length]] as const,
+          links: [["Open orders", "/admin/orders"], ["Inventory", "/admin/inventory"], ["Receive batches", "/admin/inventory/batches"], ["Purchase orders", "/admin/purchase-orders"]] as const,
+        }
+      : identity.role === "content"
+        ? {
+            title: "Content workspace",
+            description: "Maintain the catalogue, campaigns, and storefront copy.",
+            metrics: [["Products", products.length], ["Featured products", featured]] as const,
+            links: [["Products", "/admin/products"], ["Create product", "/admin/products/new"], ["Promotions", "/admin/promotions"], ["Storefront content", "/admin/content"]] as const,
+          }
+        : {
+            title: "Customer support workspace",
+            description: "Find customers, follow orders, and resolve return requests.",
+            metrics: [["Customers", customers.length], ["Open orders", openOrders.length], ["Shipped", orders.filter((order) => order.status === "shipped").length]] as const,
+            links: [["Orders", "/admin/orders"], ["Customers", "/admin/customers"], ["Returns", "/admin/returns"]] as const,
+          };
+    return <RoleDashboard title={roleData.title} description={roleData.description} metrics={roleData.metrics} links={roleData.links} />;
+  }
 
   return (
     <div className="space-y-8">
@@ -148,6 +178,10 @@ export default async function AdminDashboardPage() {
       </section>
     </div>
   );
+}
+
+function RoleDashboard({ title, description, metrics, links }: { title: string; description: string; metrics: readonly (readonly [string, number])[]; links: readonly (readonly [string, string])[] }) {
+  return <div className="space-y-8"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">Operations</p><h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">{title}</h1><p className="mt-2 text-sm text-slate-500">{description}</p></div><section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(([label, value]) => <Metric key={label} label={label} value={value.toLocaleString()} />)}</section><section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-xl font-bold">Quick actions</h2><div className="mt-4 flex flex-wrap gap-3">{links.map(([label, href]) => <Link key={href} href={href} className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white">{label}</Link>)}</div></section></div>;
 }
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {

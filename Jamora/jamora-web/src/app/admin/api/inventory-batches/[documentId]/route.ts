@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
+import { adminIdentityHeaders } from "@/lib/admin-session";
 const STRAPI_URL = process.env.STRAPI_URL ?? "http://localhost:9014";
 const SECRET = process.env.JAMORA_ADMIN_API_SECRET;
 export async function PATCH(request: Request, { params }: { params: Promise<{ documentId: string }> }) {
   const { documentId } = await params;
   const response = await fetch(`${STRAPI_URL}/api/jamora/admin/inventory-batches/${encodeURIComponent(documentId)}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", ...(SECRET ? { "x-jamora-admin-secret": SECRET } : {}) },
+    headers: { "content-type": "application/json", ...(SECRET ? { "x-jamora-admin-secret": SECRET } : {}), ...(await adminIdentityHeaders()) },
     body: await request.text(),
   });
   return NextResponse.json(await response.json().catch(() => ({})), { status: response.status });

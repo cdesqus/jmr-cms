@@ -14,6 +14,7 @@ const EMPTY: PromotionDraft = {
   startsAt: null,
   endsAt: null,
   usageLimit: 0,
+  perCustomerLimit: 0,
   minimumSpendCents: 0,
   productSlugs: [],
   active: true,
@@ -91,7 +92,7 @@ function PromotionCard({ promotion, products }: { promotion: AdminPromotion; pro
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const exhausted = (promotion.usageLimit ?? 0) > 0 && (promotion.usageCount ?? 0) >= (promotion.usageLimit ?? 0);
+  const campaignState = getCampaignState(promotion);
 
   async function update(draft: PromotionDraft) {
     setSaving(true);
@@ -123,8 +124,8 @@ function PromotionCard({ promotion, products }: { promotion: AdminPromotion; pro
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-lg bg-blue-50 px-3 py-1 font-mono text-sm font-black text-blue-700">{promotion.code}</span>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${promotion.active && !exhausted ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
-              {exhausted ? "Limit reached" : promotion.active ? "Active" : "Inactive"}
+            <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${campaignState.className}`}>
+              {campaignState.label}
             </span>
           </div>
           <h3 className="mt-3 text-lg font-bold text-slate-950">{promotion.name}</h3>
@@ -135,6 +136,20 @@ function PromotionCard({ promotion, products }: { promotion: AdminPromotion; pro
           <p className="mt-1 text-xs text-slate-400">
             Used {promotion.usageCount ?? 0}{promotion.usageLimit ? ` of ${promotion.usageLimit}` : " times · unlimited"}
           </p>
+          <p className="mt-1 text-xs text-slate-400">
+            {promotion.perCustomerLimit
+              ? `Max ${promotion.perCustomerLimit} redemption${promotion.perCustomerLimit === 1 ? "" : "s"} per customer`
+              : "Unlimited redemptions per customer"}
+            {promotion.productSlugs?.length
+              ? ` · ${promotion.productSlugs.length} eligible product${promotion.productSlugs.length === 1 ? "" : "s"}`
+              : " · all products"}
+          </p>
+          {(promotion.startsAt || promotion.endsAt) ? (
+            <p className="mt-1 text-xs text-slate-400">
+              {promotion.startsAt ? `Starts ${formatCampaignDate(promotion.startsAt)}` : "Starts immediately"}
+              {promotion.endsAt ? ` · ends ${formatCampaignDate(promotion.endsAt)}` : " · no end date"}
+            </p>
+          ) : null}
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={() => setEditing((value) => !value)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700">
@@ -200,6 +215,7 @@ function PromotionForm({
         <NumberField label={draft.discountType === "percentage" ? "Discount (%)" : "Discount (EUR)"} value={draft.discountType === "percentage" ? draft.discountValue : draft.discountValue / 100} step={draft.discountType === "percentage" ? 1 : 0.01} onChange={(value) => set("discountValue", draft.discountType === "percentage" ? value : Math.round(value * 100))} />
         <NumberField label="Minimum spend (EUR)" value={(draft.minimumSpendCents ?? 0) / 100} step={0.01} onChange={(value) => set("minimumSpendCents", Math.round(value * 100))} />
         <NumberField label="Usage limit (0 = unlimited)" value={draft.usageLimit ?? 0} step={1} onChange={(value) => set("usageLimit", value)} />
+        <NumberField label="Per customer (0 = unlimited)" value={draft.perCustomerLimit ?? 0} step={1} onChange={(value) => set("perCustomerLimit", value)} />
         <Field label="Starts at" type="datetime-local" value={dateInput(draft.startsAt)} onChange={(value) => set("startsAt", value || null)} />
         <Field label="Ends at" type="datetime-local" value={dateInput(draft.endsAt)} onChange={(value) => set("endsAt", value || null)} />
         <label className="flex items-center gap-2 pt-7 text-sm font-semibold text-slate-700">
@@ -247,5 +263,28 @@ function toPayload(draft: PromotionDraft) {
     startsAt: draft.startsAt ? new Date(draft.startsAt).toISOString() : null,
     endsAt: draft.endsAt ? new Date(draft.endsAt).toISOString() : null,
     usageLimit: Math.max(0, Math.round(draft.usageLimit ?? 0)),
+    perCustomerLimit: Math.max(0, Math.round(draft.perCustomerLimit ?? 0)),
   };
+}
+
+function getCampaignState(promotion: AdminPromotion) {
+  const now = Date.now();
+  if (!promotion.active) return { label: "Inactive", className: "bg-slate-100 text-slate-500" };
+  if ((promotion.usageLimit ?? 0) > 0 && (promotion.usageCount ?? 0) >= (promotion.usageLimit ?? 0)) {
+    return { label: "Limit reached", className: "bg-slate-100 text-slate-500" };
+  }
+  if (promotion.startsAt && new Date(promotion.startsAt).getTime() > now) {
+    return { label: "Scheduled", className: "bg-blue-50 text-blue-700" };
+  }
+  if (promotion.endsAt && new Date(promotion.endsAt).getTime() < now) {
+    return { label: "Expired", className: "bg-amber-50 text-amber-700" };
+  }
+  return { label: "Active", className: "bg-emerald-50 text-emerald-700" };
+}
+
+function formatCampaignDate(value: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }

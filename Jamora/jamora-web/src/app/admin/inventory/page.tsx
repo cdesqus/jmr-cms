@@ -20,7 +20,7 @@ export default async function AdminInventoryPage() {
           </p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">Inventory</h1>
         </div>
-        <Link href="/admin/inventory/batches" className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white">Batches & expiry</Link>
+        <div className="flex flex-wrap gap-2"><Link href="/admin/suppliers" className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700">Suppliers</Link><Link href="/admin/purchase-orders" className="rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm font-bold text-blue-700">Purchase orders</Link><Link href="/admin/inventory/batches" className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white">Batches & expiry</Link></div>
       </div>
 
       <section className="grid gap-4 sm:grid-cols-3">

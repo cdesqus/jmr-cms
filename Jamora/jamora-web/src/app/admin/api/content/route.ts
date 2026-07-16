@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
+import { adminIdentityHeaders } from "@/lib/admin-session";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
@@ -16,6 +17,7 @@ export async function PATCH(request: Request) {
       ...(ADMIN_API_SECRET
         ? { "x-jamora-admin-secret": ADMIN_API_SECRET }
         : {}),
+      ...(await adminIdentityHeaders()),
     },
     body: JSON.stringify(body),
   });

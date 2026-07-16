@@ -68,6 +68,7 @@ export function CartView() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         code,
+        email: customer.email.trim(),
         subtotalCents,
         items: items.map((item) => ({
           slug: item.product.slug,
