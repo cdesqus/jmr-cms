@@ -30,7 +30,7 @@ export function identityForSession(value?: string): AdminIdentity | null {
 export function canAccessAdminPath(role: AdminRole, pathname: string) {
   if (role === "owner" || pathname === "/admin" || pathname.startsWith("/admin/login") || pathname.startsWith("/admin/api/logout")) return true;
   if (role === "warehouse") {
-    return ["/admin/orders", "/admin/inventory", "/admin/suppliers", "/admin/purchase-orders", "/admin/api/orders", "/admin/api/inventory-batches", "/admin/api/operations/suppliers", "/admin/api/operations/purchase-orders", "/admin/api/operations/inventory-batches"].some((prefix) => pathname.startsWith(prefix));
+    return ["/admin/orders", "/admin/inventory", "/admin/receiving", "/admin/suppliers", "/admin/purchase-orders", "/admin/api/orders", "/admin/api/inventory-batches", "/admin/api/operations/suppliers", "/admin/api/operations/purchase-orders", "/admin/api/operations/inventory-batches"].some((prefix) => pathname.startsWith(prefix));
   }
   if (role === "content") {
     return ["/admin/products", "/admin/promotions", "/admin/content", "/admin/api/products", "/admin/api/promotions", "/admin/api/content", "/admin/api/upload"].some((prefix) => pathname.startsWith(prefix));

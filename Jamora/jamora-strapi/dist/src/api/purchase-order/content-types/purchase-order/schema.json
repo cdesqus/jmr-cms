@@ -7,7 +7,7 @@
         "poNumber": { "type": "string", "required": true, "unique": true },
         "supplierDocumentId": { "type": "string", "required": true },
         "supplierName": { "type": "string", "required": true },
-        "status": { "type": "enumeration", "enum": ["draft", "ordered", "in_transit", "received", "cancelled"], "default": "draft", "required": true },
+        "status": { "type": "enumeration", "enum": ["draft", "ordered", "in_transit", "partially_received", "received", "cancelled"], "default": "draft", "required": true },
         "items": { "type": "json", "required": true },
         "expectedDate": { "type": "date" },
         "receivedAt": { "type": "datetime" },

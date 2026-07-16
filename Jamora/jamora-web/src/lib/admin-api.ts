@@ -204,6 +204,9 @@ export interface PurchaseOrderItem {
   expiryDate: string;
   certificateUrl?: string;
   unitsPerCarton?: number;
+  receivedQuantity?: number;
+  damagedQuantity?: number;
+  scannedCartonIds?: string[];
 }
 
 export interface PurchaseOrder {
@@ -211,12 +214,34 @@ export interface PurchaseOrder {
   poNumber: string;
   supplierDocumentId: string;
   supplierName: string;
-  status: "draft" | "ordered" | "in_transit" | "received" | "cancelled";
+  status: "draft" | "ordered" | "in_transit" | "partially_received" | "received" | "cancelled";
   items: PurchaseOrderItem[];
   expectedDate?: string;
   receivedAt?: string;
   notes?: string;
   createdAt?: string;
+  receipts?: GoodsReceipt[];
+}
+
+export interface GoodsReceipt {
+  documentId: string;
+  receiptNumber: string;
+  purchaseOrderDocumentId: string;
+  poNumber: string;
+  supplierName: string;
+  lines: Array<{
+    productDocumentId: string;
+    productName: string;
+    sku?: string;
+    batchNumber: string;
+    receivedQuantity: number;
+    damagedQuantity: number;
+    scannedCartonIds: string[];
+    outstandingAfter: number;
+  }>;
+  receivedBy: string;
+  receivedAt: string;
+  notes?: string;
 }
 
 export interface AuditLog {

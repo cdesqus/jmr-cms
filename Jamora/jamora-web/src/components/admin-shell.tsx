@@ -13,6 +13,7 @@ const NAV_GROUPS = [
   { label: "Transactions", items: [
     { href: "/admin/orders", label: "Orders", icon: "orders", roles: ["owner", "warehouse", "support"] },
     { href: "/admin/purchase-orders", label: "Purchase orders", icon: "purchase-orders", roles: ["owner", "warehouse"] },
+    { href: "/admin/receiving", label: "Receiving", icon: "receiving", roles: ["owner", "warehouse"] },
     { href: "/admin/returns", label: "Returns", icon: "returns", roles: ["owner", "support"] },
   ] },
   { label: "Inventory", items: [
@@ -215,6 +216,9 @@ function FlatIcon({ name }: { name: string }) {
   }
   if (name === "purchase-orders") {
     return <svg {...common}><path d="M6 3h12v18H6z" /><path d="M9 8h6M9 12h6M9 16h4" /></svg>;
+  }
+  if (name === "receiving") {
+    return <svg {...common}><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5v-9Z" /><path d="M12 4v10" /><path d="m9 11 3 3 3-3" /><path d="m4.5 8.5 7.5 4 7.5-4" /></svg>;
   }
   if (name === "audit") {
     return <svg {...common}><path d="M12 3 5 6v5c0 4.6 2.8 8 7 10 4.2-2 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></svg>;

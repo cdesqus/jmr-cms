@@ -71,7 +71,7 @@ export default async function AdminDashboardPage() {
           title: "Warehouse workspace",
           description: "Receive production, control stock, and fulfil customer orders.",
           metrics: [["Orders to handle", openOrders.length], ["Units on hand", units], ["Low stock", lowStock.length], ["Expiry alerts", expiringBatches.length]] as const,
-          links: [["Open orders", "/admin/orders"], ["Inventory", "/admin/inventory"], ["Receive batches", "/admin/inventory/batches"], ["Purchase orders", "/admin/purchase-orders"]] as const,
+          links: [["Open orders", "/admin/orders"], ["Inventory", "/admin/inventory"], ["Receiving", "/admin/receiving"], ["Purchase orders", "/admin/purchase-orders"]] as const,
         }
       : identity.role === "content"
         ? {

@@ -1,6 +1,7 @@
 import { AdminPrintButton } from "@/components/admin-print-button";
 import { BarcodeCode39 } from "@/components/barcode-code39";
 import type { PurchaseOrder, PurchaseOrderItem, Supplier } from "@/lib/admin-api";
+import { createCartonPayload } from "@/lib/receiving.cjs";
 
 /* QR images must remain ordinary images so browser print waits for the external label asset. */
 /* eslint-disable @next/next/no-img-element */
@@ -53,9 +54,10 @@ function UnitLabel({ order, item, copy }: { order: PurchaseOrder; item: Purchase
 }
 
 function CartonLabel({ order, item, carton, cartons, quantity }: { order: PurchaseOrder; item: PurchaseOrderItem; carton: number; cartons: number; quantity: number }) {
+  const scanPayload = createCartonPayload({ poNumber: order.poNumber, productDocumentId: item.productDocumentId, batchNumber: item.batchNumber, carton, quantity });
   return <article className="factory-carton-label break-after-page border-4 border-black bg-white p-8 text-black last:break-after-auto">
     <header className="flex items-start justify-between gap-8 border-b-2 border-black pb-5"><Brand /><div className="text-right"><Eyebrow>Production carton</Eyebrow><p className="text-2xl font-black">{order.poNumber}</p><p className="mt-1 font-bold">Carton {carton} / {cartons}</p></div></header>
-    <div className="grid grid-cols-[1fr_150px] gap-8 py-7"><div><Eyebrow>Product</Eyebrow><p className="mt-2 text-3xl font-black">{item.productName}</p><p className="mt-1 font-mono text-lg">SKU {item.sku || "NO-SKU"}</p><dl className="mt-6 grid grid-cols-2 gap-4 text-sm"><div><dt className="font-bold">Batch / lot</dt><dd className="mt-1 font-mono text-lg">{item.batchNumber}</dd></div><div><dt className="font-bold">Quantity</dt><dd className="mt-1 text-3xl font-black">{quantity} units</dd></div><div><dt className="font-bold">Production date</dt><dd>{formatDate(item.productionDate)}</dd></div><div><dt className="font-bold">Expiry date</dt><dd>{formatDate(item.expiryDate)}</dd></div></dl></div><img src={qrImage(item.batchNumber)} alt={`Batch QR ${item.batchNumber}`} className="h-[150px] w-[150px] border-2 border-black" /></div>
+    <div className="grid grid-cols-[1fr_150px] gap-8 py-7"><div><Eyebrow>Product</Eyebrow><p className="mt-2 text-3xl font-black">{item.productName}</p><p className="mt-1 font-mono text-lg">SKU {item.sku || "NO-SKU"}</p><dl className="mt-6 grid grid-cols-2 gap-4 text-sm"><div><dt className="font-bold">Batch / lot</dt><dd className="mt-1 font-mono text-lg">{item.batchNumber}</dd></div><div><dt className="font-bold">Quantity</dt><dd className="mt-1 text-3xl font-black">{quantity} units</dd></div><div><dt className="font-bold">Production date</dt><dd>{formatDate(item.productionDate)}</dd></div><div><dt className="font-bold">Expiry date</dt><dd>{formatDate(item.expiryDate)}</dd></div></dl></div><div><img src={qrImage(scanPayload)} alt={`Receiving QR carton ${carton}`} className="h-[150px] w-[150px] border-2 border-black" /><p className="mt-2 text-center text-xs font-bold">SCAN TO RECEIVE</p></div></div>
     <div className="border-t-2 border-black pt-5"><BarcodeCode39 value={item.batchNumber} className="h-20 w-full" /><p className="mt-2 text-center font-mono text-lg font-bold">{item.batchNumber}</p></div>
     <p className="mt-5 border-2 border-dashed border-black p-3 text-center text-sm font-bold">KEEP DRY · KEEP UPRIGHT · HANDLE WITH CARE</p>
   </article>;

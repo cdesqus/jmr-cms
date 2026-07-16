@@ -139,6 +139,100 @@ async function receivePreparedBatch(ctx: any, item: any) {
   return batch;
 }
 
+function parseCartonPayload(value: unknown) {
+  const raw = asString(value);
+  if (!raw.startsWith("JMR1:")) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw.slice(5), "base64url").toString("utf8"));
+    const poNumber = asString(parsed.p).toUpperCase();
+    const productDocumentId = asString(parsed.d);
+    const batchNumber = asString(parsed.b).toUpperCase();
+    const carton = Math.max(0, Math.round(asNumber(parsed.c)));
+    const quantity = Math.max(0, Math.round(asNumber(parsed.q)));
+    if (parsed.v !== 1 || !poNumber || !productDocumentId || !batchNumber || !carton || !quantity) return null;
+    return {
+      poNumber,
+      productDocumentId,
+      batchNumber,
+      carton,
+      quantity,
+      cartonId: `${poNumber}:${productDocumentId}:${batchNumber}:${carton}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function addReceivedStock(ctx: any, input: {
+  item: any;
+  quantity: number;
+  supplierName: string;
+  poNumber: string;
+}) {
+  if (input.quantity <= 0) return null;
+  const product = await documents("api::product.product").findOne({
+    documentId: input.item.productDocumentId,
+    fields: ["documentId", "name", "sku", "slug", "stock"],
+  });
+  if (!product) throw new Error(`Product ${input.item.productName} no longer exists.`);
+
+  const matchingBatches = await documents("api::inventory-batch.inventory-batch").findMany({
+    filters: { batchNumber: { $eq: input.item.batchNumber } },
+    limit: 2,
+  });
+  const existingBatch = matchingBatches[0];
+  if (existingBatch && existingBatch.productDocumentId !== product.documentId) {
+    throw new Error(`Batch ${input.item.batchNumber} belongs to another product.`);
+  }
+
+  const batch = existingBatch
+    ? await documents("api::inventory-batch.inventory-batch").update({
+        documentId: existingBatch.documentId,
+        data: {
+          quantity: asNumber(existingBatch.quantity) + input.quantity,
+          status: existingBatch.status === "depleted" ? "active" : existingBatch.status,
+        },
+      })
+    : await documents("api::inventory-batch.inventory-batch").create({
+        data: {
+          productDocumentId: product.documentId,
+          productName: product.name,
+          sku: product.sku,
+          slug: product.slug,
+          batchNumber: input.item.batchNumber,
+          quantity: input.quantity,
+          reservedQuantity: 0,
+          productionDate: input.item.productionDate,
+          expiryDate: input.item.expiryDate,
+          certificateUrl: input.item.certificateUrl,
+          supplierName: input.supplierName,
+          purchaseOrderNumber: input.poNumber,
+          status: "active",
+        },
+      });
+
+  const balanceAfter = asNumber(product.stock) + input.quantity;
+  await documents("api::product.product").update({
+    documentId: product.documentId,
+    data: { stock: balanceAfter },
+    status: "published",
+  });
+  await documents("api::inventory-movement.inventory-movement").create({
+    data: {
+      productDocumentId: product.documentId,
+      productName: product.name,
+      sku: product.sku,
+      slug: product.slug,
+      delta: input.quantity,
+      balanceAfter,
+      reason: "restock",
+      reference: input.poNumber,
+      actor: actor(ctx).actor,
+    },
+  });
+  return batch;
+}
+
 function supplierData(body: any) {
   return {
     name: asString(body.name),
@@ -178,7 +272,16 @@ export default {
 
   async purchaseOrders(ctx: any) {
     if (!requireAdmin(ctx)) return;
-    ctx.body = { purchaseOrders: await documents("api::purchase-order.purchase-order").findMany({ sort: { createdAt: "desc" }, limit: 1000 }) };
+    const [purchaseOrders, receipts] = await Promise.all([
+      documents("api::purchase-order.purchase-order").findMany({ sort: { createdAt: "desc" }, limit: 1000 }),
+      documents("api::goods-receipt.goods-receipt").findMany({ sort: { receivedAt: "desc" }, limit: 5000 }),
+    ]);
+    ctx.body = {
+      purchaseOrders: purchaseOrders.map((purchaseOrder: any) => ({
+        ...purchaseOrder,
+        receipts: receipts.filter((receipt: any) => receipt.purchaseOrderDocumentId === purchaseOrder.documentId),
+      })),
+    };
   },
 
   async createPurchaseOrder(ctx: any) {
@@ -241,16 +344,12 @@ export default {
     const body = ctx.request.body ?? {};
     const existing = await documents("api::purchase-order.purchase-order").findOne({ documentId: ctx.params.documentId });
     if (!existing) { ctx.status = 404; ctx.body = { error: "Purchase order not found." }; return; }
-    const allowed = ["draft", "ordered", "in_transit", "received", "cancelled"];
+    const allowed = ["draft", "ordered", "in_transit", "partially_received", "received", "cancelled"];
     const status = allowed.includes(asString(body.status)) ? asString(body.status) : existing.status;
-    let receivedBatches: any[] = [];
-    if (status === "received" && existing.status !== "received") {
-      const result = await prepareBatchRows(Array.isArray(existing.items) ? existing.items : [], {
-        supplierName: existing.supplierName,
-        purchaseOrderNumber: existing.poNumber,
-      });
-      if (result.errors.length > 0) { ctx.status = 400; ctx.body = { error: "Purchase order cannot be received.", errors: result.errors }; return; }
-      for (const item of result.prepared) receivedBatches.push(await receivePreparedBatch(ctx, item));
+    if ((status === "received" || status === "partially_received") && existing.status !== status) {
+      ctx.status = 400;
+      ctx.body = { error: "Use Receive stock to record incoming goods." };
+      return;
     }
     const purchaseOrder = await documents("api::purchase-order.purchase-order").update({
       documentId: existing.documentId,
@@ -261,8 +360,147 @@ export default {
         receivedAt: status === "received" ? existing.receivedAt || new Date().toISOString() : existing.receivedAt,
       },
     });
-    await audit(ctx, { action: `purchase-order.${status}`, entityType: "purchase-order", entityId: purchaseOrder.documentId, entityLabel: purchaseOrder.poNumber, details: { previousStatus: existing.status, batchCount: receivedBatches.length } });
-    ctx.body = { ok: true, purchaseOrder, receivedBatches };
+    await audit(ctx, { action: `purchase-order.${status}`, entityType: "purchase-order", entityId: purchaseOrder.documentId, entityLabel: purchaseOrder.poNumber, details: { previousStatus: existing.status } });
+    ctx.body = { ok: true, purchaseOrder };
+  },
+
+  async receivePurchaseOrder(ctx: any) {
+    if (!requireAdmin(ctx)) return;
+    const existing = await documents("api::purchase-order.purchase-order").findOne({ documentId: ctx.params.documentId });
+    if (!existing) { ctx.status = 404; ctx.body = { error: "Purchase order not found." }; return; }
+    if (!["ordered", "in_transit", "partially_received"].includes(existing.status)) {
+      ctx.status = 409; ctx.body = { error: "This purchase order is not open for receiving." }; return;
+    }
+
+    const body = ctx.request.body ?? {};
+    const requestedLines = Array.isArray(body.lines) ? body.lines : [];
+    const currentItems = Array.isArray(existing.items) ? existing.items : [];
+    const errors: { row: number; message: string }[] = [];
+    const prepared: any[] = [];
+    const receiptCartons = new Set<string>();
+
+    for (const [index, requested] of requestedLines.entries()) {
+      const productDocumentId = asString(requested.productDocumentId);
+      const batchNumber = asString(requested.batchNumber).toUpperCase();
+      const itemIndex = currentItems.findIndex((item: any) =>
+        item.productDocumentId === productDocumentId && asString(item.batchNumber).toUpperCase() === batchNumber,
+      );
+      const item = currentItems[itemIndex];
+      if (!item) { errors.push({ row: index + 1, message: "Product and batch do not belong to this PO." }); continue; }
+
+      const receivedQuantity = Math.max(0, Math.round(asNumber(requested.receivedQuantity)));
+      const damagedQuantity = Math.max(0, Math.round(asNumber(requested.damagedQuantity)));
+      const previouslyReceived = Math.max(0, Math.round(asNumber(item.receivedQuantity)));
+      const outstanding = Math.max(0, Math.round(asNumber(item.quantity)) - previouslyReceived);
+      if (receivedQuantity === 0 && damagedQuantity === 0) continue;
+      if (receivedQuantity > outstanding) {
+        errors.push({ row: index + 1, message: `Received quantity exceeds ${outstanding} outstanding units.` });
+      }
+      if (receivedQuantity + damagedQuantity > outstanding) {
+        errors.push({ row: index + 1, message: `Accepted and damaged units exceed ${outstanding} outstanding units.` });
+      }
+
+      const previousCartons = new Set(Array.isArray(item.scannedCartonIds) ? item.scannedCartonIds.map((value: unknown) => asString(value)) : []);
+      const scannedPayloads = Array.isArray(requested.scannedPayloads) ? requested.scannedPayloads : [];
+      const scannedCartonIds: string[] = [];
+      let scannedQuantity = 0;
+      for (const value of scannedPayloads) {
+        const carton = parseCartonPayload(value);
+        if (!carton) { errors.push({ row: index + 1, message: "One scanned carton code is invalid." }); continue; }
+        if (carton.poNumber !== existing.poNumber || carton.productDocumentId !== productDocumentId || carton.batchNumber !== batchNumber) {
+          errors.push({ row: index + 1, message: `Carton ${carton.cartonId} does not match this PO line.` });
+          continue;
+        }
+        if (previousCartons.has(carton.cartonId) || receiptCartons.has(carton.cartonId)) {
+          errors.push({ row: index + 1, message: `Carton ${carton.carton} was already scanned.` });
+          continue;
+        }
+        receiptCartons.add(carton.cartonId);
+        scannedCartonIds.push(carton.cartonId);
+        scannedQuantity += carton.quantity;
+      }
+      if (scannedPayloads.length > 0 && scannedQuantity !== receivedQuantity) {
+        errors.push({ row: index + 1, message: `Scanned cartons contain ${scannedQuantity} units, not ${receivedQuantity}.` });
+      }
+      prepared.push({ itemIndex, item, receivedQuantity, damagedQuantity, scannedCartonIds });
+    }
+
+    if (prepared.length === 0) errors.push({ row: 0, message: "Enter or scan at least one received quantity." });
+    if (prepared.some((line) => line.damagedQuantity > 0) && !asString(body.notes)) {
+      errors.push({ row: 0, message: "A discrepancy note is required for damaged stock." });
+    }
+    if (errors.length > 0) {
+      ctx.status = 400; ctx.body = { error: "Goods receipt validation failed.", errors }; return;
+    }
+
+    const updatedItems = currentItems.map((item: any) => ({ ...item }));
+    const receiptLines: any[] = [];
+    const receivedBatches: any[] = [];
+    try {
+      for (const line of prepared) {
+        const receivedQuantity = asNumber(line.item.receivedQuantity) + line.receivedQuantity;
+        const damagedQuantity = asNumber(line.item.damagedQuantity) + line.damagedQuantity;
+        const scannedCartonIds = [
+          ...(Array.isArray(line.item.scannedCartonIds) ? line.item.scannedCartonIds : []),
+          ...line.scannedCartonIds,
+        ];
+        updatedItems[line.itemIndex] = { ...line.item, receivedQuantity, damagedQuantity, scannedCartonIds };
+        const batch = await addReceivedStock(ctx, {
+          item: line.item,
+          quantity: line.receivedQuantity,
+          supplierName: existing.supplierName,
+          poNumber: existing.poNumber,
+        });
+        if (batch) receivedBatches.push(batch);
+        receiptLines.push({
+          productDocumentId: line.item.productDocumentId,
+          productName: line.item.productName,
+          sku: line.item.sku,
+          batchNumber: line.item.batchNumber,
+          receivedQuantity: line.receivedQuantity,
+          damagedQuantity: line.damagedQuantity,
+          scannedCartonIds: line.scannedCartonIds,
+          outstandingAfter: Math.max(0, asNumber(line.item.quantity) - receivedQuantity),
+        });
+      }
+    } catch (caught) {
+      strapi.log.error(caught);
+      ctx.status = 500;
+      ctx.body = { error: caught instanceof Error ? caught.message : "Could not receive stock." };
+      return;
+    }
+
+    const complete = updatedItems.every((item: any) => asNumber(item.receivedQuantity) >= asNumber(item.quantity));
+    const now = new Date().toISOString();
+    const receiptNumber = `GR-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const receipt = await documents("api::goods-receipt.goods-receipt").create({
+      data: {
+        receiptNumber,
+        purchaseOrderDocumentId: existing.documentId,
+        poNumber: existing.poNumber,
+        supplierName: existing.supplierName,
+        lines: receiptLines,
+        receivedBy: asString(body.receivedBy, actor(ctx).actor),
+        receivedAt: now,
+        notes: asString(body.notes),
+      },
+    });
+    const purchaseOrder = await documents("api::purchase-order.purchase-order").update({
+      documentId: existing.documentId,
+      data: {
+        items: updatedItems,
+        status: complete ? "received" : "partially_received",
+        receivedAt: complete ? now : existing.receivedAt,
+      },
+    });
+    await audit(ctx, {
+      action: "purchase-order.receipt",
+      entityType: "purchase-order",
+      entityId: purchaseOrder.documentId,
+      entityLabel: purchaseOrder.poNumber,
+      details: { receiptNumber, lineCount: receiptLines.length, complete },
+    });
+    ctx.body = { ok: true, purchaseOrder, receipt, receivedBatches };
   },
 
   async importBatches(ctx: any) {
