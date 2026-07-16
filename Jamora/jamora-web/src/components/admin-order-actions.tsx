@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { parseOrderItems, type AdminOrder, type AdminOrderStatus, type AdminProduct, type FulfilmentChecklistItem } from "@/lib/admin-api";
+import { type AdminOrder, type AdminOrderStatus, type AdminProduct, type FulfilmentChecklistItem } from "@/lib/admin-api";
+import { buildFulfilmentChecklist, findPackingScanIndex } from "@/lib/packing";
 
 const STATUSES: AdminOrderStatus[] = [
   "pending",
@@ -21,7 +22,7 @@ export function AdminOrderActions({ order, products }: { order: AdminOrder; prod
   const [trackingNumber, setTrackingNumber] = useState(order.trackingNumber ?? "");
   const [note, setNote] = useState("");
   const [packedBy, setPackedBy] = useState(order.packedBy ?? "");
-  const [checklist, setChecklist] = useState<FulfilmentChecklistItem[]>(() => buildChecklist(order, products));
+  const [checklist, setChecklist] = useState<FulfilmentChecklistItem[]>(() => buildFulfilmentChecklist(order, products));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [scanCode, setScanCode] = useState("");
@@ -31,13 +32,7 @@ export function AdminOrderActions({ order, products }: { order: AdminOrder; prod
   function scan() {
     const code = scanCode.trim().toLowerCase();
     if (!code) return;
-    const allocation = (order.batchAllocations ?? []).find((item) =>
-      item.batchNumber.toLowerCase() === code || item.sku?.toLowerCase() === code,
-    );
-    const index = checklist.findIndex((item) =>
-      item.sku?.toLowerCase() === code ||
-      (allocation && ((allocation.sku && item.sku === allocation.sku) || item.name === allocation.name)),
-    );
+    const index = findPackingScanIndex(order, checklist, code);
     if (index < 0) {
       setScanMessage(`Code ${scanCode} does not match this order.`);
       setScanMatched(false);
@@ -76,22 +71,8 @@ export function AdminOrderActions({ order, products }: { order: AdminOrder; prod
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5">
-      <h2 className="text-xl font-bold text-slate-950">Fulfilment controls</h2>
-      <div className="mt-4 grid gap-4 md:grid-cols-3">
-        <label className="text-sm font-semibold text-slate-700">
-          Status
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as AdminOrderStatus)}
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-normal outline-none focus:border-blue-500"
-          >
-            {STATUSES.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-bold text-slate-950">Fulfilment details</h2><p className="mt-1 text-sm text-slate-500">Primary packing actions are available from the Orders workspace.</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold capitalize text-slate-700">{status}</span></div>
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
         <label className="text-sm font-semibold text-slate-700">
           Carrier
           <input
@@ -109,6 +90,10 @@ export function AdminOrderActions({ order, products }: { order: AdminOrder; prod
           />
         </label>
       </div>
+      <details className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <summary className="cursor-pointer text-sm font-bold text-slate-700">Manual status correction</summary>
+        <label className="mt-3 block max-w-sm text-sm font-semibold text-slate-700">Status<select value={status} onChange={(event) => setStatus(event.target.value as AdminOrderStatus)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-normal outline-none focus:border-blue-500">{STATUSES.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+      </details>
       <label className="mt-4 block text-sm font-semibold text-slate-700">
         Internal note
         <textarea
@@ -153,30 +138,4 @@ export function AdminOrderActions({ order, products }: { order: AdminOrder; prod
       {error ? <p className="mt-3 text-sm font-semibold text-red-600">{error}</p> : null}
     </div>
   );
-}
-
-function buildChecklist(order: AdminOrder, products: AdminProduct[]) {
-  const orderItems = parseOrderItems(order);
-  const source: FulfilmentChecklistItem[] = Array.isArray(order.fulfilmentChecklist) && order.fulfilmentChecklist.length > 0
-    ? order.fulfilmentChecklist
-    : orderItems.map((item) => ({ productId: item.productId, sku: item.sku, name: item.name, qty: item.qty, checked: false }));
-
-  return source.map((item) => {
-    const normalizedName = item.name.trim().toLowerCase();
-    const orderItem = orderItems.find((candidate) =>
-      (item.productId && candidate.productId === item.productId) || candidate.name.trim().toLowerCase() === normalizedName,
-    );
-    const product = products.find((candidate) =>
-      (item.productId && candidate.documentId === item.productId) ||
-      (orderItem?.productId && candidate.documentId === orderItem.productId) ||
-      (orderItem?.slug && candidate.slug === orderItem.slug) ||
-      candidate.name.trim().toLowerCase() === normalizedName,
-    );
-    return {
-      ...item,
-      productId: item.productId || orderItem?.productId || product?.documentId,
-      sku: item.sku || orderItem?.sku || product?.sku,
-      scannedQty: item.scannedQty ?? (item.checked ? item.qty : 0),
-    };
-  });
 }
