@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { AdminProductCreateForm } from "@/components/admin-product-create-form";
+import { getSuppliers } from "@/lib/admin-api";
 
 export const metadata = {
   title: "Create Product",
 };
 
-export default function NewProductPage() {
+export default async function NewProductPage() {
+  const suppliers = await getSuppliers().catch(() => []);
   return (
     <div className="space-y-6">
       <Link href="/admin/products" className="text-sm font-semibold text-blue-600">
@@ -19,10 +21,10 @@ export default function NewProductPage() {
           Create product
         </h1>
         <p className="mt-2 text-sm text-slate-500">
-          Add catalogue details, stock thresholds, and product photo.
+          Add catalogue details, approved suppliers, stock thresholds, and product photo.
         </p>
       </div>
-      <AdminProductCreateForm />
+      <AdminProductCreateForm suppliers={suppliers} />
     </div>
   );
 }

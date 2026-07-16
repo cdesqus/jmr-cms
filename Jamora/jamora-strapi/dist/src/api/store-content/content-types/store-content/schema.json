@@ -1,0 +1,41 @@
+{
+    "kind": "singleType",
+    "collectionName": "store_contents",
+    "info": {
+        "singularName": "store-content",
+        "pluralName": "store-contents",
+        "displayName": "Store Content"
+    },
+    "options": {
+        "draftAndPublish": true
+    },
+    "attributes": {
+        "heroEyebrow": { "type": "string" },
+        "heroTitle": { "type": "string" },
+        "heroHighlight": { "type": "string" },
+        "heroDescription": { "type": "text" },
+        "primaryCtaLabel": { "type": "string" },
+        "secondaryCtaLabel": { "type": "string" },
+        "heroEyebrowRo": { "type": "string" },
+        "heroTitleRo": { "type": "string" },
+        "heroHighlightRo": { "type": "string" },
+        "heroDescriptionRo": { "type": "text" },
+        "primaryCtaLabelRo": { "type": "string" },
+        "secondaryCtaLabelRo": { "type": "string" },
+        "pillarsEyebrow": { "type": "string" },
+        "pillarsTitle": { "type": "string" },
+        "featuredEyebrow": { "type": "string" },
+        "featuredTitle": { "type": "string" },
+        "storyEyebrow": { "type": "string" },
+        "storyTitle": { "type": "string" },
+        "storyDescription": { "type": "text" },
+        "pillarsEyebrowRo": { "type": "string" },
+        "pillarsTitleRo": { "type": "string" },
+        "featuredEyebrowRo": { "type": "string" },
+        "featuredTitleRo": { "type": "string" },
+        "storyEyebrowRo": { "type": "string" },
+        "storyTitleRo": { "type": "string" },
+        "storyDescriptionRo": { "type": "text" },
+        "certifications": { "type": "json" }
+    }
+}

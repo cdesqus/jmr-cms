@@ -3,12 +3,13 @@ import {
   adminProductToProduct,
   formatAdminMoney,
   getAdminProducts,
+  getSuppliers,
 } from "@/lib/admin-api";
 import { ProductVisual } from "@/components/product-visual";
 import { AdminStockForm } from "@/components/admin-stock-form";
 
 export default async function AdminProductsPage() {
-  const products = await getAdminProducts().catch(() => []);
+  const [products, suppliers] = await Promise.all([getAdminProducts().catch(() => []), getSuppliers().catch(() => [])]);
 
   return (
     <div className="space-y-6">
@@ -49,6 +50,9 @@ export default async function AdminProductsPage() {
                 <p className="mt-1 text-sm text-slate-500">{product.tagline}</p>
                 <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-700">
                   {product.category}
+                </p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Supplier: {suppliers.filter((supplier) => product.supplierDocumentIds?.includes(supplier.documentId)).map((supplier) => supplier.name).join(", ") || "Not assigned"}
                 </p>
               </div>
               <div className="text-right">

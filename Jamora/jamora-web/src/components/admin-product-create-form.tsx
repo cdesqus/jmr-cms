@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { AdminSupplierPicker } from "@/components/admin-supplier-picker";
+import type { Supplier } from "@/lib/admin-api";
 
 type Category = "energy" | "digestion" | "balance";
 
@@ -21,7 +23,7 @@ async function uploadImage(file: File) {
   return json.files?.[0]?.id as number | undefined;
 }
 
-export function AdminProductCreateForm() {
+export function AdminProductCreateForm({ suppliers }: { suppliers: Supplier[] }) {
   const router = useRouter();
   const [form, setForm] = useState({
     name: "",
@@ -37,6 +39,7 @@ export function AdminProductCreateForm() {
     tagline: "",
     netWeight: "30 sachets · 90 g",
     description: "",
+    supplierDocumentIds: [] as string[],
   });
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
@@ -104,6 +107,7 @@ export function AdminProductCreateForm() {
       </div>
 
       <Field label="Tagline" value={form.tagline} onChange={(v) => set("tagline", v)} />
+      <AdminSupplierPicker suppliers={suppliers} selected={form.supplierDocumentIds} onChange={(value) => set("supplierDocumentIds", value)} />
       <TextArea label="Description" value={form.description} onChange={(v) => set("description", v)} />
       <label className="block text-sm font-semibold text-slate-700">
         Product photo

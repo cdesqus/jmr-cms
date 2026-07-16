@@ -3,12 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { AdminProduct } from "@/lib/admin-api";
+import type { Supplier } from "@/lib/admin-api";
+import { AdminSupplierPicker } from "@/components/admin-supplier-picker";
 
 function listToText(value?: string[]) {
   return Array.isArray(value) ? value.join("\n") : "";
 }
 
-export function AdminProductForm({ product }: { product: AdminProduct }) {
+export function AdminProductForm({ product, suppliers }: { product: AdminProduct; suppliers: Supplier[] }) {
   const router = useRouter();
   const [form, setForm] = useState({
     name: product.name,
@@ -28,6 +30,7 @@ export function AdminProductForm({ product }: { product: AdminProduct }) {
     ingredients: listToText(product.ingredients),
     benefits: listToText(product.benefits),
     certifications: listToText(product.certifications),
+    supplierDocumentIds: product.supplierDocumentIds ?? [],
   });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -128,6 +131,7 @@ export function AdminProductForm({ product }: { product: AdminProduct }) {
       </div>
 
       <Field label="Tagline" value={form.tagline} onChange={(v) => set("tagline", v)} />
+      <AdminSupplierPicker suppliers={suppliers} selected={form.supplierDocumentIds} onChange={(value) => set("supplierDocumentIds", value)} />
       <label className="block text-sm font-semibold text-slate-700">
         Product photo
         <input

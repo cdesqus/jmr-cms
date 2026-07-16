@@ -1,0 +1,14 @@
+{
+    "kind": "collectionType",
+    "collectionName": "stock_reservations",
+    "info": { "singularName": "stock-reservation", "pluralName": "stock-reservations", "displayName": "Stock Reservation" },
+    "options": { "draftAndPublish": false },
+    "attributes": {
+        "token": { "type": "string", "required": true, "unique": true },
+        "status": { "type": "enumeration", "enum": ["reserved", "consumed", "released", "expired"], "default": "reserved", "required": true },
+        "allocations": { "type": "json", "required": true },
+        "expiresAt": { "type": "datetime", "required": true },
+        "orderNumber": { "type": "string" },
+        "email": { "type": "string" }
+    }
+}

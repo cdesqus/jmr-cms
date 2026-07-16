@@ -1,0 +1,17 @@
+{
+    "kind": "collectionType",
+    "collectionName": "return_requests",
+    "info": { "singularName": "return-request", "pluralName": "return-requests", "displayName": "Return Request" },
+    "options": { "draftAndPublish": false },
+    "attributes": {
+        "returnNumber": { "type": "string", "required": true, "unique": true },
+        "orderDocumentId": { "type": "string", "required": true },
+        "orderNumber": { "type": "string", "required": true },
+        "email": { "type": "string" },
+        "items": { "type": "json", "required": true },
+        "reason": { "type": "text", "required": true },
+        "status": { "type": "enumeration", "enum": ["requested", "approved", "rejected", "received", "refunded"], "default": "requested", "required": true },
+        "restock": { "type": "boolean", "default": false },
+        "adminNote": { "type": "text" }
+    }
+}

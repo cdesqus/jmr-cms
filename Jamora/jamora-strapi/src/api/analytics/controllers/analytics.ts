@@ -108,6 +108,9 @@ function productData(body: Record<string, unknown>, mode: "create" | "update") {
   if ("benefits" in body) data.benefits = parseListText(body.benefits);
   if ("certifications" in body) data.certifications = parseListText(body.certifications);
   if ("gradient" in body) data.gradient = parseListText(body.gradient);
+  if (Array.isArray(body.supplierDocumentIds)) {
+    data.supplierDocumentIds = [...new Set(body.supplierDocumentIds.map((value) => asString(value)).filter(Boolean))];
+  }
   if (typeof body.imageId === "number") data.image = body.imageId;
 
   if (mode === "create") {

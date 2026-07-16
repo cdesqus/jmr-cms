@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { adminProductToProduct, getAdminProducts } from "@/lib/admin-api";
+import { adminProductToProduct, getAdminProducts, getSuppliers } from "@/lib/admin-api";
 import { ProductVisual } from "@/components/product-visual";
 import { AdminProductForm } from "@/components/admin-product-form";
 import { AdminStockForm } from "@/components/admin-stock-form";
@@ -11,7 +11,7 @@ export default async function AdminProductDetailPage({
   params: Promise<{ documentId: string }>;
 }) {
   const { documentId } = await params;
-  const products = await getAdminProducts();
+  const [products, suppliers] = await Promise.all([getAdminProducts(), getSuppliers()]);
   const product = products.find((item) => item.documentId === documentId);
   if (!product) notFound();
 
@@ -30,7 +30,7 @@ export default async function AdminProductDetailPage({
           <p className="mt-1 text-sm text-slate-500">{product.slug}</p>
           <AdminStockForm product={product} />
         </div>
-        <AdminProductForm product={product} />
+        <AdminProductForm product={product} suppliers={suppliers} />
       </div>
     </div>
   );

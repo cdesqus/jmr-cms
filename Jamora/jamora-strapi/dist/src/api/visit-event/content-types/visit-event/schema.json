@@ -1,0 +1,19 @@
+{
+    "kind": "collectionType",
+    "collectionName": "visit_events",
+    "info": {
+        "singularName": "visit-event",
+        "pluralName": "visit-events",
+        "displayName": "Visit Event"
+    },
+    "options": {
+        "draftAndPublish": false
+    },
+    "attributes": {
+        "visitorId": { "type": "string" },
+        "path": { "type": "string", "required": true },
+        "referrer": { "type": "text" },
+        "userAgent": { "type": "text" },
+        "source": { "type": "string", "default": "storefront" }
+    }
+}

@@ -185,9 +185,40 @@ export default {
     if (!requireAdmin(ctx)) return;
     const body = ctx.request.body ?? {};
     const supplier = await documents("api::supplier.supplier").findOne({ documentId: asString(body.supplierDocumentId) });
-    const items = Array.isArray(body.items) ? body.items : [];
-    if (!supplier || items.length === 0) {
+    const requestedItems = Array.isArray(body.items) ? body.items : [];
+    if (!supplier || requestedItems.length === 0) {
       ctx.status = 400; ctx.body = { error: "Supplier and at least one item are required." }; return;
+    }
+    const items: any[] = [];
+    const errors: { row: number; message: string }[] = [];
+    for (const [index, requested] of requestedItems.entries()) {
+      const product = await documents("api::product.product").findOne({
+        documentId: asString(requested.productDocumentId),
+        fields: ["documentId", "name", "sku", "supplierDocumentIds"],
+      });
+      const supplierIds = Array.isArray(product?.supplierDocumentIds) ? product.supplierDocumentIds.map((value: unknown) => asString(value)) : [];
+      if (!product) {
+        errors.push({ row: index + 1, message: "Product was not found." });
+        continue;
+      }
+      if (!supplierIds.includes(supplier.documentId)) {
+        errors.push({ row: index + 1, message: `${product.name} is not assigned to ${supplier.name}.` });
+        continue;
+      }
+      items.push({
+        productDocumentId: product.documentId,
+        productName: product.name,
+        sku: product.sku,
+        quantity: Math.max(0, Math.round(asNumber(requested.quantity))),
+        unitsPerCarton: Math.max(1, Math.round(asNumber(requested.unitsPerCarton, 24))),
+        batchNumber: asString(requested.batchNumber).toUpperCase(),
+        productionDate: asString(requested.productionDate),
+        expiryDate: asString(requested.expiryDate),
+        certificateUrl: asString(requested.certificateUrl),
+      });
+    }
+    if (errors.length > 0) {
+      ctx.status = 400; ctx.body = { error: "Purchase order contains invalid supplier products.", errors }; return;
     }
     const poNumber = (asString(body.poNumber) || `PO-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`).toUpperCase();
     const purchaseOrder = await documents("api::purchase-order.purchase-order").create({

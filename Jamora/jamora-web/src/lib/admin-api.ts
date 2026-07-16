@@ -124,6 +124,7 @@ export interface AdminProduct {
   stock?: number;
   minStock?: number;
   maxStock?: number;
+  supplierDocumentIds?: string[];
   publishedAt?: string;
   updatedAt?: string;
 }

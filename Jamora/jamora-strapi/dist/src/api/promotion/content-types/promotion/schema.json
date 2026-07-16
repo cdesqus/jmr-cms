@@ -1,0 +1,31 @@
+{
+    "kind": "collectionType",
+    "collectionName": "promotions",
+    "info": {
+        "singularName": "promotion",
+        "pluralName": "promotions",
+        "displayName": "Promotion"
+    },
+    "options": {
+        "draftAndPublish": false
+    },
+    "attributes": {
+        "name": { "type": "string", "required": true },
+        "code": { "type": "string", "required": true, "unique": true },
+        "discountType": {
+            "type": "enumeration",
+            "enum": ["percentage", "fixed"],
+            "default": "percentage",
+            "required": true
+        },
+        "discountValue": { "type": "integer", "required": true, "min": 1 },
+        "startsAt": { "type": "datetime" },
+        "endsAt": { "type": "datetime" },
+        "usageLimit": { "type": "integer", "min": 0 },
+        "perCustomerLimit": { "type": "integer", "default": 0, "min": 0 },
+        "usageCount": { "type": "integer", "default": 0, "min": 0 },
+        "minimumSpendCents": { "type": "integer", "default": 0, "min": 0 },
+        "productSlugs": { "type": "json" },
+        "active": { "type": "boolean", "default": true }
+    }
+}

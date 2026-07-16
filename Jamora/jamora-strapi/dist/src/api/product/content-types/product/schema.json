@@ -1,0 +1,43 @@
+{
+    "kind": "collectionType",
+    "collectionName": "products",
+    "info": {
+        "singularName": "product",
+        "pluralName": "products",
+        "displayName": "Product"
+    },
+    "options": {
+        "draftAndPublish": true
+    },
+    "attributes": {
+        "slug": { "type": "uid", "targetField": "name", "required": true },
+        "sku": { "type": "string" },
+        "name": { "type": "string", "required": true },
+        "botanical": { "type": "string" },
+        "category": {
+            "type": "enumeration",
+            "enum": ["energy", "digestion", "balance"],
+            "required": true
+        },
+        "priceCents": { "type": "integer", "required": true, "min": 0 },
+        "tagline": { "type": "string" },
+        "description": { "type": "text" },
+        "ingredients": { "type": "json" },
+        "allergens": { "type": "json" },
+        "benefits": { "type": "json" },
+        "howToUse": { "type": "text" },
+        "certifications": { "type": "json" },
+        "netWeight": { "type": "string" },
+        "featured": { "type": "boolean", "default": false },
+        "image": {
+            "type": "media",
+            "multiple": false,
+            "allowedTypes": ["images"]
+        },
+        "gradient": { "type": "json" },
+        "stock": { "type": "integer", "default": 0, "min": 0 },
+        "minStock": { "type": "integer", "default": 10, "min": 0 },
+        "maxStock": { "type": "integer", "default": 100, "min": 0 },
+        "supplierDocumentIds": { "type": "json" }
+    }
+}
