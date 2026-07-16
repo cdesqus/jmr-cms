@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "npm": "^10.8.2"
+  },
+  "_npx": {
+    "packages": [
+      "npm@10.8.2"
+    ]
+  }
+}
