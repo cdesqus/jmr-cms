@@ -202,6 +202,7 @@ export interface PurchaseOrderItem {
   productionDate: string;
   expiryDate: string;
   certificateUrl?: string;
+  unitsPerCarton?: number;
 }
 
 export interface PurchaseOrder {

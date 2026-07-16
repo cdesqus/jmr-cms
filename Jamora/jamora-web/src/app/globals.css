@@ -45,6 +45,24 @@
   body:has(.admin-print-document) .lg\:pl-20 {
     padding-left: 0 !important;
   }
+
+  body:has(.factory-label-document) {
+    background: white !important;
+  }
+
+  .factory-unit-grid {
+    gap: 2mm !important;
+    padding: 0 !important;
+  }
+
+  .factory-unit-label {
+    width: 62mm;
+    min-height: 38mm;
+  }
+
+  .factory-carton-label {
+    min-height: 130mm;
+  }
 }
 
 html {
