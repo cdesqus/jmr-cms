@@ -6,26 +6,41 @@ import { useState } from "react";
 import { AdminLogoutButton } from "@/components/admin-logout-button";
 import type { AdminIdentity, AdminRole } from "@/lib/admin-auth";
 
-const NAV = [
-  { href: "/admin", label: "Dashboard", icon: "dashboard", roles: ["owner", "warehouse", "content", "support"] },
-  { href: "/admin/orders", label: "Orders", icon: "orders", roles: ["owner", "warehouse", "support"] },
-  { href: "/admin/customers", label: "Customers", icon: "customers", roles: ["owner", "support"] },
-  { href: "/admin/products", label: "Products", icon: "products", roles: ["owner", "content"] },
-  { href: "/admin/inventory", label: "Inventory", icon: "inventory", roles: ["owner", "warehouse"] },
-  { href: "/admin/suppliers", label: "Suppliers", icon: "suppliers", roles: ["owner", "warehouse"] },
-  { href: "/admin/purchase-orders", label: "Purchase orders", icon: "purchase-orders", roles: ["owner", "warehouse"] },
-  { href: "/admin/promotions", label: "Promotions", icon: "promotions", roles: ["owner", "content"] },
-  { href: "/admin/returns", label: "Returns", icon: "returns", roles: ["owner", "support"] },
-  { href: "/admin/content", label: "Content", icon: "content", roles: ["owner", "content"] },
-  { href: "/admin/audit", label: "Audit log", icon: "audit", roles: ["owner"] },
-  { href: "/admin/settings", label: "Settings", icon: "settings", roles: ["owner"] },
+const NAV_GROUPS = [
+  { label: "Overview", items: [
+    { href: "/admin", label: "Dashboard", icon: "dashboard", roles: ["owner", "warehouse", "content", "support"] },
+  ] },
+  { label: "Transactions", items: [
+    { href: "/admin/orders", label: "Orders", icon: "orders", roles: ["owner", "warehouse", "support"] },
+    { href: "/admin/purchase-orders", label: "Purchase orders", icon: "purchase-orders", roles: ["owner", "warehouse"] },
+    { href: "/admin/returns", label: "Returns", icon: "returns", roles: ["owner", "support"] },
+  ] },
+  { label: "Inventory", items: [
+    { href: "/admin/inventory", label: "Stock & batches", icon: "inventory", roles: ["owner", "warehouse"] },
+  ] },
+  { label: "Master data", items: [
+    { href: "/admin/products", label: "Products", icon: "products", roles: ["owner", "content"] },
+    { href: "/admin/suppliers", label: "Suppliers", icon: "suppliers", roles: ["owner", "warehouse"] },
+    { href: "/admin/customers", label: "Customers", icon: "customers", roles: ["owner", "support"] },
+  ] },
+  { label: "Storefront", items: [
+    { href: "/admin/promotions", label: "Promotions", icon: "promotions", roles: ["owner", "content"] },
+    { href: "/admin/content", label: "Content", icon: "content", roles: ["owner", "content"] },
+  ] },
+  { label: "System", items: [
+    { href: "/admin/audit", label: "Audit log", icon: "audit", roles: ["owner"] },
+    { href: "/admin/settings", label: "Settings", icon: "settings", roles: ["owner"] },
+  ] },
 ];
 
 export function AdminShell({ children, identity }: { children: React.ReactNode; identity: AdminIdentity | null }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(true);
   const role: AdminRole = identity?.role ?? "owner";
-  const visibleNav = NAV.filter((item) => (item.roles as AdminRole[]).includes(role));
+  const visibleGroups = NAV_GROUPS
+    .map((group) => ({ ...group, items: group.items.filter((item) => (item.roles as AdminRole[]).includes(role)) }))
+    .filter((group) => group.items.length > 0);
+  const visibleNav = visibleGroups.flatMap((group) => group.items);
 
   if (pathname === "/admin/login") return <>{children}</>;
 
@@ -68,31 +83,21 @@ export function AdminShell({ children, identity }: { children: React.ReactNode; 
             {expanded ? "<" : ">"}
           </button>
         </div>
-        <nav className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
-          {visibleNav.map((item) => {
-            const active =
-              pathname === item.href ||
-              (item.href !== "/admin" && pathname?.startsWith(item.href));
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                title={item.label}
-                className={[
-                  "flex items-center rounded-lg text-sm font-semibold",
-                  expanded ? "gap-3 px-3 py-2" : "justify-center px-0 py-3",
-                  active
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-slate-700 hover:bg-blue-50 hover:text-blue-700",
-                ].join(" ")}
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100">
-                  <FlatIcon name={item.icon} />
-                </span>
+        <nav className="mt-3 min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1">
+          {visibleGroups.map((group, groupIndex) => <div key={group.label} className={expanded ? "" : groupIndex > 0 ? "border-t border-slate-100 pt-3" : ""}>
+            {expanded ? <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{group.label}</p> : null}
+            <div className="space-y-1">{group.items.map((item) => {
+              const active = pathname === item.href || (item.href !== "/admin" && pathname?.startsWith(item.href));
+              return <Link key={item.href} href={item.href} title={`${group.label}: ${item.label}`} className={[
+                "flex items-center rounded-lg text-sm font-semibold",
+                expanded ? "gap-3 px-3 py-2" : "justify-center px-0 py-3",
+                active ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-blue-50 hover:text-blue-700",
+              ].join(" ")}>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100"><FlatIcon name={item.icon} /></span>
                 {expanded ? <span>{item.label}</span> : null}
-              </Link>
-            );
-          })}
+              </Link>;
+            })}</div>
+          </div>)}
         </nav>
         <div
           className={[
