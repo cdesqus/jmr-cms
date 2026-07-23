@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  computeLegacyPricing,
   computeAuthoritativePricing,
+  createDemoPriceSnapshot,
+  legacyShippingAddressText,
   normalizeShippingAddressPayload,
 } from "./checkout.ts";
 
@@ -10,11 +13,49 @@ test("legacy shippingAddress.address remains a text address", () => {
   assert.deepEqual(
     normalizeShippingAddressPayload(
       { address: "Strada Veche 1, București" },
-      "",
+      undefined,
     ),
     {
       shippingAddress: undefined,
       shippingAddressText: "Strada Veche 1, București",
+    },
+  );
+});
+
+test("legacy customer address keeps precedence over shippingAddress.address", () => {
+  assert.equal(
+    legacyShippingAddressText(
+      { address: "Shipping fallback" },
+      "Customer address",
+    ),
+    "Customer address",
+  );
+});
+
+test("disabled checkout preserves legacy totals and omits structured persistence", () => {
+  assert.deepEqual(
+    computeLegacyPricing({
+      subtotalCents: 1234.5,
+      shippingCents: 77.25,
+      items: [{ slug: "tea", qty: 1.6, unitPriceCents: 10.4, lineTotalCents: 17.8 }],
+    }, 100),
+    {
+      items: [{
+        productId: "",
+        sku: "",
+        slug: "tea",
+        name: "Product",
+        qty: 2,
+        unitPriceCents: 10,
+        lineTotalCents: 18,
+      }],
+      subtotalCents: 1234.5,
+      shippingCents: 77.25,
+      discountCents: 100,
+      totalCents: 1211.75,
+      shippingAddress: undefined,
+      anonymousSessionId: undefined,
+      priceSnapshot: undefined,
     },
   );
 });
@@ -77,5 +118,22 @@ test("rejects fractional, negative, unsafe, and unknown product inputs", () => {
       discountCents: 0,
     }),
     /Unknown product/,
+  );
+});
+
+test("authoritative promotion discount and FX snapshot use the same total", () => {
+  const pricing = computeAuthoritativePricing({
+    body: { items: [{ slug: "tea", qty: 2 }] },
+    products: [{ documentId: "p1", slug: "tea", priceCents: 3000 }],
+    discountCents: 750,
+  });
+  assert.equal(pricing.discountCents, 750);
+  assert.equal(pricing.totalCents, 5250);
+  assert.equal(
+    createDemoPriceSnapshot(pricing.totalCents, {
+      rate: "4.975000",
+      capturedAt: "2026-07-24T00:00:00.000Z",
+    }).reference.amountMinor,
+    pricing.totalCents,
   );
 });

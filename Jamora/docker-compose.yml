@@ -52,6 +52,7 @@ services:
       JAMORA_STOREFRONT_URL: ${JAMORA_STOREFRONT_URL:-http://localhost:3095}
       JAMORA_ADMIN_API_SECRET: ${JAMORA_ADMIN_API_SECRET:-}
       JAMORA_STOREFRONT_API_SECRET: ${JAMORA_STOREFRONT_API_SECRET:-}
+      STRUCTURED_CHECKOUT_ENABLED: ${STRUCTURED_CHECKOUT_ENABLED:-false}
     volumes:
       - strapi_uploads:/app/public/uploads
     ports:

@@ -1,6 +1,8 @@
 import {
   computeAuthoritativePricing,
+  computeLegacyPricing,
   createDemoPriceSnapshot,
+  legacyShippingAddressText,
   normalizeShippingAddressPayload,
 } from "../services/checkout";
 
@@ -673,23 +675,29 @@ export default {
       return;
     }
 
-    const requestedSlugs = Array.isArray(body.items)
-      ? [...new Set(body.items.map((item: any) => asString(item?.slug)).filter(Boolean))]
-      : [];
-    const products = requestedSlugs.length
-      ? await strapi.documents("api::product.product").findMany({
-          fields: ["documentId", "slug", "sku", "name", "priceCents"],
-          filters: { slug: { $in: requestedSlugs } },
-          limit: requestedSlugs.length,
-        })
-      : [];
+    const structuredCheckoutEnabled = process.env.STRUCTURED_CHECKOUT_ENABLED === "true";
+    let products: any[] = [];
     let pricing;
-    try {
-      pricing = computeAuthoritativePricing({ body, products, discountCents: 0 });
-    } catch (error) {
-      ctx.status = 400;
-      ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
-      return;
+    if (structuredCheckoutEnabled) {
+      const requestedSlugs = Array.isArray(body.items)
+        ? [...new Set(body.items.map((item: any) => asString(item?.slug)).filter(Boolean))]
+        : [];
+      products = requestedSlugs.length
+        ? await strapi.documents("api::product.product").findMany({
+            fields: ["documentId", "slug", "sku", "name", "priceCents"],
+            filters: { slug: { $in: requestedSlugs } },
+            limit: requestedSlugs.length,
+          })
+        : [];
+      try {
+        pricing = computeAuthoritativePricing({ body, products, discountCents: 0 });
+      } catch (error) {
+        ctx.status = 400;
+        ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
+        return;
+      }
+    } else {
+      pricing = computeLegacyPricing(body, 0);
     }
 
     const promotionResult = body.promotionCode
@@ -705,28 +713,42 @@ export default {
       ctx.body = { error: promotionResult.error };
       return;
     }
-    try {
-      pricing = computeAuthoritativePricing({
-        body,
-        products,
-        discountCents: promotionResult?.discountCents ?? 0,
-      });
-    } catch (error) {
-      ctx.status = 400;
-      ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
-      return;
+    if (structuredCheckoutEnabled) {
+      try {
+        pricing = computeAuthoritativePricing({
+          body,
+          products,
+          discountCents: promotionResult?.discountCents ?? 0,
+        });
+      } catch (error) {
+        ctx.status = 400;
+        ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
+        return;
+      }
+    } else {
+      pricing = computeLegacyPricing(body, promotionResult?.discountCents ?? 0);
     }
     const { items, subtotalCents, shippingCents, discountCents, totalCents } = pricing;
     let addressResult;
-    try {
-      addressResult = normalizeShippingAddressPayload(
-        body.shippingAddress,
-        body.customer?.address,
-      );
-    } catch (error) {
-      ctx.status = 400;
-      ctx.body = { error: error instanceof Error ? error.message : "Invalid shipping address." };
-      return;
+    if (structuredCheckoutEnabled) {
+      try {
+        addressResult = normalizeShippingAddressPayload(
+          body.shippingAddress,
+          body.customer?.address,
+        );
+      } catch (error) {
+        ctx.status = 400;
+        ctx.body = { error: error instanceof Error ? error.message : "Invalid shipping address." };
+        return;
+      }
+    } else {
+      addressResult = {
+        shippingAddress: undefined,
+        shippingAddressText: legacyShippingAddressText(
+          body.shippingAddress,
+          body.customer?.address,
+        ),
+      };
     }
     const reservationToken = asString(body.reservationToken);
     let reservedAllocations: any[] = [];
@@ -795,9 +817,13 @@ export default {
         })),
         itemsSummary: JSON.stringify(items, null, 2),
         shippingAddressText: addressResult.shippingAddressText,
-        shippingAddress: addressResult.shippingAddress,
-        anonymousSessionId: asString(body.anonymousSessionId) || undefined,
-        priceSnapshot: createDemoPriceSnapshot(totalCents),
+        ...(structuredCheckoutEnabled
+          ? {
+              shippingAddress: addressResult.shippingAddress,
+              anonymousSessionId: asString(body.anonymousSessionId) || undefined,
+              priceSnapshot: createDemoPriceSnapshot(totalCents),
+            }
+          : {}),
         trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
         deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
         estimatedDelivery: body.estimatedDelivery,

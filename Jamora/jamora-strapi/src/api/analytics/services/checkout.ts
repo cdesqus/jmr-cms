@@ -58,12 +58,50 @@ function normalizeShippingAddressPayload(value: unknown, customerAddress: unknow
   }
   return {
     shippingAddress: undefined,
-    shippingAddressText: string(
-      value && typeof value === "object"
-        ? (value as UnknownRecord).address
-        : undefined,
-      string(customerAddress),
-    ),
+    shippingAddressText: legacyShippingAddressText(value, customerAddress),
+  };
+}
+
+function legacyShippingAddressText(value: unknown, customerAddress: unknown) {
+  const fallback = value && typeof value === "object"
+    ? (value as UnknownRecord).address
+    : undefined;
+  return string(customerAddress, string(fallback));
+}
+
+function legacyNumber(value: unknown, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function computeLegacyPricing(body: UnknownRecord, discountCents: number) {
+  const items = (Array.isArray(body.items) ? body.items : []).map((item: UnknownRecord) => {
+    const qty = Math.max(0, Math.round(legacyNumber(item?.qty)));
+    const unitPriceCents = Math.max(0, Math.round(legacyNumber(item?.unitPriceCents)));
+    return {
+      productId: string(item?.productId),
+      sku: string(item?.sku),
+      slug: string(item?.slug),
+      name: string(item?.name, "Product"),
+      qty,
+      unitPriceCents,
+      lineTotalCents: Math.max(
+        0,
+        Math.round(legacyNumber(item?.lineTotalCents, qty * unitPriceCents)),
+      ),
+    };
+  }).filter((item) => item.qty > 0);
+  const subtotalCents = Math.max(0, legacyNumber(body.subtotalCents));
+  const shippingCents = Math.max(0, legacyNumber(body.shippingCents));
+  const totalCents = Math.max(0, subtotalCents - discountCents + shippingCents);
+  return {
+    items,
+    subtotalCents,
+    shippingCents,
+    discountCents,
+    totalCents,
+    shippingAddress: undefined,
+    anonymousSessionId: undefined,
+    priceSnapshot: undefined,
   };
 }
 
@@ -155,7 +193,9 @@ function createDemoPriceSnapshot(
 }
 
 export {
+  computeLegacyPricing,
   computeAuthoritativePricing,
   createDemoPriceSnapshot,
+  legacyShippingAddressText,
   normalizeShippingAddressPayload,
 };
