@@ -6,6 +6,7 @@ const {
 const { createFxSnapshot } = require("./money.cjs");
 
 const DEFAULT_DEMO_EUR_RON_RATE = "4.975000";
+const ANONYMOUS_SESSION_KEY = "jamora.anonymous-session.v1";
 
 function convertMinorUnits(eurMinor, rate) {
   if (!Number.isSafeInteger(eurMinor) || eurMinor < 0) {
@@ -36,6 +37,22 @@ function createDemoPriceSnapshot(eurMinor, options = {}) {
   });
 }
 
+function getOrCreateAnonymousSessionId(storage, randomUUID) {
+  let id = storage.getItem(ANONYMOUS_SESSION_KEY);
+  if (!id) {
+    id = randomUUID();
+    storage.setItem(ANONYMOUS_SESSION_KEY, id);
+  }
+  return id;
+}
+
+function guestShippingCents(subtotalCents) {
+  if (!Number.isSafeInteger(subtotalCents) || subtotalCents < 0) {
+    throw new TypeError("subtotalCents must be a non-negative safe integer");
+  }
+  return subtotalCents >= 5000 ? 0 : 495;
+}
+
 function formatRomanianAddress(address) {
   const unit = address.unit ? `, ap. ${address.unit}` : "";
   const county = address.subdivisionCode ? `, ${address.subdivisionCode}` : "";
@@ -46,6 +63,12 @@ function formatRomanianAddress(address) {
   return `${address.recipient}\n${address.street} ${address.building}${unit}\n${address.postalCode} ${address.locality}${county}\nRomania${phone}${instructions}`;
 }
 
+function isStructuredAddress(value) {
+  if (!value || typeof value !== "object") return false;
+  return ["recipient", "locality", "postalCode", "street", "building", "countryCode"]
+    .some((field) => Object.hasOwn(value, field));
+}
+
 function normalizeCheckoutPayload(body, options = {}) {
   const result = { ...body, customer: { ...(body.customer ?? {}) } };
   if (typeof body.anonymousSessionId === "string" && body.anonymousSessionId.trim()) {
@@ -54,7 +77,7 @@ function normalizeCheckoutPayload(body, options = {}) {
     delete result.anonymousSessionId;
   }
 
-  if (body.shippingAddress && typeof body.shippingAddress === "object") {
+  if (isStructuredAddress(body.shippingAddress)) {
     const shippingAddress = normaliseRomanianAddress(body.shippingAddress);
     const errors = validateRomanianAddress(shippingAddress);
     if (errors.length) {
@@ -63,7 +86,10 @@ function normalizeCheckoutPayload(body, options = {}) {
     result.shippingAddress = shippingAddress;
     result.customer.address = formatRomanianAddress(shippingAddress);
   } else {
-    delete result.shippingAddress;
+    const legacyAddress = typeof body.shippingAddress?.address === "string"
+      ? body.shippingAddress.address
+      : result.customer.address;
+    if (typeof legacyAddress === "string") result.customer.address = legacyAddress;
   }
 
   const subtotal = Number.isSafeInteger(body.subtotalCents) ? Math.max(0, body.subtotalCents) : 0;
@@ -76,9 +102,22 @@ function normalizeCheckoutPayload(body, options = {}) {
   return result;
 }
 
+function prepareCheckoutPayloadText(raw, structuredCheckoutEnabled, options = {}) {
+  if (!structuredCheckoutEnabled) return raw;
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TypeError("Checkout payload must be an object");
+  }
+  return JSON.stringify(normalizeCheckoutPayload(parsed, options));
+}
+
 module.exports = {
   DEFAULT_DEMO_EUR_RON_RATE,
   createDemoPriceSnapshot,
   formatRomanianAddress,
+  getOrCreateAnonymousSessionId,
+  guestShippingCents,
+  isStructuredAddress,
   normalizeCheckoutPayload,
+  prepareCheckoutPayloadText,
 };

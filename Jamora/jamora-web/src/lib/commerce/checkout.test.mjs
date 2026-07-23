@@ -3,7 +3,10 @@ import test from "node:test";
 
 import {
   createDemoPriceSnapshot,
+  getOrCreateAnonymousSessionId,
+  guestShippingCents,
   normalizeCheckoutPayload,
+  prepareCheckoutPayloadText,
 } from "./checkout.cjs";
 
 const structuredAddress = {
@@ -76,6 +79,41 @@ test("preserves legacy text checkout without requiring structured fields", () =>
   assert.equal(result.customer.address, "Strada Veche 1, București");
   assert.equal(result.shippingAddress, undefined);
   assert.equal(result.anonymousSessionId, undefined);
+});
+
+test("preserves legacy shippingAddress.address without treating it as structured", () => {
+  const result = normalizeCheckoutPayload(
+    {
+      customer: { name: "Legacy Guest", email: "guest@example.com" },
+      shippingAddress: { address: "Strada Veche 1, București" },
+      subtotalCents: 1000,
+      shippingCents: 495,
+    },
+    { rate: "4.975000", capturedAt: "2026-07-24T00:00:00.000Z" },
+  );
+
+  assert.equal(result.customer.address, "Strada Veche 1, București");
+  assert.deepEqual(result.shippingAddress, { address: "Strada Veche 1, București" });
+});
+
+test("returns the raw request unchanged when structured checkout is disabled", () => {
+  const raw = '{ "customer": { "address": " legacy " }, "subtotalCents": 1.5 }';
+  assert.equal(prepareCheckoutPayloadText(raw, false), raw);
+});
+
+test("persists and reuses the opaque anonymous checkout UUID", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+  assert.equal(getOrCreateAnonymousSessionId(storage, () => "uuid-1"), "uuid-1");
+  assert.equal(getOrCreateAnonymousSessionId(storage, () => "uuid-2"), "uuid-1");
+});
+
+test("keeps the existing EUR 50 guest free-shipping threshold", () => {
+  assert.equal(guestShippingCents(4999), 495);
+  assert.equal(guestShippingCents(5000), 0);
 });
 
 test("rejects incomplete structured addresses", () => {

@@ -17,9 +17,12 @@ import {
   validateRomanianAddress,
   type StructuredAddress,
 } from "@/lib/commerce/address.cjs";
-import { formatRomanianAddress } from "@/lib/commerce/checkout.cjs";
+import {
+  formatRomanianAddress,
+  getOrCreateAnonymousSessionId,
+  guestShippingCents,
+} from "@/lib/commerce/checkout.cjs";
 
-const FREE_SHIPPING_CENTS = 5000;
 const PAYMENTS = ["Card", "iDEAL", "Bancontact", "Klarna", "Apple Pay", "Google Pay"];
 
 interface AppliedCoupon {
@@ -30,17 +33,6 @@ interface AppliedCoupon {
 }
 
 const EMPTY_ADDRESS = normaliseRomanianAddress();
-const ANONYMOUS_SESSION_KEY = "jamora.anonymous-session.v1";
-
-function getOrCreateAnonymousSessionId() {
-  let id = localStorage.getItem(ANONYMOUS_SESSION_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(ANONYMOUS_SESSION_KEY, id);
-  }
-  return id;
-}
-
 export function CartView({
   structuredCheckoutEnabled = false,
 }: {
@@ -76,8 +68,8 @@ export function CartView({
     );
   }
 
-  const shipping = subtotalCents >= FREE_SHIPPING_CENTS ? 0 : 495;
-  const remainingForFree = FREE_SHIPPING_CENTS - subtotalCents;
+  const shipping = guestShippingCents(subtotalCents);
+  const remainingForFree = 5000 - subtotalCents;
   const cartSignature = items.map((item) => `${item.product.slug}:${item.qty}`).sort().join("|");
   const normalizedCouponCode = couponCode.trim().toUpperCase();
   const activeCoupon = appliedCoupon?.signature === cartSignature && appliedCoupon.code === normalizedCouponCode
@@ -192,7 +184,7 @@ export function CartView({
         promotionCode: checkoutCoupon?.code,
         reservationToken: reservation.reservationToken,
         anonymousSessionId: structuredCheckoutEnabled
-          ? getOrCreateAnonymousSessionId()
+          ? getOrCreateAnonymousSessionId(localStorage, () => crypto.randomUUID())
           : undefined,
         shippingAddress: normalizedShippingAddress,
         customer: {

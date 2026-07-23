@@ -7,6 +7,12 @@ export function createDemoPriceSnapshot(
   options?: { rate?: string; capturedAt?: string },
 ): FxSnapshot;
 export function formatRomanianAddress(address: StructuredAddress): string;
+export function getOrCreateAnonymousSessionId(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  randomUUID: () => string,
+): string;
+export function guestShippingCents(subtotalCents: number): number;
+export function isStructuredAddress(value: unknown): boolean;
 export function normalizeCheckoutPayload<T extends Record<string, unknown>>(
   body: T,
   options?: { rate?: string; capturedAt?: string },
@@ -16,3 +22,8 @@ export function normalizeCheckoutPayload<T extends Record<string, unknown>>(
   customer: Record<string, unknown> & { address?: string };
   priceSnapshot: FxSnapshot;
 };
+export function prepareCheckoutPayloadText(
+  raw: string,
+  structuredCheckoutEnabled: boolean,
+  options?: { rate?: string; capturedAt?: string },
+): string;
