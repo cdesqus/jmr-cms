@@ -4,6 +4,9 @@ import {
   issueOpaqueToken,
   verifyPassword,
 } from "./customer-credentials.cjs";
+import {
+  runRecoveryPrivacyWork,
+} from "./customer-recovery-privacy.cjs";
 
 const CUSTOMER_UID = "api::customer-account.customer-account";
 const DUMMY_PASSWORD_HASH =
@@ -27,11 +30,14 @@ type SafeCustomer = {
 };
 
 export class CustomerAuthError extends Error {
+  readonly code: "duplicate" | "invalid_credentials" | "invalid_token";
+
   constructor(
-    public readonly code: "duplicate" | "invalid_credentials" | "invalid_token",
+    code: "duplicate" | "invalid_credentials" | "invalid_token",
     message: string,
   ) {
     super(message);
+    this.code = code;
   }
 }
 
@@ -141,20 +147,21 @@ export default ({ strapi }: { strapi: any }) => {
     async requestPasswordReset(
       emailInput: string,
     ): Promise<{ accepted: true; resetToken?: string }> {
-      const customer = await findBy({ email: { $eq: normalizeEmail(emailInput) } });
-      if (!customer || !customer.active) return { accepted: true };
+      return runRecoveryPrivacyWork(async ({ token, tokenHash }) => {
+        const customer = await findBy({ email: { $eq: normalizeEmail(emailInput) } });
+        if (!customer || !customer.active) return { accepted: true };
 
-      const resetToken = issueOpaqueToken();
-      await customers().update({
-        documentId: customer.documentId,
-        data: {
-          resetTokenHash: hashOpaqueToken(resetToken),
-          resetExpiresAt: expiresAt(60 * 60 * 1000),
-        },
+        await customers().update({
+          documentId: customer.documentId,
+          data: {
+            resetTokenHash: tokenHash,
+            resetExpiresAt: expiresAt(60 * 60 * 1000),
+          },
+        });
+        return process.env.NODE_ENV === "production"
+          ? { accepted: true }
+          : { accepted: true, resetToken: token };
       });
-      return process.env.NODE_ENV === "production"
-        ? { accepted: true }
-        : { accepted: true, resetToken };
     },
 
     async resetPassword(token: string, password: string): Promise<SafeCustomer> {

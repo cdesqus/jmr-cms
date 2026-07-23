@@ -1,4 +1,5 @@
 import { CustomerAuthError } from "../services/customer-auth";
+import { hasStorefrontSecret } from "./storefront-secret.cjs";
 
 const body = (ctx: any) => ctx.request.body ?? {};
 const stringValue = (value: unknown) =>
@@ -122,10 +123,10 @@ export default {
 
   async session(ctx: any) {
     const configuredSecret = process.env.JAMORA_STOREFRONT_API_SECRET;
-    if (
-      !configuredSecret ||
-      ctx.get("x-jamora-storefront-secret") !== configuredSecret
-    ) {
+    if (!hasStorefrontSecret(
+      ctx.get("x-jamora-storefront-secret"),
+      configuredSecret,
+    )) {
       ctx.status = 401;
       ctx.body = { error: "Storefront API secret required." };
       return;
