@@ -11,6 +11,13 @@ import {
 import { formatEUR } from "@/lib/products";
 import { useCart } from "@/components/cart-context";
 import { ProductVisual } from "@/components/product-visual";
+import { StructuredAddressForm } from "@/components/structured-address-form";
+import {
+  normaliseRomanianAddress,
+  validateRomanianAddress,
+  type StructuredAddress,
+} from "@/lib/commerce/address.cjs";
+import { formatRomanianAddress } from "@/lib/commerce/checkout.cjs";
 
 const FREE_SHIPPING_CENTS = 5000;
 const PAYMENTS = ["Card", "iDEAL", "Bancontact", "Klarna", "Apple Pay", "Google Pay"];
@@ -22,7 +29,23 @@ interface AppliedCoupon {
   signature: string;
 }
 
-export function CartView() {
+const EMPTY_ADDRESS = normaliseRomanianAddress();
+const ANONYMOUS_SESSION_KEY = "jamora.anonymous-session.v1";
+
+function getOrCreateAnonymousSessionId() {
+  let id = localStorage.getItem(ANONYMOUS_SESSION_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(ANONYMOUS_SESSION_KEY, id);
+  }
+  return id;
+}
+
+export function CartView({
+  structuredCheckoutEnabled = false,
+}: {
+  structuredCheckoutEnabled?: boolean;
+}) {
   const router = useRouter();
   const { items, subtotalCents, setQty, remove, clear } = useCart();
   const [customer, setCustomer] = useState({
@@ -31,6 +54,8 @@ export function CartView() {
     address: "",
   });
   const [error, setError] = useState("");
+  const [shippingAddress, setShippingAddress] = useState<StructuredAddress>(EMPTY_ADDRESS);
+  const [addressErrors, setAddressErrors] = useState<string[]>([]);
   const [couponCode, setCouponCode] = useState("");
   const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
   const [couponMessage, setCouponMessage] = useState("");
@@ -59,8 +84,10 @@ export function CartView() {
     ? appliedCoupon
     : null;
   const discountCents = activeCoupon?.discountCents ?? 0;
-  const canCheckout =
-    customer.name.trim() && customer.email.trim() && customer.address.trim();
+  const canCheckout = customer.name.trim() && customer.email.trim()
+    && (structuredCheckoutEnabled
+      ? validateRomanianAddress(normaliseRomanianAddress(shippingAddress)).length === 0
+      : customer.address.trim());
 
   async function validateCoupon(code: string) {
     const response = await fetch("/api/jamora/promotions/validate", {
@@ -112,6 +139,9 @@ export function CartView() {
 
   async function handleCheckout() {
     if (!canCheckout) {
+      if (structuredCheckoutEnabled) {
+        setAddressErrors(validateRomanianAddress(normaliseRomanianAddress(shippingAddress)));
+      }
       setError("Please add your name, email, and shipping address.");
       return;
     }
@@ -151,6 +181,9 @@ export function CartView() {
         throw new Error(reservation.error ?? "Stock could not be reserved.");
       }
 
+      const normalizedShippingAddress = structuredCheckoutEnabled
+        ? normaliseRomanianAddress(shippingAddress)
+        : undefined;
       const order = createMockOrder({
         items,
         subtotalCents,
@@ -158,10 +191,16 @@ export function CartView() {
         discountCents: checkoutCoupon?.discountCents,
         promotionCode: checkoutCoupon?.code,
         reservationToken: reservation.reservationToken,
+        anonymousSessionId: structuredCheckoutEnabled
+          ? getOrCreateAnonymousSessionId()
+          : undefined,
+        shippingAddress: normalizedShippingAddress,
         customer: {
           name: customer.name.trim(),
           email: customer.email.trim(),
-          address: customer.address.trim(),
+          address: normalizedShippingAddress
+            ? formatRomanianAddress(normalizedShippingAddress)
+            : customer.address.trim(),
         },
       });
       const synced = await syncMockOrderToStrapi(order);
@@ -323,17 +362,28 @@ export function CartView() {
               autoComplete="email"
             />
           </label>
-          <label className="block text-xs font-semibold uppercase text-stone">
-            Shipping address
-            <textarea
-              value={customer.address}
-              onChange={(e) =>
-                setCustomer((c) => ({ ...c, address: e.target.value }))
-              }
-              className="mt-1 min-h-20 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
-              autoComplete="shipping street-address"
+          {structuredCheckoutEnabled ? (
+            <StructuredAddressForm
+              value={shippingAddress}
+              onChange={(value) => {
+                setShippingAddress(value);
+                setAddressErrors([]);
+              }}
+              errors={addressErrors}
             />
-          </label>
+          ) : (
+            <label className="block text-xs font-semibold uppercase text-stone">
+              Shipping address
+              <textarea
+                value={customer.address}
+                onChange={(e) =>
+                  setCustomer((c) => ({ ...c, address: e.target.value }))
+                }
+                className="mt-1 min-h-20 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
+                autoComplete="shipping street-address"
+              />
+            </label>
+          )}
         </div>
 
         {error && <p className="mt-3 text-sm text-terracotta-deep">{error}</p>}

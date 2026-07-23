@@ -1,4 +1,6 @@
 import type { CartItem } from "@/components/cart-context";
+import type { StructuredAddress } from "@/lib/commerce/address.cjs";
+import type { FxSnapshot } from "@/lib/commerce/money.cjs";
 
 export type MockOrderStatus =
   | "pending"
@@ -20,6 +22,9 @@ export interface MockOrder {
     email: string;
     address: string;
   };
+  anonymousSessionId?: string;
+  shippingAddress?: StructuredAddress;
+  priceSnapshot?: FxSnapshot;
   items: {
     productId: string;
     sku?: string;
@@ -70,6 +75,9 @@ export function createMockOrder(input: {
   promotionCode?: string;
   reservationToken?: string;
   customer: MockOrder["customer"];
+  anonymousSessionId?: string;
+  shippingAddress?: StructuredAddress;
+  priceSnapshot?: FxSnapshot;
 }): MockOrder {
   const now = new Date();
   const id = crypto.randomUUID();
@@ -84,6 +92,9 @@ export function createMockOrder(input: {
     carrier: "Jamora EU Fulfilment",
     status: "paid",
     customer: input.customer,
+    anonymousSessionId: input.anonymousSessionId,
+    shippingAddress: input.shippingAddress,
+    priceSnapshot: input.priceSnapshot,
     items: input.items.map((item) => ({
       productId: item.product.id,
       sku: item.product.sku,

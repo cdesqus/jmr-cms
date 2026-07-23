@@ -1,4 +1,58 @@
 const DEFAULT_COST_RATIO = 0.42;
+const DEFAULT_DEMO_EUR_RON_RATE = "4.975000";
+const ADDRESS_FIELDS = [
+  "recipient", "phone", "subdivisionCode", "locality", "postalCode",
+  "street", "building", "unit", "instructions",
+] as const;
+
+function normalizeRomanianAddress(value: unknown) {
+  if (!value || typeof value !== "object") return undefined;
+  const input = value as Record<string, unknown>;
+  const address: Record<string, string> = {
+    countryCode: asString(input.countryCode, "RO").trim().toUpperCase(),
+  };
+  for (const field of ADDRESS_FIELDS) address[field] = asString(input[field]).trim();
+  return address;
+}
+
+function validateRomanianAddress(address: Record<string, string>) {
+  const errors: string[] = [];
+  if (!address.recipient) errors.push("recipient");
+  if (address.countryCode !== "RO") errors.push("countryCode");
+  if (!address.locality) errors.push("locality");
+  if (!/^\d{6}$/.test(address.postalCode)) errors.push("postalCode");
+  if (!address.street) errors.push("street");
+  if (!address.building) errors.push("building");
+  return errors;
+}
+
+function formatRomanianAddress(address: Record<string, string>) {
+  const unit = address.unit ? `, ap. ${address.unit}` : "";
+  const county = address.subdivisionCode ? `, ${address.subdivisionCode}` : "";
+  const phone = address.phone ? `\nTelefon: ${address.phone}` : "";
+  const instructions = address.instructions ? `\nInstrucțiuni: ${address.instructions}` : "";
+  return `${address.recipient}\n${address.street} ${address.building}${unit}\n${address.postalCode} ${address.locality}${county}\nRomania${phone}${instructions}`;
+}
+
+function demoPriceSnapshot(eurMinor: number) {
+  const rate = process.env.DEMO_EUR_RON_RATE ?? DEFAULT_DEMO_EUR_RON_RATE;
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(rate);
+  if (!match) throw new TypeError("DEMO_EUR_RON_RATE must be a positive decimal");
+  const decimals = match[2] ?? "";
+  const denominator = BigInt(10) ** BigInt(decimals.length);
+  const numerator = BigInt(match[1]) * denominator + BigInt(decimals || "0");
+  if (numerator <= BigInt(0)) throw new TypeError("DEMO_EUR_RON_RATE must be positive");
+  const ronMinor = Number(
+    (BigInt(eurMinor) * numerator + denominator / BigInt(2)) / denominator,
+  );
+  return {
+    reference: { amountMinor: eurMinor, currency: "EUR" },
+    charge: { amountMinor: ronMinor, currency: "RON" },
+    rate,
+    source: "demo-config",
+    capturedAt: new Date().toISOString(),
+  };
+}
 
 function startOfDay(date = new Date()) {
   const d = new Date(date);
@@ -685,6 +739,15 @@ export default {
     }
     const discountCents = promotionResult?.discountCents ?? 0;
     const totalCents = Math.max(0, subtotalCents - discountCents + shippingCents);
+    const shippingAddress = normalizeRomanianAddress(body.shippingAddress);
+    if (shippingAddress) {
+      const addressErrors = validateRomanianAddress(shippingAddress);
+      if (addressErrors.length) {
+        ctx.status = 400;
+        ctx.body = { error: `Invalid shipping address: ${addressErrors.join(", ")}` };
+        return;
+      }
+    }
     const reservationToken = asString(body.reservationToken);
     let reservedAllocations: any[] = [];
     if (reservationToken) {
@@ -751,10 +814,12 @@ export default {
           checked: false,
         })),
         itemsSummary: JSON.stringify(items, null, 2),
-        shippingAddressText: asString(
-          body.customer?.address,
-          asString(body.shippingAddress?.address),
-        ),
+        shippingAddressText: shippingAddress
+          ? formatRomanianAddress(shippingAddress)
+          : asString(body.customer?.address),
+        shippingAddress,
+        anonymousSessionId: asString(body.anonymousSessionId) || undefined,
+        priceSnapshot: demoPriceSnapshot(totalCents),
         trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
         deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
         estimatedDelivery: body.estimatedDelivery,
