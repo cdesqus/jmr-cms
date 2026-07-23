@@ -52,6 +52,12 @@ export function SiteHeader() {
 
         <div className="flex items-center gap-2">
           <Link
+            href="/account"
+            className="hidden rounded-full px-3 py-2 text-sm font-medium text-bark transition-colors hover:text-terracotta sm:inline-flex"
+          >
+            Account
+          </Link>
+          <Link
             href="/track"
             className="hidden rounded-full border border-clay bg-white/60 px-4 py-2 text-sm font-medium text-bark transition-colors hover:border-terracotta hover:text-terracotta sm:inline-flex"
           >
@@ -85,6 +91,13 @@ export function SiteHeader() {
 
       {mobileOpen && (
         <nav className="border-t border-clay/60 bg-cream px-5 py-3 md:hidden">
+          <Link
+            href="/account"
+            onClick={() => setMobileOpen(false)}
+            className="block py-2 text-sm font-medium text-bark hover:text-terracotta"
+          >
+            Account
+          </Link>
           <Link
             href="/track"
             onClick={() => setMobileOpen(false)}
