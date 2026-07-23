@@ -1,0 +1,21 @@
+{
+  "kind": "collectionType",
+  "collectionName": "customer_consents",
+  "info": {
+    "singularName": "customer-consent",
+    "pluralName": "customer-consents",
+    "displayName": "Customer Consent"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "customerDocumentId": { "type": "string" },
+    "anonymousSessionId": { "type": "string" },
+    "purpose": { "type": "enumeration", "enum": ["necessary", "analytics", "lifecycle_email"], "required": true },
+    "granted": { "type": "boolean", "required": true },
+    "policyVersion": { "type": "string", "required": true },
+    "source": { "type": "string", "required": true },
+    "decidedAt": { "type": "datetime", "required": true }
+  }
+}

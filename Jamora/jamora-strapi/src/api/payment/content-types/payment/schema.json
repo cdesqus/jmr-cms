@@ -1,0 +1,27 @@
+{
+  "kind": "collectionType",
+  "collectionName": "payments",
+  "info": {
+    "singularName": "payment",
+    "pluralName": "payments",
+    "displayName": "Payment"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "paymentNumber": { "type": "string", "required": true, "unique": true },
+    "idempotencyKey": { "type": "string", "required": true, "unique": true },
+    "subjectType": { "type": "enumeration", "enum": ["order", "membership"], "required": true },
+    "subjectId": { "type": "string", "required": true },
+    "method": { "type": "enumeration", "enum": ["mock", "bank_transfer", "ropay"], "required": true },
+    "provider": { "type": "string", "required": true },
+    "status": { "type": "enumeration", "enum": ["created", "awaiting_payment", "processing", "paid", "expired", "failed", "cancelled", "refunded"], "required": true },
+    "amountMinor": { "type": "integer", "required": true, "min": 0 },
+    "currency": { "type": "string", "required": true },
+    "providerReference": { "type": "string" },
+    "priceSnapshot": { "type": "json", "required": true },
+    "paidAt": { "type": "datetime" },
+    "expiresAt": { "type": "datetime" }
+  }
+}
