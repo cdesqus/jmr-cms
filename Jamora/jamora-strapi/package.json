@@ -4,7 +4,7 @@
   "private": true,
   "description": "Jamora self-hosted Strapi CMS",
   "scripts": {
-    "build": "strapi build",
+    "build": "strapi build && node scripts/package-runtime-cjs.cjs",
     "develop": "strapi develop",
     "start": "strapi start",
     "strapi": "strapi"
