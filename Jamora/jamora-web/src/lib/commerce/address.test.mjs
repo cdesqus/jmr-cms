@@ -5,11 +5,11 @@ import { normaliseRomanianAddress, validateRomanianAddress } from "./address.cjs
 test("normalises a Romania address without losing apartment details", () => {
   assert.deepEqual(normaliseRomanianAddress({
     recipient: " Ana Popescu ", phone: " +40 712 345 678 ",
-    countryCode: "ro", subdivisionCode: "B", locality: " BucureÈ™ti ",
+    countryCode: "ro", subdivisionCode: "B", locality: " București ",
     postalCode: "010011", street: "Calea Victoriei", building: "10", unit: "Ap. 4",
   }), {
     recipient: "Ana Popescu", phone: "+40 712 345 678", countryCode: "RO",
-    subdivisionCode: "B", locality: "BucureÈ™ti", postalCode: "010011",
+    subdivisionCode: "B", locality: "București", postalCode: "010011",
     street: "Calea Victoriei", building: "10", unit: "Ap. 4", instructions: "",
   });
 });
