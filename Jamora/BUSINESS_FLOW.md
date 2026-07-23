@@ -175,13 +175,16 @@ sequenceDiagram
 
 ## 8. Order Status Lifecycle
 
-| Status | Meaning | Trigger |
-| --- | --- | --- |
-| `pending` | Order intent created but not paid | Checkout started |
-| `paid` | Payment succeeded | Stripe webhook success |
-| `failed` | Payment failed | Stripe webhook failure |
-| `fulfilled` | Order shipped / completed | Admin update |
-| `refunded` | Payment refunded | Admin or Stripe refund event |
+| Status | Meaning | Current Phase 0 trigger | Future live-payment trigger |
+| --- | --- | --- | --- |
+| `pending` | Order intent created but not paid | Demo checkout starts | Payment request is created |
+| `paid` | Payment accepted for order processing | Mock-paid flow marks the demo order paid | Verified provider callback or server-to-server status check |
+| `failed` | Payment attempt failed | Manual admin update where needed | Verified provider failure/status result |
+| `fulfilled` | Order shipped / completed | Manual admin update | Manual fulfilment or future shipping workflow |
+| `refunded` | Refund recorded | Manual admin update only | Verified refund result plus immutable refund entry |
+
+Phase 0 does not receive live payment callbacks or move real funds. A browser
+redirect is never sufficient evidence for a future live payment.
 
 ---
 
@@ -205,23 +208,25 @@ is 42% of omzet, so estimated gross profit is 58%.
 
 ---
 
-## 10. Required Environment Variables For Checkout
+## 10. Phase 0 Checkout Environment
 
 ```bash
-NEXT_PUBLIC_SITE_URL=https://jamora.kaumtech.com
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
-STRIPE_SECRET_KEY=sk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...
 STRAPI_URL=http://strapi:1337
+JAMORA_STOREFRONT_API_SECRET=change_me_storefront_to_strapi_secret
+CUSTOMER_SESSION_TOKEN=change_me_customer_session_token
+CUSTOMER_ACCOUNTS_ENABLED=false
+STRUCTURED_CHECKOUT_ENABLED=false
 JAMORA_COST_RATIO=0.42
 ```
 
 Notes:
 
-- `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` boleh terekspos di browser.
-- `STRIPE_SECRET_KEY` dan `STRIPE_WEBHOOK_SECRET` hanya boleh ada di server.
 - `STRAPI_URL=http://strapi:1337` dipakai oleh storefront container untuk akses
   Strapi di jaringan Docker internal.
+- Payment credential belum diperlukan karena Phase 0 tetap mock.
+- Phase 2 akan menambahkan konfigurasi provider-neutral untuk manual bank
+  transfer/RoPay dan callback terverifikasi. Provider lain dapat ditambahkan
+  kemudian melalui interface payment yang sama.
 
 ---
 
@@ -244,8 +249,7 @@ Notes:
 | Simulated email confirmation | Done |
 | Visit analytics capture | Done |
 | Sales / omzet / profit Strapi widget | Done |
-| Stripe Checkout API route | Todo |
-| Checkout button integration | Todo |
-| Stripe webhook verification | Todo |
-| Create paid order in Strapi | Todo |
+| Live payment request adapter (bank transfer/RoPay) | Phase 2 |
+| Verified live provider callback/status handling | Phase 2 |
+| Finalize paid order from verified live provider callback | Phase 2 |
 | Shipping/tracking fields | Later |

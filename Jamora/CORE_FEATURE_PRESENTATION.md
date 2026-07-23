@@ -74,7 +74,8 @@ Alur pembelian dibuat sederhana dari katalog sampai konfirmasi order.
 
 Cart tersimpan di browser sehingga item tetap tersedia saat customer berpindah halaman.
 
-> **Current status:** alur checkout demo sudah tersedia. Integrasi Stripe Checkout dan webhook pembayaran real masih tahap berikutnya.
+> **Current status:** alur checkout demo sudah tersedia. Manual bank
+> transfer/RoPay dan callback provider terverifikasi belum diaktifkan.
 
 Phase 0 adds a Romania-first checkout foundation:
 
@@ -192,7 +193,7 @@ An overview of Jamora's core feature readiness based on the current implementati
 | Romania structured address | **Foundation Ready** | Checkout can persist editable `RO` address fields and a formatted snapshot. |
 | EUR/RON immutable price snapshot | **Foundation Ready** | Orders retain integer minor-unit amounts, rate, source, and timestamp. |
 | Versioned consent categories | **Foundation Ready** | Necessary, analytics, and lifecycle-email purposes are separated; optional consent defaults off. |
-| Real Stripe payment & webhook | **Next Phase** | Real payments and automatic Stripe confirmations have not been activated yet. |
+| Live bank transfer/RoPay + verified callback | **Phase 2** | Live settlement and idempotent provider confirmation have not been activated; other providers may later use the same interface. |
 
 ---
 

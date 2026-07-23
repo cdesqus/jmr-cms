@@ -360,8 +360,12 @@ docker compose up -d --build
 
 For a real paid store, the remaining pieces are:
 
-- Stripe Checkout endpoint in `jamora-web`.
-- Stripe webhook handling to record paid orders in Strapi.
+- Manual bank-transfer and RoPay payment adapters behind the provider-neutral
+  payment interface.
+- Signed/verified provider callback or server-to-server status handling that
+  finalizes a paid order idempotently. Browser redirects remain advisory.
+- Optional future payment providers can use the same interface without changing
+  the order source of truth.
 - Domain + TLS via Caddy, Nginx, or Traefik.
 - Transactional email for order confirmations.
 - Regular Postgres backups.
