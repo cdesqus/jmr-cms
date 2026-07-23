@@ -24,6 +24,8 @@ export function SiteHeader() {
       .split("; ")
       .find((item) => item.startsWith(`${LOCALE_COOKIE}=`))
       ?.split("=")[1];
+    // Locale sources are browser-only, so hydrate the SSR-safe default after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocale(asLocale(cookieLocale ?? (navigator.language.toLowerCase().startsWith("ro") ? "ro" : "en")));
   }, []);
 

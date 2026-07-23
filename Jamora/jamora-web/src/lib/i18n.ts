@@ -160,7 +160,7 @@ export function asLocale(value?: string | null): Locale {
   return value === "ro" ? "ro" : "en";
 }
 
-export function localized<T extends Record<string, any>>(
+export function localized<T extends Record<string, unknown>>(
   content: T,
   locale: Locale,
   key: keyof T & string,
