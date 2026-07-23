@@ -1,21 +1,34 @@
 "use strict";
 
-function buildConsentDecision(consent, anonymousSessionId, source) {
+const MAX_PENDING = 20;
+function buildConsentDecision(consent, anonymousSessionId, decisionId) {
   return {
+    decisionId,
     anonymousSessionId,
-    purposes: {
-      necessary: consent.necessary,
-      analytics: consent.analytics,
-      lifecycleEmail: consent.lifecycleEmail,
-    },
-    policyVersion: consent.version,
-    source,
-    decidedAt: consent.decidedAt,
+    necessary: consent.necessary,
+    analytics: consent.analytics,
+    lifecycleEmail: consent.lifecycleEmail,
   };
 }
 
 function pendingConsentQueue(queue, decision) {
-  return [...queue, decision];
+  return [...queue, decision].slice(-MAX_PENDING);
 }
 
-module.exports = { buildConsentDecision, pendingConsentQueue };
+function parsePendingConsentQueue(raw) {
+  try {
+    const value = JSON.parse(raw ?? "[]");
+    return Array.isArray(value) ? value.slice(-MAX_PENDING) : [];
+  } catch {
+    return [];
+  }
+}
+function dispatchConsentPersistenceFailure(dispatch) {
+  dispatch("jamora:consent-persistence-failed");
+}
+module.exports = {
+  buildConsentDecision,
+  dispatchConsentPersistenceFailure,
+  parsePendingConsentQueue,
+  pendingConsentQueue,
+};

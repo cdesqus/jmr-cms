@@ -50,14 +50,19 @@ function createCustomerAuthLimiter(options = {}) {
     if (!ipResult.allowed) return ipResult;
     return consume(`${operation}:account:${opaqueKey(account)}`);
   };
+  const checkTrusted = (operation, account) =>
+    consume(`${operation}:account:${opaqueKey(account)}`);
 
   return {
     check,
+    checkTrusted,
     bucketCount: () => buckets.size,
-    guard(ctx, operation) {
+    guard(ctx, operation, options = {}) {
       const input = ctx.request?.body ?? {};
       const account = input.email ?? input.documentId ?? input.token;
-      const result = check(operation, ctx.ip ?? ctx.request?.ip, account);
+      const result = options.trustedProxy
+        ? checkTrusted(operation, account)
+        : check(operation, ctx.ip ?? ctx.request?.ip, account);
       if (result.allowed) return true;
       ctx.set("Retry-After", String(result.retryAfter));
       ctx.status = 429;

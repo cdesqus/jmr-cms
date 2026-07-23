@@ -2,16 +2,29 @@ import { CustomerAuthError } from "../services/customer-auth";
 import { hasStorefrontSecret } from "./storefront-secret.cjs";
 import { customerAuthGate } from "./customer-auth-policy.cjs";
 import { customerAuthLimiter } from "./customer-auth-limiter.cjs";
+import { authorizeCustomerSession } from "./customer-session-authorization.cjs";
 
 const body = (ctx: any) => ctx.request.body ?? {};
 const stringValue = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
 const isEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const authService = () => strapi.service("api::customer-auth.customer-auth");
+const storefrontSecretValid = (ctx: any) => hasStorefrontSecret(
+  ctx.get("x-jamora-storefront-secret"),
+  process.env.JAMORA_STOREFRONT_API_SECRET,
+);
 const ready = (ctx: any, operation: string) =>
-  customerAuthGate(ctx) && customerAuthLimiter.guard(ctx, operation);
+  customerAuthGate(ctx) && customerAuthLimiter.guard(ctx, operation, {
+    trustedProxy: storefrontSecretValid(ctx),
+  });
 
 const respondWithError = (ctx: any, error: unknown) => {
+  if ((error as any)?.code === "password_work_overloaded") {
+    ctx.set("Retry-After", "1");
+    ctx.status = 429;
+    ctx.body = { error: "Request could not be completed." };
+    return;
+  }
   if (error instanceof CustomerAuthError) {
     ctx.status =
       error.code === "duplicate"
@@ -138,16 +151,7 @@ export default {
   },
 
   async session(ctx: any) {
-    if (!ready(ctx, "session")) return;
-    const configuredSecret = process.env.JAMORA_STOREFRONT_API_SECRET;
-    if (!hasStorefrontSecret(
-      ctx.get("x-jamora-storefront-secret"),
-      configuredSecret,
-    )) {
-      ctx.status = 401;
-      ctx.body = { error: "Storefront API secret required." };
-      return;
-    }
+    if (!authorizeCustomerSession(ctx)) return;
     const input = body(ctx);
     const documentId = stringValue(input.documentId);
     const sessionVersion = input.sessionVersion;

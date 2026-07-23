@@ -79,7 +79,11 @@ STRUCTURED_CHECKOUT_ENABLED=true
   normalized-account windows (`CUSTOMER_AUTH_RATE_LIMIT=8`,
   `CUSTOMER_AUTH_RATE_WINDOW_MS=60000`), a bounded bucket store
   (`CUSTOMER_AUTH_RATE_MAX_BUCKETS=10000`), and bounded password hashing
-  (`CUSTOMER_AUTH_HASH_CONCURRENCY=4`). This in-memory limiter is a
+  (`CUSTOMER_AUTH_HASH_CONCURRENCY=4`,
+  `CUSTOMER_AUTH_HASH_QUEUE_LIMIT=32`). Storefront-proxied requests authenticate
+  with the shared secret and use account buckets without sharing the
+  container IP bucket; direct Strapi callers use both IP and account buckets.
+  This in-memory limiter is a
   single-Strapi-instance foundation; replace it with a shared Redis/distributed
   limiter before running multiple Strapi replicas.
 - `STRUCTURED_CHECKOUT_ENABLED=false` keeps legacy text-address checkout and

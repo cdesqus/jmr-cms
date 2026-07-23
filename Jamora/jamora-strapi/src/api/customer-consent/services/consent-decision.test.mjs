@@ -8,7 +8,8 @@ import {
 
 test("creates one append-only row per explicit purpose decision", () => {
   const decision = validateConsentDecision({
-    anonymousSessionId: " anonymous-123 ",
+    decisionId: "550e8400-e29b-41d4-a716-446655440001",
+    anonymousSessionId: "550e8400-e29b-41d4-a716-446655440000",
     purposes: { necessary: true, analytics: false, lifecycleEmail: true },
     policyVersion: "2026-07-24",
     source: "cookie-banner",
@@ -24,23 +25,26 @@ test("creates one append-only row per explicit purpose decision", () => {
 });
 
 test("requires exactly one anonymous or verified customer reference", () => {
-  assert.throws(() => validateConsentDecision({ purposes: {}, policyVersion: "v", source: "x", decidedAt: new Date().toISOString() }));
+  assert.throws(() => validateConsentDecision({ decisionId: "550e8400-e29b-41d4-a716-446655440001", purposes: {}, policyVersion: "v", source: "x", decidedAt: new Date().toISOString() }));
   assert.throws(() => validateConsentDecision({
-    anonymousSessionId: "a", customerDocumentId: "c",
+    decisionId: "550e8400-e29b-41d4-a716-446655440001", anonymousSessionId: "550e8400-e29b-41d4-a716-446655440000", customerDocumentId: "c",
     purposes: {}, policyVersion: "v", source: "x", decidedAt: new Date().toISOString(),
   }));
 });
 
 test("withdrawal creates a new denied row rather than an update instruction", () => {
   const rows = consentRows(validateConsentDecision({
-    anonymousSessionId: "a",
+    decisionId: "550e8400-e29b-41d4-a716-446655440001",
+    anonymousSessionId: "550e8400-e29b-41d4-a716-446655440000",
     purposes: { analytics: false },
     policyVersion: "v2",
     source: "privacy-settings",
     decidedAt: "2026-07-24T00:00:00.000Z",
   }));
   assert.deepEqual(rows, [{
-    anonymousSessionId: "a",
+    decisionId: "550e8400-e29b-41d4-a716-446655440001",
+    decisionPurposeKey: "550e8400-e29b-41d4-a716-446655440001:analytics",
+    anonymousSessionId: "550e8400-e29b-41d4-a716-446655440000",
     purpose: "analytics",
     granted: false,
     policyVersion: "v2",

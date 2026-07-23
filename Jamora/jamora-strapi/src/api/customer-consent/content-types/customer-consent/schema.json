@@ -10,6 +10,8 @@
     "draftAndPublish": false
   },
   "attributes": {
+    "decisionId": { "type": "string", "required": true },
+    "decisionPurposeKey": { "type": "string", "required": true, "unique": true },
     "customerDocumentId": { "type": "string" },
     "anonymousSessionId": { "type": "string" },
     "purpose": { "type": "enumeration", "enum": ["necessary", "analytics", "lifecycle_email"], "required": true },

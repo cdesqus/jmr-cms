@@ -22,6 +22,7 @@ const CUSTOMER_FIELDS = [
 ] as const;
 const passwordWork = createBoundedWork(
   Number(process.env.CUSTOMER_AUTH_HASH_CONCURRENCY ?? "4"),
+  Number(process.env.CUSTOMER_AUTH_HASH_QUEUE_LIMIT ?? "32"),
 );
 
 type SafeCustomer = {

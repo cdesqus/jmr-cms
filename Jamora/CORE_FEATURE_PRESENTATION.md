@@ -191,8 +191,8 @@ An overview of Jamora's core feature readiness based on the current implementati
 | Visit, sales, revenue & profit analytics | **Ready** | The dashboard displays visits, sales, revenue, and estimated profit. |
 | Demo checkout flow | **Ready** | The checkout journey can be demonstrated without processing a real payment. |
 | Guest + verified customer identity | **Automated verification complete; live smoke pending** | Guest orders require no account. Production accounts stay disabled until Phase 6 adds verification/recovery delivery. |
-| Romania structured address | **Foundation Ready** | Checkout can persist editable `RO` address fields and a formatted snapshot. |
-| EUR/RON immutable price snapshot | **Foundation Ready** | Orders retain integer minor-unit amounts, rate, source, and timestamp. |
+| Romania structured address | **Automated verification complete; live smoke pending** | Checkout can persist editable `RO` address fields and a formatted snapshot. |
+| EUR/RON immutable price snapshot | **Automated verification complete; live smoke pending** | Orders retain integer minor-unit amounts, rate, source, and timestamp. |
 | Versioned consent categories | **Automated verification complete; live smoke pending** | Necessary, analytics, and lifecycle-email decisions are persisted append-only per purpose; optional processing defaults off. |
 | Live bank transfer/RoPay + verified callback | **Phase 2** | Live settlement and idempotent provider confirmation have not been activated; other providers may later use the same interface. |
 

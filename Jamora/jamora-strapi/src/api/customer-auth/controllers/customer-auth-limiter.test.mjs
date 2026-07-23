@@ -54,3 +54,17 @@ test("bounds in-memory buckets under high-cardinality abuse", () => {
   }
   assert.ok(limiter.bucketCount() <= 4);
 });
+
+test("many distinct trusted storefront customers do not share a container IP bucket", () => {
+  const limiter = createCustomerAuthLimiter({ limit: 2, windowMs: 60_000, now: () => 0 });
+  for (let index = 0; index < 20; index += 1) {
+    assert.equal(limiter.checkTrusted("login", `user-${index}@example.com`).allowed, true);
+  }
+});
+
+test("direct callers still consume IP and account buckets", () => {
+  const limiter = createCustomerAuthLimiter({ limit: 2, windowMs: 60_000, now: () => 0 });
+  assert.equal(limiter.check("login", "198.51.100.1", "a@example.com").allowed, true);
+  assert.equal(limiter.check("login", "198.51.100.1", "b@example.com").allowed, true);
+  assert.equal(limiter.check("login", "198.51.100.1", "c@example.com").allowed, false);
+});

@@ -3,6 +3,10 @@ import {
   consentRows,
   validateConsentDecision,
 } from "../services/consent-decision.cjs";
+import {
+  persistConsentRows,
+  strapiConsentAdapter,
+} from "../services/consent-transaction.cjs";
 
 export default {
   async createDecision(ctx: any) {
@@ -29,10 +33,10 @@ export default {
           return;
         }
       }
-      const documents = strapi.documents("api::customer-consent.customer-consent");
-      for (const row of consentRows(decision)) {
-        await documents.create({ data: row });
-      }
+      await persistConsentRows(
+        strapiConsentAdapter(strapi, "api::customer-consent.customer-consent"),
+        consentRows(decision),
+      );
       ctx.status = 202;
       ctx.body = { accepted: true };
     } catch {

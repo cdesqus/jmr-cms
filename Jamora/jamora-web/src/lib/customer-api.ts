@@ -34,11 +34,9 @@ export async function customerRequest<T>(
 ): Promise<{ status: number; body: T }> {
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/json");
-  if (path === SESSION_PATH) {
-    const secret = process.env.JAMORA_STOREFRONT_API_SECRET;
-    if (!secret) throw new Error("JAMORA_STOREFRONT_API_SECRET is required.");
-    headers.set("x-jamora-storefront-secret", secret);
-  }
+  const secret = process.env.JAMORA_STOREFRONT_API_SECRET;
+  if (!secret) throw new Error("JAMORA_STOREFRONT_API_SECRET is required.");
+  headers.set("x-jamora-storefront-secret", secret);
 
   const response = await fetch(`${STRAPI_URL}${path}`, {
     ...init,

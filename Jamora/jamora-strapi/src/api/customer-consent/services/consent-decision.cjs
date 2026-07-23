@@ -5,6 +5,7 @@ const PURPOSES = {
   analytics: "analytics",
   lifecycleEmail: "lifecycle_email",
 };
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const requiredString = (value, name) => {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required.`);
@@ -20,6 +21,11 @@ function validateConsentDecision(input) {
   if (Boolean(anonymousSessionId) === Boolean(customerDocumentId)) {
     throw new Error("Exactly one customer reference is required.");
   }
+  if (anonymousSessionId && !UUID.test(anonymousSessionId)) {
+    throw new Error("anonymousSessionId must be a UUID.");
+  }
+  const decisionId = requiredString(input.decisionId, "decisionId");
+  if (!UUID.test(decisionId)) throw new Error("decisionId must be a UUID.");
   const decidedAt = requiredString(input.decidedAt, "decidedAt");
   if (!Number.isFinite(Date.parse(decidedAt))) throw new Error("decidedAt must be ISO datetime.");
   const purposes = input.purposes;
@@ -31,6 +37,7 @@ function validateConsentDecision(input) {
   }
   if (Object.keys(purposes).length === 0) throw new Error("At least one purpose is required.");
   return {
+    decisionId,
     ...(anonymousSessionId ? { anonymousSessionId } : { customerDocumentId }),
     purposes,
     policyVersion: requiredString(input.policyVersion, "policyVersion"),
@@ -44,6 +51,8 @@ function consentRows(decision) {
     ? { anonymousSessionId: decision.anonymousSessionId }
     : { customerDocumentId: decision.customerDocumentId };
   return Object.entries(decision.purposes).map(([purpose, granted]) => ({
+    decisionId: decision.decisionId,
+    decisionPurposeKey: `${decision.decisionId}:${PURPOSES[purpose]}`,
     ...reference,
     purpose: PURPOSES[purpose],
     granted,

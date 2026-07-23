@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { CONSENT_VERSION, parseConsent, type Consent } from "@/lib/commerce/consent.cjs";
 import {
   buildConsentDecision,
+  dispatchConsentPersistenceFailure,
+  parsePendingConsentQueue,
   pendingConsentQueue,
   type ConsentDecision,
 } from "@/lib/commerce/consent-persistence.cjs";
@@ -21,24 +23,27 @@ async function postDecision(decision: ConsentDecision) {
       keepalive: true,
     });
     if (!response.ok) throw new Error(`Consent persistence returned ${response.status}.`);
-    const pending = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]");
+    const pending = parsePendingConsentQueue(localStorage.getItem(PENDING_KEY));
     localStorage.setItem(
       PENDING_KEY,
-      JSON.stringify(Array.isArray(pending)
-        ? pending.filter((item) => item.decidedAt !== decision.decidedAt)
-        : []),
+      JSON.stringify(pending.filter((item) => item.decisionId !== decision.decisionId)),
     );
   } catch (error) {
-    const pending = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]");
-    const queue = Array.isArray(pending) ? pending : [];
-    if (!queue.some((item) => item.decidedAt === decision.decidedAt)) {
-      localStorage.setItem(
-        PENDING_KEY,
-        JSON.stringify(pendingConsentQueue(queue, decision)),
-      );
+    try {
+      const queue = parsePendingConsentQueue(localStorage.getItem(PENDING_KEY));
+      if (!queue.some((item) => item.decisionId === decision.decisionId)) {
+        localStorage.setItem(
+          PENDING_KEY,
+          JSON.stringify(pendingConsentQueue(queue, decision)),
+        );
+      }
+    } catch (storageError) {
+      console.warn("Consent retry queue is unavailable.", storageError);
+    } finally {
+      console.warn("Consent decision queued for retry.", error);
+      dispatchConsentPersistenceFailure((eventName) =>
+        window.dispatchEvent(new CustomEvent(eventName)));
     }
-    console.warn("Consent decision queued for retry.", error);
-    window.dispatchEvent(new CustomEvent("jamora:consent-persistence-failed"));
   }
 }
 
@@ -82,10 +87,8 @@ export function CookieConsent() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw || !parseConsent(raw)) setVisible(true);
-      const pending = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]");
-      if (Array.isArray(pending)) {
-        for (const decision of pending) void postDecision(decision);
-      }
+      const pending = parsePendingConsentQueue(localStorage.getItem(PENDING_KEY));
+      for (const decision of pending) void postDecision(decision);
     } catch {
       setVisible(true);
     }
@@ -100,7 +103,7 @@ export function CookieConsent() {
     return created;
   }
 
-  function persist(consent: Consent, source: string) {
+  function persist(consent: Consent) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(consent));
     } catch {
@@ -112,7 +115,7 @@ export function CookieConsent() {
     void postDecision(buildConsentDecision(
       consent,
       anonymousSessionId(),
-      source,
+      crypto.randomUUID(),
     ));
     setVisible(false);
   }
@@ -126,13 +129,13 @@ export function CookieConsent() {
   });
 
   function acceptAll() {
-    persist(consent(true, true), "cookie-banner:accept-all");
+    persist(consent(true, true));
   }
   function rejectAll() {
-    persist(consent(false, false), "cookie-banner:reject-non-essential");
+    persist(consent(false, false));
   }
   function saveChoices() {
-    persist(consent(analytics, lifecycleEmail), "cookie-banner:save-choices");
+    persist(consent(analytics, lifecycleEmail));
   }
 
   if (!visible) return null;

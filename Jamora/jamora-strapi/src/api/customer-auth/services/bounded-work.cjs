@@ -1,6 +1,13 @@
 "use strict";
 
-function createBoundedWork(maxConcurrent) {
+class BoundedWorkOverloadError extends Error {
+  constructor() {
+    super("Password work capacity exceeded.");
+    this.code = "password_work_overloaded";
+  }
+}
+
+function createBoundedWork(maxConcurrent, maxQueued = 32) {
   const limit = Number.isSafeInteger(maxConcurrent) && maxConcurrent > 0
     ? maxConcurrent
     : 4;
@@ -22,9 +29,13 @@ function createBoundedWork(maxConcurrent) {
   };
 
   return (work) => new Promise((resolve, reject) => {
+    if (queue.length >= maxQueued) {
+      reject(new BoundedWorkOverloadError());
+      return;
+    }
     queue.push({ work, resolve, reject });
     startNext();
   });
 }
 
-module.exports = { createBoundedWork };
+module.exports = { BoundedWorkOverloadError, createBoundedWork };

@@ -1,4 +1,5 @@
 import { getCurrentCustomer } from "@/lib/customer-api";
+import { buildStorefrontConsentPayload } from "@/lib/commerce/consent-route-policy.cjs";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
@@ -17,14 +18,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid consent decision." }, { status: 400 });
   }
   const customer = await getCurrentCustomer();
-  const body = customer
-    ? {
-        ...input,
-        anonymousSessionId: undefined,
-        customerDocumentId: customer.documentId,
-        customerSessionVersion: customer.sessionVersion,
-      }
-    : input;
+  let body;
+  try {
+    body = buildStorefrontConsentPayload(input, customer);
+  } catch {
+    return Response.json({ error: "Invalid consent decision." }, { status: 400 });
+  }
   try {
     const response = await fetch(
       `${STRAPI_URL}/api/jamora/internal/consent-decisions`,

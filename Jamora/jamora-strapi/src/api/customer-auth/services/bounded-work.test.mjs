@@ -20,3 +20,17 @@ test("bounds concurrent password-hash work", async () => {
   release();
   await Promise.all(jobs);
 });
+
+test("rejects excess queued password work with a typed overload", async () => {
+  const bounded = createBoundedWork(1, 1);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const active = bounded(() => gate);
+  const queued = bounded(() => gate);
+  await assert.rejects(
+    bounded(() => gate),
+    (error) => error?.code === "password_work_overloaded",
+  );
+  release();
+  await Promise.all([active, queued]);
+});
