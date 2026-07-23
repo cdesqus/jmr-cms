@@ -76,6 +76,20 @@ Cart tersimpan di browser sehingga item tetap tersedia saat customer berpindah h
 
 > **Current status:** alur checkout demo sudah tersedia. Integrasi Stripe Checkout dan webhook pembayaran real masih tahap berikutnya.
 
+Phase 0 adds a Romania-first checkout foundation:
+
+- guest checkout stays available without implicit account creation;
+- optional verified customer accounts support registration, login, logout, and
+  password recovery;
+- Romanian addresses are stored as structured fields plus a formatted snapshot;
+- every new order captures immutable EUR reference and RON checkout values,
+  including exchange rate source and timestamp;
+- essential, analytics, and lifecycle-email consent are versioned separately,
+  with optional categories off by default.
+
+Customer accounts and structured checkout have separate rollout flags, so
+either feature can be disabled without disabling the other.
+
 ---
 
 ## 6. Content & Product Management
@@ -135,7 +149,9 @@ Platform disiapkan untuk kebutuhan ekspansi ke pasar Eropa.
 - Struktur data compliance dan sertifikasi produk
 - Arsitektur headless yang mudah dikembangkan
 
-Target pengembangan pembayaran mencakup kartu, Apple Pay, Google Pay, iDEAL, Klarna/Sofort, dan Bancontact melalui payment gateway.
+Payment remains mock in Phase 0. Live bank transfer/RoPay integration and
+verified provider callbacks are planned for Phase 2; browser success alone will
+not be treated as proof of payment.
 
 ---
 
@@ -172,6 +188,10 @@ An overview of Jamora's core feature readiness based on the current implementati
 | Order management & tracking | **Ready** | Admins can manage orders, while customers can check their order status. |
 | Visit, sales, revenue & profit analytics | **Ready** | The dashboard displays visits, sales, revenue, and estimated profit. |
 | Demo checkout flow | **Ready** | The checkout journey can be demonstrated without processing a real payment. |
+| Guest + verified customer identity | **Foundation Ready** | Guest orders require no account; optional accounts provide verification, sessions, logout, and recovery. |
+| Romania structured address | **Foundation Ready** | Checkout can persist editable `RO` address fields and a formatted snapshot. |
+| EUR/RON immutable price snapshot | **Foundation Ready** | Orders retain integer minor-unit amounts, rate, source, and timestamp. |
+| Versioned consent categories | **Foundation Ready** | Necessary, analytics, and lifecycle-email purposes are separated; optional consent defaults off. |
 | Real Stripe payment & webhook | **Next Phase** | Real payments and automatic Stripe confirmations have not been activated yet. |
 
 ---

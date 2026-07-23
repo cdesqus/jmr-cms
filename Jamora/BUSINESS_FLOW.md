@@ -8,7 +8,7 @@ payment, dan fulfillment. Stack saat ini:
 | Storefront | Next.js | Website customer, katalog, cart, checkout trigger |
 | CMS / Admin | Strapi | Kelola produk, stok, konten, dan order |
 | Database | Postgres | Simpan data CMS, produk, order |
-| Payment | Stripe Checkout | Pembayaran kartu dan metode lokal yang didukung Stripe |
+| Payment | Mock payment (Phase 0) | Membuat payment/order demo; pembayaran live baru Phase 2 |
 | Reverse Proxy | Nginx | Routing domain ke storefront dan Strapi |
 | Analytics | Strapi + visit events | Visit, sales, omzet, estimated profit dashboard |
 
@@ -21,10 +21,10 @@ payment, dan fulfillment. Stack saat ini:
 3. Customer browsing produk di website Jamora.
 4. Customer menambahkan produk ke cart.
 5. Customer klik checkout.
-6. Storefront membuat Stripe Checkout Session.
-7. Customer membayar di halaman Stripe.
-8. Stripe mengirim webhook ke sistem Jamora.
-9. Sistem membuat atau memperbarui order di Strapi.
+6. Storefront memvalidasi harga terkini dan alamat checkout.
+7. Flow mock-paid membuat payment snapshot dan order demo.
+8. Sistem menyimpan order dengan alamat Romania dan snapshot EUR/RON.
+9. Guest tetap guest; account hanya dibuat melalui registrasi eksplisit.
 10. Admin memproses order, packing, shipping, lalu update status.
 11. Customer menerima konfirmasi order dan pengiriman.
 
@@ -38,9 +38,9 @@ payment, dan fulfillment. Stack saat ini:
 | 2 | Customer | Lihat katalog / detail produk | Storefront fetch produk dari Strapi |
 | 3 | Customer | Add to cart | Cart tersimpan di browser |
 | 4 | Customer | Buka cart | Total dihitung dari item cart |
-| 5 | Customer | Proceed to checkout | Storefront request Stripe Checkout Session |
-| 6 | Customer | Bayar di Stripe | Stripe memproses pembayaran |
-| 7 | Stripe | Kirim webhook payment success | Sistem mencatat order paid di Strapi |
+| 5 | Customer | Proceed to checkout | Storefront validasi cart dan alamat |
+| 6 | Customer | Konfirmasi demo checkout | Mock payment diproses tanpa transaksi uang |
+| 7 | System | Simpan hasil mock-paid | Sistem mencatat payment dan order paid di Strapi |
 | 8 | Customer | Redirect ke success page | Customer melihat status order |
 
 ---
@@ -65,19 +65,45 @@ payment, dan fulfillment. Stack saat ini:
 - Strapi sudah menjadi CMS utama.
 - Storefront sudah fetch katalog dari Strapi.
 - Cart sudah jalan di browser.
-- Checkout payment belum aktif dan masih perlu implementasi Stripe Checkout.
-- Order model sudah disiapkan di Strapi, tapi webhook Stripe belum disambung.
+- Checkout Phase 0 memakai payment mock; tidak ada uang yang dipindahkan.
+- Order demo tersimpan di Strapi. Payment live, callback provider, dan
+  rekonsiliasi baru dijadwalkan pada Phase 2.
 
-### Target Checkout Flow
+### Phase 0 Commerce Foundation
+
+- Guest checkout memakai `anonymousSessionId` opaque dan tidak membuat customer
+  account secara implisit.
+- Customer account dibuat hanya dari registrasi. Email harus diverifikasi
+  sebelum login; logout menghapus session; password reset menaikkan
+  `sessionVersion` sehingga session sebelumnya tidak berlaku.
+- Route account storefront: `/account/register`, `/account/verify`,
+  `/account/login`, `/account`, `/account/forgot-password`, dan
+  `/account/reset-password`.
+- Consent dibedakan menjadi `necessary`, `analytics`, dan `lifecycle_email`.
+  Consent opsional memakai policy version, default off, dan penolakan tidak
+  menghasilkan optional consent/event baru.
+- Checkout terstruktur menyimpan recipient, phone, ISO country code, county,
+  locality, postal code, street, building, unit, instructions, serta formatted
+  snapshot. Phase 0 menerima Romania (`RO`) saja.
+- Nilai uang memakai integer minor units. Order menyimpan snapshot immutable:
+  nilai referensi EUR, nilai checkout RON, rate, source, dan timestamp.
+- Field order Phase 0 bersifat additive: `customerDocumentId`,
+  `anonymousSessionId`, `shippingAddress`, `priceSnapshot`, dan
+  `paymentDocumentId`; field legacy tetap dapat dibaca.
+- `CUSTOMER_ACCOUNTS_ENABLED` dan `STRUCTURED_CHECKOUT_ENABLED` dapat dimatikan
+  secara independen untuk kembali ke pengalaman lama.
+
+### Current Demo Checkout Flow
 
 1. `POST /api/checkout` menerima cart items dari frontend.
 2. API memvalidasi item dan harga dari Strapi, bukan percaya harga dari browser.
-3. API membuat Stripe Checkout Session.
-4. Browser redirect ke `session.url`.
-5. Stripe memanggil webhook `POST /api/stripe/webhook`.
-6. Webhook memverifikasi signature Stripe.
-7. Jika payment sukses, sistem membuat order di Strapi dengan status `paid`.
-8. Customer diarahkan ke success page.
+3. API menormalisasi alamat Romania dan membuat snapshot EUR/RON.
+4. Mock payment dan order demo dibuat dengan status `paid`.
+5. Customer diarahkan ke success page dan dapat mencari order yang sama dari
+   halaman tracking.
+
+Payment provider live dan webhook/callback terverifikasi belum tersedia di
+Phase 0. Implementasi payment live dijadwalkan pada Phase 2.
 
 ---
 
@@ -94,13 +120,11 @@ flowchart TD
     G --> H[Cart calculates subtotal and shipping message]
     H --> I[Customer clicks Proceed to checkout]
     I --> J[Next.js API validates cart with Strapi product data]
-    J --> K[Create Stripe Checkout Session]
-    K --> L[Redirect customer to Stripe Checkout]
-    L --> M{Payment result}
-    M -->|Success| N[Stripe sends checkout.session.completed webhook]
-    M -->|Failed or canceled| O[Customer returns to cart]
-    N --> P[Webhook verifies Stripe signature]
-    P --> Q[Create or update order in Strapi]
+    J --> K[Normalize Romania address and EUR/RON snapshot]
+    K --> L[Create mock payment]
+    L --> M{Demo result}
+    M -->|Success| Q[Create order in Strapi]
+    M -->|Canceled| O[Customer returns to cart]
     Q --> R[Admin sees paid order in Strapi]
     R --> S[Pack and ship order]
     S --> T[Mark order fulfilled]
@@ -126,28 +150,25 @@ flowchart LR
 
 ---
 
-## 7. Flowchart - Stripe Checkout Sequence
+## 7. Flowchart - Phase 0 Checkout Sequence
 
 ```mermaid
 sequenceDiagram
     participant Customer
     participant Storefront as Next.js Storefront
     participant Strapi
-    participant Stripe
+    participant Payment as Mock Payment
 
     Customer->>Storefront: Click Proceed to checkout
     Storefront->>Storefront: Read cart from browser state
     Storefront->>Strapi: Fetch latest product prices
     Strapi-->>Storefront: Product data
-    Storefront->>Stripe: Create Checkout Session
-    Stripe-->>Storefront: Checkout URL
-    Storefront-->>Customer: Redirect to Stripe Checkout
-    Customer->>Stripe: Complete payment
-    Stripe->>Storefront: Webhook checkout.session.completed
-    Storefront->>Stripe: Verify webhook signature
+    Storefront->>Storefront: Normalize address and snapshot EUR/RON
+    Storefront->>Payment: Create mock payment
+    Payment-->>Storefront: Demo paid result
     Storefront->>Strapi: Create order with status paid
     Strapi-->>Storefront: Order saved
-    Stripe-->>Customer: Redirect to success URL
+    Storefront-->>Customer: Redirect to success URL
 ```
 
 ---

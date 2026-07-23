@@ -47,7 +47,31 @@ STOREFRONT_PORT=3095
 POSTGRES_PORT=5439
 JAMORA_COST_RATIO=0.42
 JAMORA_STOREFRONT_URL=https://jamora.kaumtech.com
+JAMORA_ADMIN_API_SECRET=$(openssl rand -base64 32)
+JAMORA_STOREFRONT_API_SECRET=$(openssl rand -base64 32)
+CUSTOMER_SESSION_TOKEN=$(openssl rand -base64 48)
+
+# Independent Phase 0 rollout flags
+CUSTOMER_ACCOUNTS_ENABLED=false
+STRUCTURED_CHECKOUT_ENABLED=false
 ```
+
+`CUSTOMER_SESSION_TOKEN` signs customer sessions and must be long, random, and
+different from `ADMIN_SESSION_TOKEN`, Strapi JWT secrets, and the two
+storefront/admin API secrets. Rotating it logs out every customer session.
+
+Enable each Phase 0 surface independently after deploying the additive schemas:
+
+```bash
+CUSTOMER_ACCOUNTS_ENABLED=true
+STRUCTURED_CHECKOUT_ENABLED=true
+```
+
+- `CUSTOMER_ACCOUNTS_ENABLED=false` disables the account routes/API while guest
+  checkout remains available.
+- `STRUCTURED_CHECKOUT_ENABLED=false` keeps legacy text-address checkout and
+  omits the new structured address/currency persistence path.
+- Both flags can be false at the same time for the pre-Phase-0 behavior.
 
 Then build and start:
 
@@ -223,6 +247,38 @@ Check product API from the server:
 ```bash
 curl http://localhost:9014/api/products
 ```
+
+## Phase 0 Verification and Smoke Test
+
+Run the repository gate before deployment:
+
+```bash
+cd jamora-web
+node --test src/lib/commerce/*.test.mjs
+npm run lint
+npm run build
+cd ../jamora-strapi
+node --test src/api/customer-auth/services/customer-credentials.test.mjs
+npm run build
+```
+
+Then use a non-production environment with both flags enabled and verify:
+
+1. Existing staff admin login and product catalogue still work.
+2. Guest checkout creates an order without a customer account.
+3. The order contains a structured `RO` address and immutable EUR/RON snapshot.
+4. Registration returns a demo verification link/token only outside production.
+5. Verification enables login; logout clears the customer session.
+6. Password reset invalidates the earlier session.
+7. Rejecting optional consent creates no optional consent or analytics record.
+8. `/track` finds the guest order by order/tracking number.
+
+Never expect raw verification/reset tokens in production responses. Configure a
+transactional email delivery path before enabling customer accounts in
+production.
+
+The Phase 0 payment record and checkout are still mock. They do not settle
+funds. Live payment and provider callback handling are Phase 2 work.
 
 ---
 
