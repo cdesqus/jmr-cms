@@ -7,6 +7,7 @@ import {
 import {
   runRecoveryPrivacyWork,
 } from "./customer-recovery-privacy.cjs";
+import { createBoundedWork } from "./bounded-work.cjs";
 
 const CUSTOMER_UID = "api::customer-account.customer-account";
 const DUMMY_PASSWORD_HASH =
@@ -19,6 +20,9 @@ const CUSTOMER_FIELDS = [
   "active",
   "sessionVersion",
 ] as const;
+const passwordWork = createBoundedWork(
+  Number(process.env.CUSTOMER_AUTH_HASH_CONCURRENCY ?? "4"),
+);
 
 type SafeCustomer = {
   documentId: string;
@@ -79,7 +83,7 @@ export default ({ strapi }: { strapi: any }) => {
           data: {
             name: input.name.trim(),
             email,
-            passwordHash: await hashPassword(input.password),
+            passwordHash: await passwordWork(() => hashPassword(input.password)),
             active: true,
             sessionVersion: 0,
             verificationTokenHash: hashOpaqueToken(verificationToken),
@@ -134,10 +138,10 @@ export default ({ strapi }: { strapi: any }) => {
     ): Promise<SafeCustomer & { sessionVersion: number }> {
       const customer = await findBy({ email: { $eq: normalizeEmail(emailInput) } });
       const usable = customer?.active && customer?.emailVerifiedAt;
-      const passwordMatches = await verifyPassword(
+      const passwordMatches = await passwordWork(() => verifyPassword(
         password,
         usable ? customer.passwordHash : DUMMY_PASSWORD_HASH,
-      );
+      ));
       if (!usable || !passwordMatches) {
         throw new CustomerAuthError("invalid_credentials", "Invalid email or password.");
       }
@@ -179,7 +183,7 @@ export default ({ strapi }: { strapi: any }) => {
           resetExpiresAt: { $gt: new Date().toISOString() },
         },
         data: {
-          passwordHash: await hashPassword(password),
+          passwordHash: await passwordWork(() => hashPassword(password)),
           resetTokenHash: null,
           resetExpiresAt: null,
           sessionVersion: customer.sessionVersion + 1,

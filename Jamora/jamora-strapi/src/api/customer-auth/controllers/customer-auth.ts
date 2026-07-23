@@ -1,11 +1,15 @@
 import { CustomerAuthError } from "../services/customer-auth";
 import { hasStorefrontSecret } from "./storefront-secret.cjs";
+import { customerAuthGate } from "./customer-auth-policy.cjs";
+import { customerAuthLimiter } from "./customer-auth-limiter.cjs";
 
 const body = (ctx: any) => ctx.request.body ?? {};
 const stringValue = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
 const isEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const authService = () => strapi.service("api::customer-auth.customer-auth");
+const ready = (ctx: any, operation: string) =>
+  customerAuthGate(ctx) && customerAuthLimiter.guard(ctx, operation);
 
 const respondWithError = (ctx: any, error: unknown) => {
   if (error instanceof CustomerAuthError) {
@@ -28,6 +32,7 @@ const respondWithError = (ctx: any, error: unknown) => {
 
 export default {
   async register(ctx: any) {
+    if (!ready(ctx, "register")) return;
     const input = body(ctx);
     const name = stringValue(input.name);
     const email = stringValue(input.email);
@@ -50,17 +55,25 @@ export default {
     try {
       const customer = await authService().register({ name, email, password });
       if (process.env.NODE_ENV === "production") {
-        const { verificationToken: _token, ...safe } = customer;
-        ctx.body = safe;
+        ctx.body = { accepted: true };
       } else {
         ctx.body = customer;
       }
     } catch (error) {
+      if (
+        process.env.NODE_ENV === "production" &&
+        error instanceof CustomerAuthError &&
+        error.code === "duplicate"
+      ) {
+        ctx.body = { accepted: true };
+        return;
+      }
       respondWithError(ctx, error);
     }
   },
 
   async verifyEmail(ctx: any) {
+    if (!ready(ctx, "verify")) return;
     const token = stringValue(body(ctx).token);
     if (!token) {
       ctx.status = 400;
@@ -75,6 +88,7 @@ export default {
   },
 
   async login(ctx: any) {
+    if (!ready(ctx, "login")) return;
     const input = body(ctx);
     const email = stringValue(input.email);
     const password = typeof input.password === "string" ? input.password : "";
@@ -91,6 +105,7 @@ export default {
   },
 
   async forgotPassword(ctx: any) {
+    if (!ready(ctx, "forgot-password")) return;
     const email = stringValue(body(ctx).email);
     if (!email) {
       ctx.status = 400;
@@ -101,6 +116,7 @@ export default {
   },
 
   async resetPassword(ctx: any) {
+    if (!ready(ctx, "reset-password")) return;
     const input = body(ctx);
     const token = stringValue(input.token);
     const password = typeof input.password === "string" ? input.password : "";
@@ -122,6 +138,7 @@ export default {
   },
 
   async session(ctx: any) {
+    if (!ready(ctx, "session")) return;
     const configuredSecret = process.env.JAMORA_STOREFRONT_API_SECRET;
     if (!hasStorefrontSecret(
       ctx.get("x-jamora-storefront-secret"),

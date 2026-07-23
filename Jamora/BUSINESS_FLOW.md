@@ -80,8 +80,10 @@ payment, dan fulfillment. Stack saat ini:
   `/account/login`, `/account`, `/account/forgot-password`, dan
   `/account/reset-password`.
 - Consent dibedakan menjadi `necessary`, `analytics`, dan `lifecycle_email`.
-  Consent opsional memakai policy version, default off, dan penolakan tidak
-  menghasilkan optional consent/event baru.
+  Setiap keputusan eksplisit dikirim melalui route browser-safe dan disimpan
+  append-only sebagai satu row per purpose, lengkap dengan policy version,
+  source, dan waktu keputusan. Penolakan/withdrawal menambah row `granted=false`
+  baru; optional tracking tetap off.
 - Checkout terstruktur menyimpan recipient, phone, ISO country code, county,
   locality, postal code, street, building, unit, instructions, serta formatted
   snapshot. Phase 0 menerima Romania (`RO`) saja.
@@ -92,6 +94,11 @@ payment, dan fulfillment. Stack saat ini:
   `paymentDocumentId`; field legacy tetap dapat dibaca.
 - `CUSTOMER_ACCOUNTS_ENABLED` dan `STRUCTURED_CHECKOUT_ENABLED` dapat dimatikan
   secara independen untuk kembali ke pengalaman lama.
+- Di production, account customer tetap unavailable sampai Phase 6 menyediakan
+  delivery verifikasi/recovery; kedua flag account dan delivery harus `true`.
+- Proteksi abuse account saat ini memakai limiter IP + normalized account
+  in-memory untuk satu proses Strapi. Deployment multi-instance memerlukan
+  limiter distributed (misalnya Redis).
 
 ### Current Demo Checkout Flow
 

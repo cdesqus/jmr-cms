@@ -2,8 +2,45 @@
 
 import { useEffect, useState } from "react";
 import { CONSENT_VERSION, parseConsent, type Consent } from "@/lib/commerce/consent.cjs";
+import {
+  buildConsentDecision,
+  pendingConsentQueue,
+  type ConsentDecision,
+} from "@/lib/commerce/consent-persistence.cjs";
 
 const STORAGE_KEY = "jamora.consent.2026-07-24";
+const ANONYMOUS_KEY = "jamora.anonymous-session.v1";
+const PENDING_KEY = "jamora.consent.pending.v1";
+
+async function postDecision(decision: ConsentDecision) {
+  try {
+    const response = await fetch("/api/jamora/consent", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(decision),
+      keepalive: true,
+    });
+    if (!response.ok) throw new Error(`Consent persistence returned ${response.status}.`);
+    const pending = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]");
+    localStorage.setItem(
+      PENDING_KEY,
+      JSON.stringify(Array.isArray(pending)
+        ? pending.filter((item) => item.decidedAt !== decision.decidedAt)
+        : []),
+    );
+  } catch (error) {
+    const pending = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]");
+    const queue = Array.isArray(pending) ? pending : [];
+    if (!queue.some((item) => item.decidedAt === decision.decidedAt)) {
+      localStorage.setItem(
+        PENDING_KEY,
+        JSON.stringify(pendingConsentQueue(queue, decision)),
+      );
+    }
+    console.warn("Consent decision queued for retry.", error);
+    window.dispatchEvent(new CustomEvent("jamora:consent-persistence-failed"));
+  }
+}
 
 const CATEGORIES: {
   key: "necessary" | "analytics" | "lifecycleEmail";
@@ -45,13 +82,25 @@ export function CookieConsent() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw || !parseConsent(raw)) setVisible(true);
+      const pending = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]");
+      if (Array.isArray(pending)) {
+        for (const decision of pending) void postDecision(decision);
+      }
     } catch {
       setVisible(true);
     }
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
-  function persist(consent: Consent) {
+  function anonymousSessionId() {
+    const existing = localStorage.getItem(ANONYMOUS_KEY);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    localStorage.setItem(ANONYMOUS_KEY, created);
+    return created;
+  }
+
+  function persist(consent: Consent, source: string) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(consent));
     } catch {
@@ -60,6 +109,11 @@ export function CookieConsent() {
     window.dispatchEvent(
       new CustomEvent("jamora:consent-changed", { detail: consent }),
     );
+    void postDecision(buildConsentDecision(
+      consent,
+      anonymousSessionId(),
+      source,
+    ));
     setVisible(false);
   }
 
@@ -72,13 +126,13 @@ export function CookieConsent() {
   });
 
   function acceptAll() {
-    persist(consent(true, true));
+    persist(consent(true, true), "cookie-banner:accept-all");
   }
   function rejectAll() {
-    persist(consent(false, false));
+    persist(consent(false, false), "cookie-banner:reject-non-essential");
   }
   function saveChoices() {
-    persist(consent(analytics, lifecycleEmail));
+    persist(consent(analytics, lifecycleEmail), "cookie-banner:save-choices");
   }
 
   if (!visible) return null;

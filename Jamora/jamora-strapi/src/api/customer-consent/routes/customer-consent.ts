@@ -1,3 +1,2 @@
-import { factories } from "@strapi/strapi";
-
-export default factories.createCoreRouter("api::customer-consent.customer-consent");
+import routes from "./customer-consent.cjs";
+export default routes;

@@ -53,6 +53,7 @@ CUSTOMER_SESSION_TOKEN=$(openssl rand -base64 48)
 
 # Independent Phase 0 rollout flags
 CUSTOMER_ACCOUNTS_ENABLED=false
+CUSTOMER_VERIFICATION_DELIVERY_ENABLED=false
 STRUCTURED_CHECKOUT_ENABLED=false
 ```
 
@@ -63,12 +64,24 @@ storefront/admin API secrets. Rotating it logs out every customer session.
 Enable each Phase 0 surface independently after deploying the additive schemas:
 
 ```bash
-CUSTOMER_ACCOUNTS_ENABLED=true
 STRUCTURED_CHECKOUT_ENABLED=true
 ```
 
 - `CUSTOMER_ACCOUNTS_ENABLED=false` disables the account routes/API while guest
   checkout remains available.
+- Production customer accounts remain disabled until Phase 6 supplies a real
+  verification/recovery delivery path. In production,
+  `CUSTOMER_ACCOUNTS_ENABLED=true` additionally requires
+  `CUSTOMER_VERIFICATION_DELIVERY_ENABLED=true`; otherwise both the storefront
+  and direct Strapi customer endpoints return 404. Do not set the delivery flag
+  merely to bypass this safety check.
+- Public customer authentication has conservative per-operation IP and
+  normalized-account windows (`CUSTOMER_AUTH_RATE_LIMIT=8`,
+  `CUSTOMER_AUTH_RATE_WINDOW_MS=60000`), a bounded bucket store
+  (`CUSTOMER_AUTH_RATE_MAX_BUCKETS=10000`), and bounded password hashing
+  (`CUSTOMER_AUTH_HASH_CONCURRENCY=4`). This in-memory limiter is a
+  single-Strapi-instance foundation; replace it with a shared Redis/distributed
+  limiter before running multiple Strapi replicas.
 - `STRUCTURED_CHECKOUT_ENABLED=false` keeps legacy text-address checkout and
   omits the new structured address/currency persistence path.
 - Both flags can be false at the same time for the pre-Phase-0 behavior.
@@ -262,7 +275,9 @@ node --test src/api/customer-auth/services/customer-credentials.test.mjs
 npm run build
 ```
 
-Then use a non-production environment with both flags enabled and verify:
+Automated unit, lint, build, and Compose configuration verification is complete.
+Docker live smoke is still pending. In a non-production environment, use both
+rollout flags and manually verify:
 
 1. Existing staff admin login and product catalogue still work.
 2. Guest checkout creates an order without a customer account.
@@ -270,12 +285,15 @@ Then use a non-production environment with both flags enabled and verify:
 4. Registration returns a demo verification link/token only outside production.
 5. Verification enables login; logout clears the customer session.
 6. Password reset invalidates the earlier session.
-7. Rejecting optional consent creates no optional consent or analytics record.
+7. Every explicit consent choice creates one append-only row per purpose.
+   Rejecting or withdrawing optional consent records `granted=false`; it does
+   not enable optional analytics or lifecycle processing.
 8. `/track` finds the guest order by order/tracking number.
 
 Never expect raw verification/reset tokens in production responses. Configure a
 transactional email delivery path before enabling customer accounts in
-production.
+production. The runtime safety gate intentionally keeps them unavailable until
+that delivery flag is enabled.
 
 The Phase 0 payment record and checkout are still mock. They do not settle
 funds. Live payment and provider callback handling are Phase 2 work.

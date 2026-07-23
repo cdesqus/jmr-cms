@@ -1,3 +1,2 @@
-import { factories } from "@strapi/strapi";
-
-export default factories.createCoreRouter("api::payment-refund.payment-refund");
+import routes from "./payment-refund.cjs";
+export default routes;

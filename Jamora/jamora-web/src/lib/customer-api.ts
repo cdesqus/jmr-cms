@@ -8,6 +8,7 @@ import {
   browserSafeOperationBody as filterOperationBody,
   safeCustomer as filterCustomer,
 } from "./customer-api-safety.cjs";
+import { customerAccountsAvailable } from "./customer-account-policy.cjs";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
@@ -25,7 +26,7 @@ export type SafeCustomer = {
 };
 
 export const customerAccountsEnabled = () =>
-  process.env.CUSTOMER_ACCOUNTS_ENABLED === "true";
+  customerAccountsAvailable();
 
 export async function customerRequest<T>(
   path: string,

@@ -86,7 +86,8 @@ Phase 0 adds a Romania-first checkout foundation:
 - every new order captures immutable EUR reference and RON checkout values,
   including exchange rate source and timestamp;
 - essential, analytics, and lifecycle-email consent are versioned separately,
-  with optional categories off by default.
+  with optional categories off by default; every explicit choice is persisted
+  append-only per purpose, including denial and later withdrawal.
 
 Customer accounts and structured checkout have separate rollout flags, so
 either feature can be disabled without disabling the other.
@@ -189,10 +190,10 @@ An overview of Jamora's core feature readiness based on the current implementati
 | Order management & tracking | **Ready** | Admins can manage orders, while customers can check their order status. |
 | Visit, sales, revenue & profit analytics | **Ready** | The dashboard displays visits, sales, revenue, and estimated profit. |
 | Demo checkout flow | **Ready** | The checkout journey can be demonstrated without processing a real payment. |
-| Guest + verified customer identity | **Foundation Ready** | Guest orders require no account; optional accounts provide verification, sessions, logout, and recovery. |
+| Guest + verified customer identity | **Automated verification complete; live smoke pending** | Guest orders require no account. Production accounts stay disabled until Phase 6 adds verification/recovery delivery. |
 | Romania structured address | **Foundation Ready** | Checkout can persist editable `RO` address fields and a formatted snapshot. |
 | EUR/RON immutable price snapshot | **Foundation Ready** | Orders retain integer minor-unit amounts, rate, source, and timestamp. |
-| Versioned consent categories | **Foundation Ready** | Necessary, analytics, and lifecycle-email purposes are separated; optional consent defaults off. |
+| Versioned consent categories | **Automated verification complete; live smoke pending** | Necessary, analytics, and lifecycle-email decisions are persisted append-only per purpose; optional processing defaults off. |
 | Live bank transfer/RoPay + verified callback | **Phase 2** | Live settlement and idempotent provider confirmation have not been activated; other providers may later use the same interface. |
 
 ---
