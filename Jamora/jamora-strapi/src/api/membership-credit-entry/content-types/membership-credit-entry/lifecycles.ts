@@ -8,6 +8,9 @@ export default {
   beforeCreate(event: any) {
     validateLedgerEntry(event.params.data);
   },
+  beforeCreateMany(event: any) {
+    for (const entry of event.params.data ?? []) validateLedgerEntry(entry);
+  },
   beforeUpdate: immutable,
   beforeUpdateMany: immutable,
   beforeDelete: immutable,
