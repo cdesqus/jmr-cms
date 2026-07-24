@@ -16,6 +16,7 @@
     "startsAt": { "type": "datetime" },
     "endsAt": { "type": "datetime" },
     "paymentDocumentId": { "type": "string", "unique": true },
+    "renewalOfMembershipDocumentId": { "type": "string" },
     "cachedRemainingCredits": { "type": "integer", "default": 0 }
   }
 }

@@ -11,7 +11,7 @@ import {
 } from "./membership-service-contract.cjs";
 import { listAdminMemberships } from "./membership-admin-projection.cjs";
 import { listCustomerMemberships } from "./membership-customer-projection.cjs";
-import { purchasePaymentReference } from "./membership-purchase-key.cjs";
+import { prepareMembershipPurchase } from "./membership-purchase.cjs";
 
 const uid = {
   plan: "api::membership-plan.membership-plan",
@@ -66,45 +66,26 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
     },
     async preparePurchase(customerDocumentId: string, planDocumentId: string, idempotencyKey: string, renewalOf?: string) {
       assertMembershipEnabled();
-      const plan = await documents(uid.plan).findOne({ documentId: planDocumentId });
-      if (!plan?.active) throw new Error("Membership plan not found.");
-      if (renewalOf) {
-        const previous = await findMembership(renewalOf);
-        if (!previous || previous.customerDocumentId !== customerDocumentId) throw new Error("Membership not found.");
-      }
-      const paymentDocumentId = purchasePaymentReference(customerDocumentId, idempotencyKey);
-      const existing = await documents(uid.membership).findMany({
-        filters: { paymentDocumentId: { $eq: paymentDocumentId } },
-        limit: 1,
-      });
-      if (existing[0]) {
-        if (existing[0].customerDocumentId !== customerDocumentId || existing[0].planDocumentId !== planDocumentId) {
-          throw new Error("Membership purchase conflict.");
-        }
-        const activation = await confirmation.confirm({ membershipId: existing[0].documentId, paymentDocumentId });
-        return { membership: activation.membership, paymentDocumentId, mockConfirmed: true };
-      }
-      const membershipNumber = `MEM-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-      const membership = await documents(uid.membership).create({
-        data: {
-          membershipNumber,
-          customerDocumentId,
-          planDocumentId,
-          planSnapshot: {
-            name: plan.name,
-            durationMonths: Number(plan.durationMonths),
-            packageCredits: plan.packageCredits,
-            eligibleProductSlugs: plan.eligibleProductSlugs,
-            priceEurMinor: plan.priceEurMinor,
-            priceRonMinor: plan.priceRonMinor,
-          },
-          status: "pending_payment",
-          paymentDocumentId,
-          cachedRemainingCredits: 0,
+      return prepareMembershipPurchase({
+        findPlan: (documentId: string) => documents(uid.plan).findOne({ documentId }),
+        findMembership,
+        async findByPaymentReference(paymentDocumentId: string) {
+          const rows = await documents(uid.membership).findMany({
+            filters: { paymentDocumentId: { $eq: paymentDocumentId } },
+            limit: 1,
+          });
+          return rows[0] ?? null;
         },
+        createMembership: (data: any) => documents(uid.membership).create({ data }),
+        confirm: confirmation.confirm,
+        randomUUID: () => crypto.randomUUID(),
+      }, {
+        customerDocumentId,
+        planDocumentId,
+        operation: renewalOf ? "renew" : "purchase",
+        idempotencyKey,
+        renewalOf,
       });
-      const activation = await confirmation.confirm({ membershipId: membership.documentId, paymentDocumentId });
-      return { membership: activation.membership, paymentDocumentId, mockConfirmed: true };
     },
     async expireDueMemberships(now = new Date(), limit = 100) {
       assertMembershipEnabled();

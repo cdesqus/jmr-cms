@@ -24,6 +24,15 @@ function membershipCustomerBoundary(env, customer) {
   return null;
 }
 
+function trustedMembershipHeaders(inputHeaders, secret, customer) {
+  const headers = new Headers(inputHeaders);
+  headers.set("content-type", "application/json");
+  headers.set("x-jamora-storefront-secret", secret);
+  headers.set("x-jamora-customer-document-id", customer.documentId);
+  headers.set("x-jamora-customer-session-version", String(customer.sessionVersion));
+  return headers;
+}
+
 function membershipOperationBody(operation, input) {
   if (!input || typeof input !== "object") throw new Error("Invalid request.");
   const planDocumentId = text(input.planDocumentId);
@@ -94,4 +103,5 @@ module.exports = {
   membershipCustomerBoundary,
   membershipDashboard,
   membershipOperationBody,
+  trustedMembershipHeaders,
 };

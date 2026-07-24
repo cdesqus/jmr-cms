@@ -5,7 +5,20 @@ import {
   membershipCustomerBoundary,
   membershipDashboard,
   membershipOperationBody,
+  trustedMembershipHeaders,
 } from "./membership-customer-policy.cjs";
+
+test("trusted membership headers overwrite caller-controlled values", () => {
+  const headers = trustedMembershipHeaders({
+    "x-jamora-storefront-secret": "forged",
+    "x-jamora-customer-document-id": "forged",
+    "x-jamora-customer-session-version": "999",
+    accept: "application/json",
+  }, "real-secret", { documentId: "customer-1", sessionVersion: 0 });
+  assert.equal(headers.get("x-jamora-storefront-secret"), "real-secret");
+  assert.equal(headers.get("x-jamora-customer-document-id"), "customer-1");
+  assert.equal(headers.get("x-jamora-customer-session-version"), "0");
+});
 
 test("returns exact disabled and no-session boundary states", () => {
   assert.deepEqual(membershipCustomerBoundary({ MEMBERSHIP_ENABLED: "TRUE" }, { documentId: "c1" }), {

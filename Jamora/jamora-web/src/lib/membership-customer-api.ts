@@ -1,5 +1,6 @@
 import "server-only";
 import type { SafeCustomer } from "@/lib/customer-api";
+import { trustedMembershipHeaders } from "@/lib/membership-customer-policy.cjs";
 
 const STRAPI_URL = process.env.STRAPI_URL ?? "http://localhost:9014";
 
@@ -46,13 +47,7 @@ export async function membershipCustomerFetch<T>(
   const response = await fetch(`${STRAPI_URL}${path}`, {
     ...init,
     cache: "no-store",
-    headers: {
-      "content-type": "application/json",
-      "x-jamora-storefront-secret": secret,
-      "x-jamora-customer-document-id": customer.documentId,
-      "x-jamora-customer-session-version": String(customer.sessionVersion),
-      ...(init.headers ?? {}),
-    },
+    headers: trustedMembershipHeaders(init.headers, secret, customer),
   });
   return {
     status: response.status,

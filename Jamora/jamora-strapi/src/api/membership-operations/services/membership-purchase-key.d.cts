@@ -1,1 +1,6 @@
-export function purchasePaymentReference(customerDocumentId: string, idempotencyKey: string): string;
+export function purchasePaymentReference(
+  customerDocumentId: string,
+  operation: "purchase" | "renew",
+  idempotencyKey: string,
+  renewalOf?: string,
+): string;
