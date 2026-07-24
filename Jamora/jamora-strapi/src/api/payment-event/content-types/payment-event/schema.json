@@ -1,0 +1,19 @@
+{
+  "kind": "collectionType",
+  "collectionName": "payment_events",
+  "info": {
+    "singularName": "payment-event",
+    "pluralName": "payment-events",
+    "displayName": "Payment Event"
+  },
+  "options": { "draftAndPublish": false },
+  "attributes": {
+    "eventId": { "type": "string", "required": true, "unique": true },
+    "paymentDocumentId": { "type": "string", "required": true },
+    "transition": { "type": "string", "required": true },
+    "actor": { "type": "string", "required": true },
+    "reason": { "type": "text" },
+    "providerEventId": { "type": "string", "unique": true },
+    "occurredAt": { "type": "datetime", "required": true }
+  }
+}

@@ -16,12 +16,22 @@
     "subjectId": { "type": "string", "required": true },
     "method": { "type": "enumeration", "enum": ["mock", "bank_transfer", "ropay"], "required": true },
     "provider": { "type": "string", "required": true },
-    "status": { "type": "enumeration", "enum": ["created", "awaiting_payment", "processing", "paid", "expired", "failed", "cancelled", "refunded"], "required": true },
+    "status": { "type": "enumeration", "enum": ["created", "awaiting_payment", "processing", "pending_provider", "paid", "underpaid", "overpaid", "currency_mismatch", "expired", "failed", "cancelled", "refunded"], "required": true },
     "amountMinor": { "type": "integer", "required": true, "min": 0 },
     "currency": { "type": "string", "required": true },
     "providerReference": { "type": "string" },
     "priceSnapshot": { "type": "json", "required": true },
     "paidAt": { "type": "datetime" },
-    "expiresAt": { "type": "datetime" }
+    "expiresAt": { "type": "datetime" },
+    "customerDocumentId": { "type": "string" },
+    "ownerDocumentId": { "type": "string" },
+    "purpose": { "type": "enumeration", "enum": ["order", "membership_purchase", "membership_renewal"] },
+    "orderDocumentId": { "type": "string" },
+    "membershipDocumentId": { "type": "string" },
+    "paymentReference": { "type": "string", "unique": true },
+    "receivedAmountMinor": { "type": "integer", "min": 0 },
+    "receivedCurrency": { "type": "string" },
+    "receivedAt": { "type": "datetime" },
+    "settlementKey": { "type": "string", "unique": true }
   }
 }
