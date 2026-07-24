@@ -64,3 +64,18 @@ The follow-up security review was addressed with test-first regressions:
 
 Fresh remediation verification passed 73 tests and the Strapi build. Runtime
 packaging copied 18 CJS assets and validated 82 compiled JavaScript files.
+
+### GET customer-session transport
+
+The customer authorization boundary now accepts trusted internal
+`x-jamora-customer-document-id` and
+`x-jamora-customer-session-version` headers after, and only after, validating
+`x-jamora-storefront-secret`. GET requests require those headers and never
+depend on a request body. Session versions use strict positive-safe-integer
+parsing. POST operations retain the validated body transport as a compatibility
+fallback.
+
+Behavioral controller tests cover bodyless `/plans` and `/me` requests, missing
+identity, malformed versions, and forged identity/secret attempts. Fresh final
+verification passed 79 tests and the Strapi build; runtime packaging copied 19
+CJS assets and validated 82 compiled JavaScript files.

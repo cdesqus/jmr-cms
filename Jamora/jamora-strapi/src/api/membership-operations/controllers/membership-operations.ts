@@ -1,4 +1,4 @@
-import { hasStorefrontSecret } from "../../customer-auth/controllers/storefront-secret.cjs";
+import { authorizeMembershipCustomer } from "./membership-customer-authorization.cjs";
 
 const body = (ctx: any) => ctx.request.body ?? {};
 const text = (value: unknown) => typeof value === "string" ? value.trim() : "";
@@ -10,18 +10,12 @@ function enabled(ctx: any) {
 }
 
 async function customer(ctx: any) {
-  if (!enabled(ctx)) return null;
-  if (!hasStorefrontSecret(ctx.get("x-jamora-storefront-secret"), process.env.JAMORA_STOREFRONT_API_SECRET)) {
-    ctx.status = 401; ctx.body = { error: "Storefront API secret required." }; return null;
-  }
-  const input = body(ctx);
-  if (!text(input.documentId) || !Number.isInteger(input.sessionVersion)) {
-    ctx.status = 400; ctx.body = { error: "Validated customer session fields are required." }; return null;
-  }
-  const result = await (strapi.service("api::customer-auth.customer-auth") as any)
-    .findActiveSessionCustomer(text(input.documentId), input.sessionVersion);
-  if (!result) { ctx.status = 401; ctx.body = { error: "Invalid session." }; return null; }
-  return result;
+  return authorizeMembershipCustomer(
+    ctx,
+    (documentId: string, sessionVersion: number) =>
+      (strapi.service("api::customer-auth.customer-auth") as any)
+        .findActiveSessionCustomer(documentId, sessionVersion),
+  );
 }
 
 function admin(ctx: any) {
