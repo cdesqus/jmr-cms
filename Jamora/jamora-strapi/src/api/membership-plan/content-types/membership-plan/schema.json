@@ -1,0 +1,19 @@
+{
+  "kind": "collectionType",
+  "collectionName": "membership_plans",
+  "info": {
+    "singularName": "membership-plan",
+    "pluralName": "membership-plans",
+    "displayName": "Membership Plan"
+  },
+  "options": { "draftAndPublish": false },
+  "attributes": {
+    "name": { "type": "string", "required": true },
+    "active": { "type": "boolean", "default": true, "required": true },
+    "durationMonths": { "type": "enumeration", "enum": ["3", "6", "12"], "required": true },
+    "priceEurMinor": { "type": "integer", "required": true, "min": 1 },
+    "priceRonMinor": { "type": "integer", "required": true, "min": 1 },
+    "packageCredits": { "type": "integer", "required": true, "min": 1 },
+    "eligibleProductSlugs": { "type": "json", "required": true }
+  }
+}

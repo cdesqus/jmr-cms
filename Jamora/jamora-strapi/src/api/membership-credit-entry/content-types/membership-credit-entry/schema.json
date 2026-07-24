@@ -1,0 +1,23 @@
+{
+  "kind": "collectionType",
+  "collectionName": "membership_credit_entries",
+  "info": {
+    "singularName": "membership-credit-entry",
+    "pluralName": "membership-credit-entries",
+    "displayName": "Membership Credit Entry"
+  },
+  "options": { "draftAndPublish": false },
+  "attributes": {
+    "entryId": { "type": "string", "required": true, "unique": true },
+    "idempotencyKey": { "type": "string", "required": true, "unique": true },
+    "membershipDocumentId": { "type": "string", "required": true },
+    "kind": { "type": "enumeration", "enum": ["grant", "reserve", "release", "redeem", "reverse", "expire", "admin_adjustment"], "required": true },
+    "credits": { "type": "integer", "min": 0 },
+    "creditDelta": { "type": "integer" },
+    "checkoutReference": { "type": "string" },
+    "orderDocumentId": { "type": "string" },
+    "actor": { "type": "string", "required": true },
+    "reason": { "type": "text" },
+    "occurredAt": { "type": "datetime", "required": true }
+  }
+}
