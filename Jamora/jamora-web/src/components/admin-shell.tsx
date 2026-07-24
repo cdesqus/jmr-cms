@@ -25,6 +25,7 @@ const NAV_GROUPS = [
     { href: "/admin/customers", label: "Customers", icon: "customers", roles: ["owner", "support"] },
   ] },
   { label: "Storefront", items: [
+    { href: "/admin/membership", label: "Membership", icon: "membership", roles: ["owner"], membershipOnly: true },
     { href: "/admin/promotions", label: "Promotions", icon: "promotions", roles: ["owner", "content"] },
     { href: "/admin/content", label: "Content", icon: "content", roles: ["owner", "content"] },
   ] },
@@ -34,12 +35,14 @@ const NAV_GROUPS = [
   ] },
 ];
 
-export function AdminShell({ children, identity }: { children: React.ReactNode; identity: AdminIdentity | null }) {
+export function AdminShell({ children, identity, membershipEnabled = false }: { children: React.ReactNode; identity: AdminIdentity | null; membershipEnabled?: boolean }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(true);
   const role: AdminRole = identity?.role ?? "owner";
   const visibleGroups = NAV_GROUPS
-    .map((group) => ({ ...group, items: group.items.filter((item) => (item.roles as AdminRole[]).includes(role)) }))
+    .map((group) => ({ ...group, items: group.items.filter((item) =>
+      (item.roles as AdminRole[]).includes(role) && (!("membershipOnly" in item) || !item.membershipOnly || membershipEnabled),
+    ) }))
     .filter((group) => group.items.length > 0);
   const visibleNav = visibleGroups.flatMap((group) => group.items);
 
@@ -232,6 +235,9 @@ function FlatIcon({ name }: { name: string }) {
         <circle cx="15" cy="15" r=".75" fill="currentColor" stroke="none" />
       </svg>
     );
+  }
+  if (name === "membership") {
+    return <svg {...common}><path d="M5 4h14v16H5z" /><path d="M8 8h8M8 12h8M8 16h5" /><path d="M16 14v4M14 16h4" /></svg>;
   }
   if (name === "returns") {
     return (
