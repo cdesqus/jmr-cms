@@ -1,9 +1,9 @@
 "use strict";
 
 const { randomUUID } = require("node:crypto");
+const { assertMembershipCanReserve, ledgerBalance } = require("./membership-domain.cjs");
 
 const iso = (value = new Date()) => (value instanceof Date ? value : new Date(value)).toISOString();
-const coherent = (entry, membership) => ({ entry, membership, idempotent: true });
 
 function addMonths(date, months) {
   const result = new Date(date);
@@ -11,88 +11,142 @@ function addMonths(date, months) {
   return result;
 }
 
-function createMembershipTransactions(adapter) {
-  async function execute(idempotencyKey, work) {
-    if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) throw new TypeError("idempotencyKey is required.");
-    const existing = await adapter.findEntry(idempotencyKey);
-    if (existing) return coherent(existing, await adapter.findMembership(existing.membershipDocumentId));
+function assertEnabled(env) {
+  if (env.MEMBERSHIP_ENABLED !== "true") {
+    const error = new Error("Not found.");
+    error.code = "membership_disabled";
+    throw error;
+  }
+}
+
+function immutableMatch(entry, expected) {
+  const fields = ["membershipDocumentId", "kind", "credits", "creditDelta", "checkoutReference", "orderDocumentId", "reason", "actor"];
+  return fields.every((field) =>
+    !Object.hasOwn(expected, field) ||
+    (entry[field] ?? null) === (expected[field] ?? null));
+}
+
+function idempotentResult(entry, membership, expected) {
+  if (!immutableMatch(entry, expected)) throw new Error("Idempotency key conflict.");
+  return { entry, membership, idempotent: true };
+}
+
+function createMembershipTransactions(adapter, env = process.env) {
+  async function execute(expected, work) {
+    assertEnabled(env);
+    if (typeof expected.idempotencyKey !== "string" || !expected.idempotencyKey.trim()) throw new TypeError("idempotencyKey is required.");
+    const existing = await adapter.findEntry(expected.idempotencyKey);
+    if (existing) return idempotentResult(existing, await adapter.findMembership(expected.membershipDocumentId), expected);
     try {
       return await adapter.transaction(async (tx) => {
-        const raced = await tx.findEntry(idempotencyKey);
-        if (raced) return coherent(raced, await tx.findMembership(raced.membershipDocumentId));
-        return work(tx);
+        const raced = await tx.findEntry(expected.idempotencyKey);
+        if (raced) return idempotentResult(raced, await tx.lockMembership(expected.membershipDocumentId), expected);
+        return work(tx, expected);
       });
     } catch (error) {
-      const raced = await adapter.findEntry(idempotencyKey);
-      if (raced) return coherent(raced, await adapter.findMembership(raced.membershipDocumentId));
+      const raced = await adapter.findEntry(expected.idempotencyKey);
+      if (raced) return idempotentResult(raced, await adapter.findMembership(expected.membershipDocumentId), expected);
       throw error;
     }
   }
 
+  async function authoritative(tx, membershipId) {
+    const membership = await tx.lockMembership(membershipId);
+    if (!membership) throw new Error("Membership not found.");
+    const entries = await tx.listEntries(membershipId);
+    return { membership, entries, balance: ledgerBalance(entries) };
+  }
+
+  async function appendAndCache(tx, data, currentEntries) {
+    const entry = await tx.createEntry(data);
+    const balance = ledgerBalance([...currentEntries, entry]);
+    const membership = await tx.setBalance(data.membershipDocumentId, balance);
+    return { entry, membership, idempotent: false };
+  }
+
+  function ensureUnsettled(entries, checkoutReference) {
+    if (entries.some((entry) =>
+      entry.checkoutReference === checkoutReference &&
+      (entry.kind === "release" || entry.kind === "redeem"))) {
+      throw new Error("Reservation already settled.");
+    }
+  }
+
   return {
-    reserveCredits(input) {
-      return execute(input.idempotencyKey, async (tx) => {
-        const membership = await tx.claimCredits(input.membershipId, input.credits, input.now ?? new Date());
-        const entry = await tx.createEntry(entryData(input, "reserve", input.credits, "customer"));
-        return { entry, membership, idempotent: false };
+    async reserveCredits(input) {
+      assertEnabled(env);
+      const expected = entryData(input, "reserve", input.credits, "customer");
+      return execute(expected, async (tx) => {
+        const state = await authoritative(tx, input.membershipId);
+        assertMembershipCanReserve(state.membership, state.balance, input.credits, input.now ?? new Date());
+        return appendAndCache(tx, expected, state.entries);
       });
     },
-    releaseCredits(input) {
-      return execute(input.idempotencyKey, async (tx) => {
-        const reservation = await tx.findReservation(input.membershipId, input.checkoutReference);
+    async releaseCredits(input) {
+      assertEnabled(env);
+      const expected = entryData(input, "release", undefined, "customer");
+      return execute(expected, async (tx) => {
+        const state = await authoritative(tx, input.membershipId);
+        const reservation = state.entries.find((entry) => entry.checkoutReference === input.checkoutReference && entry.kind === "reserve");
         if (!reservation) throw new Error("Reservation not found.");
-        const membership = await tx.changeBalance(input.membershipId, reservation.credits);
-        const entry = await tx.createEntry(entryData(input, "release", reservation.credits, "customer"));
-        return { entry, membership, idempotent: false };
+        expected.credits = reservation.credits;
+        ensureUnsettled(state.entries, input.checkoutReference);
+        return appendAndCache(tx, expected, state.entries);
       });
     },
-    redeemCredits(input) {
-      return execute(input.idempotencyKey, async (tx) => {
-        const reservation = await tx.findReservation(input.membershipId, input.checkoutReference);
+    async redeemCredits(input) {
+      assertEnabled(env);
+      const expected = { ...entryData(input, "redeem", undefined, "customer"), orderDocumentId: input.orderId };
+      return execute(expected, async (tx) => {
+        const state = await authoritative(tx, input.membershipId);
+        const reservation = state.entries.find((entry) => entry.checkoutReference === input.checkoutReference && entry.kind === "reserve");
         if (!reservation) throw new Error("Reservation not found.");
-        const membership = await tx.findMembership(input.membershipId);
-        const entry = await tx.createEntry({ ...entryData(input, "redeem", reservation.credits, "customer"), orderDocumentId: input.orderId });
-        return { entry, membership, idempotent: false };
+        expected.credits = reservation.credits;
+        ensureUnsettled(state.entries, input.checkoutReference);
+        return appendAndCache(tx, expected, state.entries);
       });
     },
-    expireMembership(input) {
-      return execute(input.idempotencyKey, async (tx) => {
-        const current = await tx.findMembership(input.membershipId);
-        if (!current) throw new Error("Membership not found.");
-        if (new Date(current.endsAt) > new Date(input.now)) throw new Error("Membership is not due for expiry.");
-        const credits = current.cachedRemainingCredits;
-        const membership = await tx.expire(input.membershipId);
-        const entry = await tx.createEntry(entryData(input, "expire", credits, "system"));
-        return { entry, membership, idempotent: false };
+    async expireMembership(input) {
+      assertEnabled(env);
+      const expected = entryData(input, "expire", undefined, "system");
+      return execute(expected, async (tx) => {
+        const state = await authoritative(tx, input.membershipId);
+        if (new Date(state.membership.endsAt) > new Date(input.now)) throw new Error("Membership is not due for expiry.");
+        expected.credits = state.balance;
+        const result = await appendAndCache(tx, expected, state.entries);
+        result.membership = await tx.expire(input.membershipId);
+        return result;
       });
     },
-    adjustCredits(input) {
-      if (typeof input.reason !== "string" || !input.reason.trim()) return Promise.reject(new TypeError("reason is required for admin_adjustment."));
-      if (!Number.isSafeInteger(input.creditDelta)) return Promise.reject(new TypeError("creditDelta must be a signed safe integer."));
-      return execute(input.idempotencyKey, async (tx) => {
-        const membership = await tx.changeBalance(input.membershipId, input.creditDelta);
-        const entry = await tx.createEntry({
-          ...entryData(input, "admin_adjustment", 0, input.actor),
-          credits: undefined,
-          creditDelta: input.creditDelta,
-          reason: input.reason.trim(),
-        });
-        return { entry, membership, idempotent: false };
+    async adjustCredits(input) {
+      assertEnabled(env);
+      if (typeof input.reason !== "string" || !input.reason.trim()) throw new TypeError("reason is required for admin_adjustment.");
+      if (!Number.isSafeInteger(input.creditDelta)) throw new TypeError("creditDelta must be a signed safe integer.");
+      const expected = {
+        ...entryData(input, "admin_adjustment", undefined, input.actor),
+        creditDelta: input.creditDelta,
+        reason: input.reason.trim(),
+      };
+      return execute(expected, async (tx) => {
+        const state = await authoritative(tx, input.membershipId);
+        return appendAndCache(tx, expected, state.entries);
       });
     },
-    activateMembership(input) {
-      return execute(input.idempotencyKey, async (tx) => {
-        const current = await tx.findMembership(input.membershipId);
-        if (!current || current.status !== "pending_payment") throw new Error("Membership must be pending payment.");
+    async activateMembership(input) {
+      assertEnabled(env);
+      const expected = entryData({ ...input, checkoutReference: input.paymentDocumentId }, "grant", undefined, "payment");
+      return execute(expected, async (tx) => {
+        const state = await authoritative(tx, input.membershipId);
+        if (state.membership.status !== "pending_payment") throw new Error("Membership must be pending payment.");
         const startsAt = new Date(input.now);
-        const credits = current.planSnapshot.packageCredits;
+        expected.credits = state.membership.planSnapshot.packageCredits;
+        const entry = await tx.createEntry(expected);
         const membership = await tx.activate(input.membershipId, {
           paymentDocumentId: input.paymentDocumentId,
           startsAt: iso(startsAt),
-          endsAt: iso(addMonths(startsAt, current.planSnapshot.durationMonths)),
-          credits,
+          endsAt: iso(addMonths(startsAt, state.membership.planSnapshot.durationMonths)),
+          credits: ledgerBalance([...state.entries, entry]),
         });
-        const entry = await tx.createEntry(entryData(input, "grant", credits, "payment"));
         return { entry, membership, idempotent: false };
       });
     },
@@ -105,17 +159,35 @@ function entryData(input, kind, credits, actor) {
     idempotencyKey: input.idempotencyKey,
     membershipDocumentId: input.membershipId,
     kind,
-    credits,
-    checkoutReference: input.checkoutReference,
+    ...(credits === undefined ? {} : { credits }),
+    ...(input.checkoutReference ? { checkoutReference: input.checkoutReference } : {}),
     actor,
     occurredAt: iso(input.now),
   };
 }
 
 function createMemoryMembershipAdapter({ memberships = [], entries = [], failCreate = false } = {}) {
+  const seededEntries = structuredClone(entries);
+  for (const membership of memberships) {
+    if (
+      membership.status === "active" &&
+      membership.cachedRemainingCredits > 0 &&
+      !seededEntries.some((entry) => entry.membershipDocumentId === membership.documentId)
+    ) {
+      seededEntries.push({
+        entryId: `fixture-grant:${membership.documentId}`,
+        idempotencyKey: `fixture-grant:${membership.documentId}`,
+        membershipDocumentId: membership.documentId,
+        kind: "grant",
+        credits: membership.cachedRemainingCredits,
+        actor: "fixture",
+        occurredAt: membership.startsAt,
+      });
+    }
+  }
   const adapter = {
     memberships: new Map(memberships.map((item) => [item.documentId, structuredClone(item)])),
-    entries: structuredClone(entries),
+    entries: seededEntries,
     queue: Promise.resolve(),
     findEntry: async (key) => adapter.entries.find((entry) => entry.idempotencyKey === key),
     findMembership: async (id) => adapter.memberships.get(id),
@@ -126,9 +198,8 @@ function createMemoryMembershipAdapter({ memberships = [], entries = [], failCre
       await prior;
       const membershipSnapshot = structuredClone([...adapter.memberships]);
       const entrySnapshot = structuredClone(adapter.entries);
-      const tx = memoryTx(adapter, failCreate);
       try {
-        return await work(tx);
+        return await work(memoryTx(adapter, failCreate));
       } catch (error) {
         adapter.memberships = new Map(membershipSnapshot);
         adapter.entries.splice(0, adapter.entries.length, ...entrySnapshot);
@@ -149,37 +220,28 @@ function memoryTx(adapter, failCreate) {
   };
   return {
     findEntry: adapter.findEntry,
-    findMembership: adapter.findMembership,
-    findReservation: async (id, ref) => adapter.entries.find((e) => e.membershipDocumentId === id && e.checkoutReference === ref && e.kind === "reserve"),
-    async claimCredits(id, credits, now) {
+    lockMembership: adapter.findMembership,
+    listEntries: async (id) => adapter.entries.filter((entry) => entry.membershipDocumentId === id),
+    async setBalance(id, balance) {
       const membership = requireMembership(id);
-      if (!Number.isSafeInteger(credits) || credits < 1) throw new TypeError("credits must be a positive safe integer.");
-      if (membership.status !== "active" || new Date(now) < new Date(membership.startsAt) || new Date(now) >= new Date(membership.endsAt)) throw new Error("Membership must be active.");
-      if (membership.cachedRemainingCredits < credits) throw new Error("Insufficient membership balance.");
-      membership.cachedRemainingCredits -= credits;
-      return membership;
-    },
-    async changeBalance(id, delta) {
-      const membership = requireMembership(id);
-      if (!Number.isSafeInteger(delta) || membership.cachedRemainingCredits + delta < 0) throw new Error("Invalid membership balance.");
-      membership.cachedRemainingCredits += delta;
+      membership.cachedRemainingCredits = balance;
       return membership;
     },
     async expire(id) {
       const membership = requireMembership(id);
       membership.status = "expired";
-      membership.cachedRemainingCredits = 0;
       return membership;
     },
     async activate(id, values) {
       const membership = requireMembership(id);
+      if (membership.status !== "pending_payment") throw new Error("Membership activation conflict.");
       Object.assign(membership, { status: "active", startsAt: values.startsAt, endsAt: values.endsAt, paymentDocumentId: values.paymentDocumentId, cachedRemainingCredits: values.credits });
       return membership;
     },
     async createEntry(data) {
       if (failCreate) throw new Error("simulated create failure");
       if (adapter.entries.some((entry) => entry.idempotencyKey === data.idempotencyKey)) throw new Error("duplicate idempotency key");
-      adapter.entries.push(data);
+      adapter.entries.push(structuredClone(data));
       return data;
     },
   };
@@ -195,38 +257,43 @@ function createStrapiMembershipAdapter(strapi) {
     findEntry: (key) => findEntry(key),
     findMembership: (id) => findMembership(id),
     transaction: (work) => strapi.db.transaction(async ({ trx }) => {
-      const tx = {
+      const lockMembership = async (id) => {
+        await strapi.db.connection("memberships")
+          .where({ document_id: id })
+          .transacting(trx)
+          .forUpdate()
+          .first();
+        return findMembership(id, trx);
+      };
+      return work({
         findEntry: (key) => findEntry(key, trx),
-        findMembership: (id) => findMembership(id, trx),
-        findReservation: (id, ref) => ledger().findOne(queryOptions(trx, { where: { membershipDocumentId: id, checkoutReference: ref, kind: "reserve" } })),
-        async claimCredits(id, credits, now) {
-          if (!Number.isSafeInteger(credits) || credits < 1) throw new TypeError("credits must be a positive safe integer.");
-          const result = await membership().updateMany(queryOptions(trx, {
-            where: { documentId: id, status: "active", startsAt: { $lte: iso(now) }, endsAt: { $gt: iso(now) }, cachedRemainingCredits: { $gte: credits } },
-            data: { cachedRemainingCredits: strapi.db.connection.raw("cached_remaining_credits - ?", [credits]) },
-          }));
-          if (Number(result?.count ?? result) !== 1) throw new Error("Insufficient membership balance or inactive membership.");
-          return findMembership(id, trx);
-        },
-        async changeBalance(id, delta) {
-          const result = await membership().updateMany(queryOptions(trx, {
-            where: { documentId: id, cachedRemainingCredits: { $gte: Math.max(0, -delta) } },
-            data: { cachedRemainingCredits: strapi.db.connection.raw("cached_remaining_credits + ?", [delta]) },
-          }));
-          if (Number(result?.count ?? result) !== 1) throw new Error("Invalid membership balance.");
+        lockMembership,
+        listEntries: (id) => ledger().findMany(queryOptions(trx, {
+          where: { membershipDocumentId: id },
+          orderBy: { occurredAt: "asc" },
+        })),
+        async setBalance(id, balance) {
+          await membership().update(queryOptions(trx, { where: { documentId: id }, data: { cachedRemainingCredits: balance } }));
           return findMembership(id, trx);
         },
         async expire(id) {
-          await membership().update(queryOptions(trx, { where: { documentId: id }, data: { status: "expired", cachedRemainingCredits: 0 } }));
+          const result = await membership().updateMany(queryOptions(trx, {
+            where: { documentId: id, status: "active" },
+            data: { status: "expired" },
+          }));
+          if (Number(result?.count ?? result) !== 1) throw new Error("Membership expiry conflict.");
           return findMembership(id, trx);
         },
         async activate(id, values) {
-          await membership().update(queryOptions(trx, { where: { documentId: id, status: "pending_payment" }, data: { status: "active", startsAt: values.startsAt, endsAt: values.endsAt, paymentDocumentId: values.paymentDocumentId, cachedRemainingCredits: values.credits } }));
+          const result = await membership().updateMany(queryOptions(trx, {
+            where: { documentId: id, status: "pending_payment" },
+            data: { status: "active", startsAt: values.startsAt, endsAt: values.endsAt, paymentDocumentId: values.paymentDocumentId, cachedRemainingCredits: values.credits },
+          }));
+          if (Number(result?.count ?? result) !== 1) throw new Error("Membership activation conflict.");
           return findMembership(id, trx);
         },
         createEntry: (data) => ledger().create(queryOptions(trx, { data })),
-      };
-      return work(tx);
+      });
     }),
   };
 }

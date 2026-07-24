@@ -43,3 +43,24 @@ expiry sweep.
 - Phase 1 purchase and renewal intentionally activate immediately through the
   isolated mock confirmation adapter. Phase 2 must replace only that adapter
   with verified payment-event dispatch.
+
+## Review remediation
+
+The follow-up security review was addressed with test-first regressions:
+
+- Membership rows are locked with the transaction's Knex handle, then the
+  ledger is re-read and reduced to the authoritative balance before mutation.
+- Release and redeem are mutually exclusive terminal operations for a
+  reservation, including concurrent calls with different idempotency keys.
+- Idempotency retries validate operation, membership, immutable financial
+  fields, references, reason, and actor before returning stored data.
+- Expiry derives its credit amount from the ledger rather than the cache.
+- Activation conditionally updates `pending_payment` and verifies one row was
+  matched, preventing a second grant under a different key.
+- Every direct service and transaction operation checks the exact feature flag.
+- Customer plan listing now requires the same trusted, validated customer
+  session as other customer membership endpoints.
+- Plan PATCH merges persisted data before domain normalization.
+
+Fresh remediation verification passed 73 tests and the Strapi build. Runtime
+packaging copied 18 CJS assets and validated 82 compiled JavaScript files.

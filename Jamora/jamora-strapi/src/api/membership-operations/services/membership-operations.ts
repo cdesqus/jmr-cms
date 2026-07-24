@@ -5,6 +5,10 @@ import {
 } from "./membership-transaction.cjs";
 import { createPhase1MembershipConfirmation } from "./phase1-membership-confirmation.cjs";
 import { normalisePlan } from "./membership-domain.cjs";
+import {
+  assertMembershipEnabled,
+  mergePlanPatch,
+} from "./membership-service-contract.cjs";
 
 const uid = {
   plan: "api::membership-plan.membership-plan",
@@ -23,6 +27,7 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
   return {
     ...transactions,
     listPlans(activeOnly = false) {
+      assertMembershipEnabled();
       return documents(uid.plan).findMany({
         filters: activeOnly ? { active: { $eq: true } } : {},
         sort: { durationMonths: "asc" },
@@ -30,15 +35,23 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
       });
     },
     createPlan(input: any) {
+      assertMembershipEnabled();
       return documents(uid.plan).create({ data: normalisePlan(input) });
     },
-    updatePlan(documentId: string, input: any) {
-      return documents(uid.plan).update({ documentId, data: normalisePlan(input) });
+    async updatePlan(documentId: string, input: any) {
+      assertMembershipEnabled();
+      const existing = await documents(uid.plan).findOne({ documentId });
+      return documents(uid.plan).update({
+        documentId,
+        data: mergePlanPatch(existing, input),
+      });
     },
     listMemberships() {
+      assertMembershipEnabled();
       return documents(uid.membership).findMany({ sort: { createdAt: "desc" }, limit: 1000 });
     },
     customerMemberships(customerDocumentId: string) {
+      assertMembershipEnabled();
       return documents(uid.membership).findMany({
         filters: { customerDocumentId: { $eq: customerDocumentId } },
         sort: { createdAt: "desc" },
@@ -46,6 +59,7 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
       });
     },
     async preparePurchase(customerDocumentId: string, planDocumentId: string, renewalOf?: string) {
+      assertMembershipEnabled();
       const plan = await documents(uid.plan).findOne({ documentId: planDocumentId });
       if (!plan?.active) throw new Error("Membership plan not found.");
       if (renewalOf) {
@@ -75,6 +89,7 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
       return { membership: activation.membership, paymentDocumentId, mockConfirmed: true };
     },
     async expireDueMemberships(now = new Date(), limit = 100) {
+      assertMembershipEnabled();
       const due = await documents(uid.membership).findMany({
         filters: { status: { $eq: "active" }, endsAt: { $lte: now.toISOString() } },
         fields: ["documentId"],
