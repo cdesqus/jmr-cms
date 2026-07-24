@@ -53,3 +53,41 @@ test("rejects reuse when immutable purchase identity does not match", async () =
     operation: "purchase", idempotencyKey: "retry-1",
   }), /conflict/i);
 });
+
+test("purchase replay confirms its persisted winner without current plan lookup", async () => {
+  const winner = {
+    documentId: "m1", customerDocumentId: "customer-1",
+    planDocumentId: "plan-1", renewalOfMembershipDocumentId: null,
+  };
+  const result = await prepareMembershipPurchase({
+    findPlan: async () => assert.fail("replay must not read the mutable plan"),
+    findMembership: async () => assert.fail("purchase replay has no renewal lookup"),
+    findByPaymentReference: async () => winner,
+    createMembership: async () => assert.fail("must not create"),
+    confirm: async () => ({ membership: { ...winner, status: "active" } }),
+    randomUUID: () => "abcdefgh",
+  }, {
+    customerDocumentId: "customer-1", planDocumentId: "plan-1",
+    operation: "purchase", idempotencyKey: "retry-1",
+  });
+  assert.equal(result.membership.status, "active");
+});
+
+test("renewal replay does not depend on current plan or target availability", async () => {
+  const winner = {
+    documentId: "m2", customerDocumentId: "customer-1",
+    planDocumentId: "plan-1", renewalOfMembershipDocumentId: "membership-previous",
+  };
+  const result = await prepareMembershipPurchase({
+    findPlan: async () => assert.fail("replay must not read the mutable plan"),
+    findMembership: async () => assert.fail("replay must not re-check renewal eligibility"),
+    findByPaymentReference: async () => winner,
+    createMembership: async () => assert.fail("must not create"),
+    confirm: async () => ({ membership: { ...winner, status: "active" } }),
+    randomUUID: () => "abcdefgh",
+  }, {
+    customerDocumentId: "customer-1", planDocumentId: "plan-1",
+    operation: "renew", renewalOf: "membership-previous", idempotencyKey: "retry-1",
+  });
+  assert.equal(result.membership.status, "active");
+});

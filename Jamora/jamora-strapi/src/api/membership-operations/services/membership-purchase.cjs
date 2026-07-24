@@ -7,15 +7,6 @@ async function prepareMembershipPurchase(adapter, input) {
   const paymentDocumentId = purchasePaymentReference(
     input.customerDocumentId, input.operation, input.idempotencyKey, renewalOf,
   );
-  const plan = await adapter.findPlan(input.planDocumentId);
-  if (!plan?.active) throw new Error("Membership plan not found.");
-  if (input.operation === "renew") {
-    const previous = await adapter.findMembership(renewalOf);
-    if (!previous || previous.customerDocumentId !== input.customerDocumentId) {
-      throw new Error("Membership not found.");
-    }
-  }
-
   const reconcile = async () => {
     const existing = await adapter.findByPaymentReference(paymentDocumentId);
     if (!existing) return null;
@@ -29,6 +20,15 @@ async function prepareMembershipPurchase(adapter, input) {
 
   const existing = await reconcile();
   if (existing) return existing;
+
+  const plan = await adapter.findPlan(input.planDocumentId);
+  if (!plan?.active) throw new Error("Membership plan not found.");
+  if (input.operation === "renew") {
+    const previous = await adapter.findMembership(renewalOf);
+    if (!previous || previous.customerDocumentId !== input.customerDocumentId) {
+      throw new Error("Membership not found.");
+    }
+  }
 
   let membership;
   try {
