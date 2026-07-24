@@ -91,7 +91,7 @@ test("derives balance from append-only signed entries", () => {
     { kind: "grant", credits: 7 }, { kind: "reserve", credits: 2 },
     { kind: "release", credits: 1 }, { kind: "redeem", credits: 1 },
     { kind: "expire", credits: 5 },
-  ]), 0);
+  ]), 1);
 });
 
 test("calculates product credit cost and rejects insufficient active membership", () => {
@@ -132,6 +132,8 @@ positive integer quantities/costs. `admin_adjustment` may carry a signed
 - [ ] **Step 4: Add exact schemas**
 
 Plan fields:
+
+Persistence stores duration enum strings; normalize them to numeric domain durations at the service boundary.
 
 ```json
 {

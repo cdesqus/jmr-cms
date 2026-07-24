@@ -34,6 +34,9 @@ function normalisePlan(input) {
   ) {
     throw new TypeError("eligibleProductSlugs must be an array of non-empty strings.");
   }
+  if (input.active !== undefined && typeof input.active !== "boolean") {
+    throw new TypeError("active must be a boolean.");
+  }
   return {
     name: input.name,
     durationMonths,
@@ -58,11 +61,19 @@ function ledgerBalance(entries) {
       if (typeof entry.reason !== "string" || !entry.reason.trim()) {
         throw new TypeError("reason is required for admin_adjustment.");
       }
-      return balance + entry.creditDelta;
+      return checkedAdd(balance, entry.creditDelta);
     }
     assertSafeInteger(entry.credits, "credits");
-    return balance + (DELTA[entry.kind] * entry.credits);
+    return checkedAdd(balance, DELTA[entry.kind] * entry.credits);
   }, 0);
+}
+
+function checkedAdd(left, right) {
+  const result = left + right;
+  if (!Number.isSafeInteger(result)) {
+    throw new TypeError("cumulative ledger balance must remain a safe integer.");
+  }
+  return result;
 }
 
 function requiredCredits(items) {

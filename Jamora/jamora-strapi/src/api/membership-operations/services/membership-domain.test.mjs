@@ -27,6 +27,19 @@ test("accepts configurable 3, 6, and 12 month plans", () => {
   assert.throws(() => normalisePlan({ durationMonths: 4 }), /durationMonths/);
 });
 
+test("rejects non-boolean explicit plan active values", () => {
+  const plan = {
+    name: "Balance 6",
+    durationMonths: 6,
+    packageCredits: 7,
+    priceEurMinor: 12900,
+    priceRonMinor: 64178,
+    eligibleProductSlugs: [],
+  };
+  assert.throws(() => normalisePlan({ ...plan, active: "true" }), /active/);
+  assert.throws(() => normalisePlan({ ...plan, active: 1 }), /active/);
+});
+
 test("derives balance from append-only signed entries", () => {
   assert.equal(ledgerBalance([
     { kind: "grant", credits: 7 },
@@ -59,6 +72,17 @@ test("supports signed admin adjustments only when a reason is supplied", () => {
 test("rejects invalid ledger amounts", () => {
   assert.throws(() => ledgerBalance([{ kind: "grant", credits: -1 }]), /credits/);
   assert.throws(() => ledgerBalance([{ kind: "unknown", credits: 1 }]), /kind/);
+});
+
+test("rejects positive and negative cumulative ledger overflow", () => {
+  assert.throws(() => ledgerBalance([
+    { kind: "grant", credits: Number.MAX_SAFE_INTEGER },
+    { kind: "grant", credits: 1 },
+  ]), /safe integer/);
+  assert.throws(() => ledgerBalance([
+    { kind: "reserve", credits: Number.MAX_SAFE_INTEGER },
+    { kind: "reserve", credits: 1 },
+  ]), /safe integer/);
 });
 
 test("calculates product credit cost and rejects insufficient active membership", () => {
