@@ -9,10 +9,12 @@ import {
   assertMembershipEnabled,
   mergePlanPatch,
 } from "./membership-service-contract.cjs";
+import { listAdminMemberships } from "./membership-admin-projection.cjs";
 
 const uid = {
   plan: "api::membership-plan.membership-plan",
   membership: "api::membership.membership",
+  ledger: "api::membership-credit-entry.membership-credit-entry",
 };
 
 export default factories.createCoreService(uid.membership as any, ({ strapi }) => {
@@ -46,9 +48,12 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
         data: mergePlanPatch(existing, input),
       });
     },
-    listMemberships() {
+    async listMemberships() {
       assertMembershipEnabled();
-      return documents(uid.membership).findMany({ sort: { createdAt: "desc" }, limit: 1000 });
+      return listAdminMemberships({
+        findMemberships: (query: any) => documents(uid.membership).findMany(query),
+        findEntries: (query: any) => documents(uid.ledger).findMany(query),
+      });
     },
     customerMemberships(customerDocumentId: string) {
       assertMembershipEnabled();

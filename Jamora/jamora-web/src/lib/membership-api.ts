@@ -43,7 +43,7 @@ export interface AdminMembership {
   startsAt?: string | null;
   endsAt?: string | null;
   cachedRemainingCredits?: number;
-  ledgerBalance?: number;
+  ledgerBalance: number;
   creditEntries?: MembershipCreditEntry[];
   adjustmentHistory?: MembershipCreditEntry[];
 }

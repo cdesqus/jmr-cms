@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import type { AdminMembership, MembershipPlan, MembershipPlanInput } from "@/lib/membership-api";
+import { membershipAdminRow, settleMembershipMutation } from "@/lib/membership-admin-view.cjs";
 
 const EMPTY: MembershipPlanInput = {
   name: "",
@@ -48,28 +49,32 @@ export function AdminMembershipManager({
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    await mutate(
+    const saved = await mutate(
       editingId ? `/admin/api/membership/plans/${encodeURIComponent(editingId)}` : "/admin/api/membership/plans",
       editingId ? "PATCH" : "POST",
       draft,
       editingId ? "Plan updated." : "Plan created.",
     );
-    setEditingId(undefined);
-    setDraft(EMPTY);
+    if (saved) {
+      setEditingId(undefined);
+      setDraft(EMPTY);
+    }
   }
 
   async function adjust(event: FormEvent) {
     event.preventDefault();
     if (!adjustingId) return;
-    await mutate(
+    const adjusted = await mutate(
       `/admin/api/membership/memberships/${encodeURIComponent(adjustingId)}/adjust`,
       "POST",
       { creditDelta: Number(creditDelta), reason },
       "Credit adjustment posted.",
     );
-    setAdjustingId(undefined);
-    setCreditDelta("");
-    setReason("");
+    if (adjusted) {
+      setAdjustingId(undefined);
+      setCreditDelta("");
+      setReason("");
+    }
   }
 
   async function expireDue() {
@@ -80,7 +85,7 @@ export function AdminMembershipManager({
     setBusy(true);
     setError("");
     setNotice("");
-    try {
+    const result = await settleMembershipMutation(async () => {
       const response = await fetch(path, {
         method,
         headers: { "content-type": "application/json" },
@@ -90,12 +95,10 @@ export function AdminMembershipManager({
       if (!response.ok) throw new Error(json.error ?? "Membership request failed.");
       setNotice(success);
       router.refresh();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Membership request failed.");
-      throw caught;
-    } finally {
-      setBusy(false);
-    }
+    });
+    if (!result.ok) setError(result.error);
+    setBusy(false);
+    return result.ok;
   }
 
   return (
@@ -170,14 +173,17 @@ export function AdminMembershipManager({
               <th className="p-3">Status</th><th className="p-3">Ledger balance</th><th className="p-3">Adjustments</th><th className="p-3" />
             </tr></thead>
             <tbody>{memberships.map((membership) => {
-              const history = membership.adjustmentHistory ?? membership.creditEntries?.filter((entry) => entry.kind === "admin_adjustment") ?? [];
+              const row = membershipAdminRow(membership);
               return <tr key={membership.documentId} className="border-t border-slate-100 align-top">
                 <td className="p-3"><span className="font-semibold">{membership.customerDocumentId}</span><br /><span className="text-xs text-slate-500">{membership.membershipNumber}</span></td>
                 <td className="p-3">{membership.planSnapshot?.name ?? "Snapshot unavailable"}<br /><span className="text-xs text-slate-500">{membership.planSnapshot?.packageCredits ?? 0} credits</span></td>
                 <td className="p-3">{formatDate(membership.startsAt)} – {formatDate(membership.endsAt)}</td>
                 <td className="p-3">{membership.status.replaceAll("_", " ")}</td>
-                <td className="p-3 font-bold">{membership.ledgerBalance ?? membership.cachedRemainingCredits ?? 0}</td>
-                <td className="p-3">{history.length ? history.map((entry, index) => <div key={entry.entryId ?? index} className="mb-1 text-xs">{entry.creditDelta ?? entry.credits}: {entry.reason}</div>) : "—"}</td>
+                <td className="p-3 font-bold">{row.ledgerBalance}</td>
+                <td className="p-3">{row.adjustmentHistory.length ? row.adjustmentHistory.map((entry, index) => <div key={entry.entryId ?? index} className="mb-2 text-xs">
+                  <span className="font-semibold">{entry.creditDelta}</span>: {entry.reason ?? "Reason unavailable"}
+                  <br /><span className="text-slate-500">{entry.actor ?? "Actor unavailable"} · {formatDate(entry.occurredAt)}</span>
+                </div>) : "—"}</td>
                 <td className="p-3"><button type="button" onClick={() => setAdjustingId(membership.documentId)} className={secondaryButtonClass}>Adjust</button></td>
               </tr>;
             })}</tbody>
