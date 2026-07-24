@@ -195,8 +195,27 @@ An overview of Jamora's core feature readiness based on the current implementati
 | EUR/RON immutable price snapshot | **Automated verification complete; live smoke pending** | Orders retain integer minor-unit amounts, rate, source, and timestamp. |
 | Versioned consent categories | **Automated verification complete; live smoke pending** | Necessary, analytics, and lifecycle-email decisions are persisted append-only per purpose; optional processing defaults off. |
 | Live bank transfer/RoPay + verified callback | **Phase 2** | Live settlement and idempotent provider confirmation have not been activated; other providers may later use the same interface. |
+| Prepaid 3/6/12-month membership | **Automated verification complete; dev-server live smoke required** | Owners configure plans and eligible packages; verified customers purchase through a Phase 1 mock payment boundary and renew manually into a new immutable period. |
+| Append-only membership credits | **Automated verification complete; dev-server live smoke required** | Grant, reserve, release, redeem, expiry, and reasoned owner adjustments are auditable; dashboard balance is derived from the ledger. |
+| Membership redemption checkout | **Automated verification complete; dev-server live smoke required** | Stock and credits reserve together, failure/expiry releases both, and a successful redemption charges customer-paid shipping while merchandise is credit-covered. |
 
 ---
+
+## 12. Phase 1 Membership Readiness
+
+Membership is independently controlled by `MEMBERSHIP_ENABLED`; only exact
+`true` enables the storefront, owner, controller, and direct service surfaces.
+Disabling the flag restores the existing one-time checkout experience without
+deleting additive schemas or immutable membership history.
+
+Phase 1 does not process real membership payments. Its mock confirmation proves
+the pending-to-active, idempotent grant, dashboard, redemption, expiry,
+adjustment, and manual-renewal boundaries. Live provider verification remains a
+Phase 2 responsibility. Membership shipping is always customer-paid.
+
+Automated tests, lint, and production builds are the completed implementation
+gate. Local Docker/live smoke was waived; the documented live smoke on the dev
+server must pass before any production promotion.
 
 # JAMORA
 

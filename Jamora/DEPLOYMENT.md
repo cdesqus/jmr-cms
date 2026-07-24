@@ -394,3 +394,61 @@ For a real paid store, the remaining pieces are:
 
 No monthly CMS fee is required for this stack. You only pay for the server,
 domain, payment processing, and any optional infrastructure you choose.
+
+---
+
+## Phase 1 Membership Deployment
+
+Keep membership disabled while deploying the additive schemas:
+
+```dotenv
+MEMBERSHIP_ENABLED=false
+MEMBERSHIP_CHECKOUT_TTL_SECONDS=600
+```
+
+`MEMBERSHIP_ENABLED` must equal the lowercase string `true` in both storefront
+and Strapi environments. All other values fail closed with 404. The optional
+checkout TTL accepts 60–3600 seconds and defaults to 600.
+
+The deployment adds plan, membership, append-only credit-entry, and membership
+checkout tables; product eligibility/credit-cost fields; and order membership
+snapshots. Back up Postgres before migration. Do not remove or rewrite existing
+ledger rows. Phase 1 payment confirmation is mock-only; Phase 2 will replace
+that adapter with verified provider events. Every redemption still charges the
+server shipping quote.
+
+Run these exact repository gates on the server checkout before rollout:
+
+```bash
+cd jamora-web
+node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
+npm run lint
+npm run build
+cd ../jamora-strapi
+node --test --test-force-exit src/api/**/*.test.mjs scripts/package-runtime-cjs.test.mjs
+npm run build
+```
+
+After deploying with the flag still false, verify ordinary catalogue, guest
+checkout, and one-time mock-paid checkout. Then set the flag to `true` in both
+processes, restart them using the server's normal deployment procedure, and
+perform the required dev-server live smoke:
+
+1. disabled direct and BFF membership routes return 404;
+2. owner creates, lists, edits, and disables a plan;
+3. verified customer purchase activates once on retry and dashboard balance
+   equals the ledger, not the cache;
+4. redemption reserves stock and credits together and charges shipping only;
+5. paid finalize redeems once; failed finalize and checkout expiry release both;
+6. membership expiry removes unused credits once;
+7. adjustment without reason fails and a reasoned adjustment is audited;
+8. renewal creates a new active period and leaves the previous period unchanged;
+9. guest and ordinary one-time checkout still work after enabling membership.
+
+Local Docker/live smoke was explicitly waived for Phase 1 and was not run.
+This dev-server live smoke is mandatory before production promotion.
+
+Rollback is configuration-first: set `MEMBERSHIP_ENABLED=false` in both
+processes and restart. This hides all membership UI/routes/mutations while
+preserving schemas and immutable history; ordinary checkout remains available.
+Do not roll back by dropping tables or deleting ledger entries.

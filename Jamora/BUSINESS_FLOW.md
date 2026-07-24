@@ -260,3 +260,40 @@ Notes:
 | Verified live provider callback/status handling | Phase 2 |
 | Finalize paid order from verified live provider callback | Phase 2 |
 | Shipping/tracking fields | Later |
+
+---
+
+## 12. Phase 1 Membership Business Flow
+
+Phase 1 adds prepaid memberships for verified customers while preserving the
+ordinary guest and one-time checkout path.
+
+1. An owner creates or updates a 3, 6, or 12 month plan, including integer EUR
+   and RON prices, package-credit quantity, active state, and eligible products.
+2. A verified customer purchases a plan. The Phase 1 payment boundary is a mock
+   confirmation: it creates a pending membership, idempotently activates it,
+   and posts exactly one `grant`. No real money moves in Phase 1.
+3. The dashboard calculates remaining credits from the append-only ledger.
+   `cachedRemainingCredits` is a repairable cache, never authoritative.
+4. Redemption reserves stock and credits under one opaque checkout reference.
+   Price, eligibility, stock, credit cost, and shipping are server-derived.
+5. Credits cover eligible merchandise only. Shipping is always positive and
+   customer-paid; free membership shipping is outside Phase 1.
+6. Mock payment success creates the order and redeems the reservation.
+   Payment/order or redemption failure releases stock and credits. Abandoned
+   reservations are released by the bounded checkout expiry sweep.
+7. At membership end, one idempotent expiry entry removes unused credits.
+   Manual renewal creates a new period and grant without editing history.
+8. Owner adjustments are append-only and require a signed delta, owner actor,
+   and non-empty audit reason.
+
+The additive schema includes `membership-plan`, `membership`,
+`membership-credit-entry`, and `membership-checkout`; product membership fields
+and order membership snapshots are additive too. Generated public ledger CRUD
+is unavailable, and ledger update/delete is guarded.
+
+`MEMBERSHIP_ENABLED` accepts only the exact string `true`. Any other value
+returns 404 from storefront, owner BFF, controller, and direct service
+boundaries. Disabling it is the rollback path: membership surfaces disappear,
+ordinary guest/one-time checkout continues unchanged, and persisted membership
+history remains intact for a later safe re-enable.
