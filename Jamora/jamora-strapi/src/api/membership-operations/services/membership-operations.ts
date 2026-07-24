@@ -10,6 +10,8 @@ import {
   mergePlanPatch,
 } from "./membership-service-contract.cjs";
 import { listAdminMemberships } from "./membership-admin-projection.cjs";
+import { listCustomerMemberships } from "./membership-customer-projection.cjs";
+import { purchasePaymentReference } from "./membership-purchase-key.cjs";
 
 const uid = {
   plan: "api::membership-plan.membership-plan",
@@ -57,19 +59,30 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
     },
     customerMemberships(customerDocumentId: string) {
       assertMembershipEnabled();
-      return documents(uid.membership).findMany({
-        filters: { customerDocumentId: { $eq: customerDocumentId } },
-        sort: { createdAt: "desc" },
-        limit: 100,
-      });
+      return listCustomerMemberships({
+        findMemberships: (query: any) => documents(uid.membership).findMany(query),
+        findEntries: (query: any) => documents(uid.ledger).findMany(query),
+      }, customerDocumentId);
     },
-    async preparePurchase(customerDocumentId: string, planDocumentId: string, renewalOf?: string) {
+    async preparePurchase(customerDocumentId: string, planDocumentId: string, idempotencyKey: string, renewalOf?: string) {
       assertMembershipEnabled();
       const plan = await documents(uid.plan).findOne({ documentId: planDocumentId });
       if (!plan?.active) throw new Error("Membership plan not found.");
       if (renewalOf) {
         const previous = await findMembership(renewalOf);
         if (!previous || previous.customerDocumentId !== customerDocumentId) throw new Error("Membership not found.");
+      }
+      const paymentDocumentId = purchasePaymentReference(customerDocumentId, idempotencyKey);
+      const existing = await documents(uid.membership).findMany({
+        filters: { paymentDocumentId: { $eq: paymentDocumentId } },
+        limit: 1,
+      });
+      if (existing[0]) {
+        if (existing[0].customerDocumentId !== customerDocumentId || existing[0].planDocumentId !== planDocumentId) {
+          throw new Error("Membership purchase conflict.");
+        }
+        const activation = await confirmation.confirm({ membershipId: existing[0].documentId, paymentDocumentId });
+        return { membership: activation.membership, paymentDocumentId, mockConfirmed: true };
       }
       const membershipNumber = `MEM-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
       const membership = await documents(uid.membership).create({
@@ -86,10 +99,10 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
             priceRonMinor: plan.priceRonMinor,
           },
           status: "pending_payment",
+          paymentDocumentId,
           cachedRemainingCredits: 0,
         },
       });
-      const paymentDocumentId = `phase1-mock:${membership.documentId}`;
       const activation = await confirmation.confirm({ membershipId: membership.documentId, paymentDocumentId });
       return { membership: activation.membership, paymentDocumentId, mockConfirmed: true };
     },

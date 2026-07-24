@@ -21,6 +21,16 @@ export default async function AccountPage() {
           <dt className="font-semibold text-bark">Status</dt>
           <dd className="text-herb-deep">Verified</dd>
         </dl>
+        {process.env.MEMBERSHIP_ENABLED === "true" && (
+          <div className="mb-7 flex flex-wrap gap-3">
+            <a href="/account/membership" className="rounded-full bg-bark px-5 py-3 text-sm font-semibold text-white">
+              Membership dashboard
+            </a>
+            <a href="/account/membership/plans" className="rounded-full border border-bark px-5 py-3 text-sm font-semibold">
+              View membership plans
+            </a>
+          </div>
+        )}
         <CustomerLogoutButton />
       </section>
     </AccountPageFrame>

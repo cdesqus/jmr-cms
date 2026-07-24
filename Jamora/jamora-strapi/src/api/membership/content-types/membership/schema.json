@@ -15,7 +15,7 @@
     "status": { "type": "enumeration", "enum": ["pending_payment", "active", "expired", "cancelled", "refunded"], "required": true },
     "startsAt": { "type": "datetime" },
     "endsAt": { "type": "datetime" },
-    "paymentDocumentId": { "type": "string" },
+    "paymentDocumentId": { "type": "string", "unique": true },
     "cachedRemainingCredits": { "type": "integer", "default": 0 }
   }
 }
