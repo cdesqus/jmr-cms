@@ -6,6 +6,7 @@ export default {
     { method: "POST", path: "/jamora/membership/reserve", handler: "membership-operations.reserve", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/release", handler: "membership-operations.release", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/redeem", handler: "membership-operations.redeem", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/stock-release", handler: "membership-operations.stockRelease", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/renew", handler: "membership-operations.renew", config: { auth: false } },
     { method: "GET", path: "/jamora/admin/membership/plans", handler: "membership-operations.adminPlans", config: { auth: false } },
     { method: "POST", path: "/jamora/admin/membership/plans", handler: "membership-operations.createPlan", config: { auth: false } },

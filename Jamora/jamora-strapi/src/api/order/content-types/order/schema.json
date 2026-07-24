@@ -44,6 +44,8 @@
     "shippingAddress": { "type": "json" },
     "priceSnapshot": { "type": "json" },
     "paymentDocumentId": { "type": "string" },
+    "membershipDocumentId": { "type": "string" },
+    "membershipSnapshot": { "type": "json" },
     "trackingPreviewUrl": { "type": "string" },
     "deliveryLabelUrl": { "type": "string" },
     "estimatedDelivery": { "type": "datetime" }

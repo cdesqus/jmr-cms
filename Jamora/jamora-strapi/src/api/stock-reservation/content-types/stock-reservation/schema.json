@@ -10,5 +10,7 @@
     "expiresAt": { "type": "datetime", "required": true },
     "orderNumber": { "type": "string" },
     "email": { "type": "string" }
+    ,"checkoutReference": { "type": "string", "unique": true }
+    ,"idempotencyKey": { "type": "string" }
   }
 }

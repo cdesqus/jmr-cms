@@ -28,8 +28,94 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
     return documents(uid.membership).findOne({ documentId });
   }
 
+  async function releaseCheckoutStock(input: any) {
+    assertMembershipEnabled();
+    if (!input.reservationToken || !input.checkoutReference || !input.idempotencyKey) {
+      throw new Error("Invalid stock compensation request.");
+    }
+    const reservations = await documents("api::stock-reservation.stock-reservation").findMany({
+      filters: { token: { $eq: input.reservationToken } },
+      limit: 1,
+    });
+    const reservation = reservations[0];
+    if (!reservation) throw new Error("Stock reservation not found.");
+    const targetStatus = input.consumed ? "consumed" : "reserved";
+    if (reservation.status === "released") return { reservation, idempotent: true };
+    if (reservation.status !== targetStatus) throw new Error("Stock reservation cannot be compensated.");
+    const allocations = Array.isArray(reservation.allocations) ? reservation.allocations : [];
+    await strapi.db.transaction(async () => {
+      for (const allocation of allocations) {
+        if (!allocation.batchDocumentId) continue;
+        const batch = await documents("api::inventory-batch.inventory-batch")
+          .findOne({ documentId: allocation.batchDocumentId });
+        if (!batch) throw new Error("Reserved inventory batch not found.");
+        const qty = Number(allocation.qty);
+        if (!Number.isSafeInteger(qty) || qty <= 0) throw new Error("Invalid stock reservation.");
+        await documents("api::inventory-batch.inventory-batch").update({
+          documentId: batch.documentId,
+          data: input.consumed
+            ? {
+                quantity: Number(batch.quantity) + qty,
+                status: batch.status === "depleted" ? "active" : batch.status,
+              }
+            : {
+                reservedQuantity: Math.max(0, Number(batch.reservedQuantity) - qty),
+              },
+        });
+      }
+      await documents("api::stock-reservation.stock-reservation").update({
+        documentId: reservation.documentId,
+        data: { status: "released" },
+      });
+    });
+    return { reservationToken: input.reservationToken, status: "released", idempotent: false };
+  }
+
+  async function redeemCheckout(input: any) {
+    assertMembershipEnabled();
+    for (const [name, value] of Object.entries({
+      credits: input.credits,
+      coveredMerchandiseMinor: input.coveredMerchandiseMinor,
+      shippingMinor: input.shippingMinor,
+    })) {
+      if (!Number.isSafeInteger(value) || Number(value) <= 0) throw new Error(`${name} must be a positive safe integer.`);
+    }
+    const order = await documents("api::order.order").findOne({ documentId: input.orderId });
+    if (!order || order.status !== "paid") throw new Error("Paid membership order not found.");
+    const membershipSnapshot = {
+      membershipDocumentId: input.membershipId,
+      checkoutReference: input.checkoutReference,
+      creditsRedeemed: input.credits,
+      coveredMerchandiseMinor: input.coveredMerchandiseMinor,
+      merchandiseMinor: 0,
+      shippingMinor: input.shippingMinor,
+    };
+    await documents("api::order.order").update({
+      documentId: input.orderId,
+      data: {
+        membershipDocumentId: input.membershipId,
+        membershipSnapshot,
+        subtotalCents: 0,
+        shippingCents: input.shippingMinor,
+        discountCents: 0,
+        totalCents: input.shippingMinor,
+      },
+    });
+    try {
+      return await transactions.redeemCredits(input);
+    } catch (error) {
+      await documents("api::order.order").update({
+        documentId: input.orderId,
+        data: { membershipDocumentId: null, membershipSnapshot: null },
+      });
+      throw error;
+    }
+  }
+
   return {
     ...transactions,
+    releaseCheckoutStock,
+    redeemCheckout,
     listPlans(activeOnly = false) {
       assertMembershipEnabled();
       return documents(uid.plan).findMany({

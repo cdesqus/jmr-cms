@@ -13,6 +13,10 @@ import { useCart } from "@/components/cart-context";
 import { ProductVisual } from "@/components/product-visual";
 import { StructuredAddressForm } from "@/components/structured-address-form";
 import {
+  MembershipRedemption,
+  type RedemptionMembership,
+} from "@/components/membership-redemption";
+import {
   normaliseRomanianAddress,
   validateRomanianAddress,
   type StructuredAddress,
@@ -35,8 +39,10 @@ interface AppliedCoupon {
 const EMPTY_ADDRESS = normaliseRomanianAddress();
 export function CartView({
   structuredCheckoutEnabled = false,
+  membership,
 }: {
   structuredCheckoutEnabled?: boolean;
+  membership?: RedemptionMembership;
 }) {
   const router = useRouter();
   const { items, subtotalCents, setQty, remove, clear } = useCart();
@@ -53,6 +59,7 @@ export function CartView({
   const [couponMessage, setCouponMessage] = useState("");
   const [checkingCoupon, setCheckingCoupon] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
+  const [membershipMode, setMembershipMode] = useState(false);
 
   if (items.length === 0) {
     return (
@@ -69,6 +76,13 @@ export function CartView({
   }
 
   const shipping = guestShippingCents(subtotalCents);
+  const membershipShipping = 495;
+  const eligibleMembershipItems = membership
+    ? items.filter((item) => membership.planSnapshot.eligibleProductSlugs.includes(item.product.slug))
+    : [];
+  const membershipCreditsRequired = eligibleMembershipItems.reduce((total, item) => total + item.qty, 0);
+  const membershipCoveredMinor = eligibleMembershipItems.reduce((total, item) => total + item.lineTotalCents, 0);
+  const activeMembershipMode = membershipMode && !!membership;
   const remainingForFree = 5000 - subtotalCents;
   const cartSignature = items.map((item) => `${item.product.slug}:${item.qty}`).sort().join("|");
   const normalizedCouponCode = couponCode.trim().toUpperCase();
@@ -157,6 +171,13 @@ export function CartView({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           email: customer.email.trim(),
+          ...(activeMembershipMode ? {
+            membershipCheckout: {
+              membershipDocumentId: membership.documentId,
+              shippingMinor: membershipShipping,
+              idempotencyKey: crypto.randomUUID(),
+            },
+          } : {}),
           items: items.map((item) => ({
             productId: item.product.id,
             sku: item.product.sku,
@@ -178,9 +199,9 @@ export function CartView({
         : undefined;
       const order = createMockOrder({
         items,
-        subtotalCents,
-        shippingCents: shipping,
-        discountCents: checkoutCoupon?.discountCents,
+        subtotalCents: activeMembershipMode ? 0 : subtotalCents,
+        shippingCents: activeMembershipMode ? membershipShipping : shipping,
+        discountCents: activeMembershipMode ? 0 : checkoutCoupon?.discountCents,
         promotionCode: checkoutCoupon?.code,
         reservationToken: reservation.reservationToken,
         anonymousSessionId: structuredCheckoutEnabled
@@ -195,6 +216,17 @@ export function CartView({
             : customer.address.trim(),
         },
       });
+      if (activeMembershipMode) {
+        Object.assign(order, {
+          membershipCheckout: {
+            checkoutReference: reservation.checkoutReference,
+            membershipDocumentId: membership.documentId,
+            coveredMerchandiseMinor: membershipCoveredMinor,
+            creditsRequired: membershipCreditsRequired,
+            idempotencyKey: crypto.randomUUID(),
+          },
+        });
+      }
       const synced = await syncMockOrderToStrapi(order);
       if (!synced.ok) throw new Error(synced.error);
       saveMockOrder(order);
@@ -333,6 +365,22 @@ export function CartView({
             <p className="mt-2 text-xs text-terracotta-deep">Cart changed. Apply the coupon again.</p>
           ) : null}
         </div>
+
+        {membership ? (
+          <MembershipRedemption
+            membership={membership}
+            selected={membershipMode}
+            coveredMinor={membershipCoveredMinor}
+            creditsRequired={membershipCreditsRequired}
+            shippingMinor={membershipShipping}
+            eligibleItems={eligibleMembershipItems.map((item) => ({
+              name: item.product.name,
+              qty: item.qty,
+              creditCost: 1,
+            }))}
+            onChange={setMembershipMode}
+          />
+        ) : null}
 
         <div className="mt-5 space-y-3 border-t border-clay/60 pt-5">
           <label className="block text-xs font-semibold uppercase text-stone">
