@@ -35,7 +35,7 @@ test("validates every createMany payment row", () => {
 
 test("merges partial payment updates with persisted money without allowing incomplete receipt pairs", async () => {
   const lifecycles = lifecycleFor({ ...expectedMoney, receivedAmountMinor: 9000, receivedCurrency: "RON" });
-  await assert.doesNotReject(() => lifecycles.beforeUpdate({ params: { data: { amountMinor: 12000 }, where: { id: 1 } } }));
+  await assert.doesNotReject(() => lifecycles.beforeUpdate({ params: { data: { status: "underpaid" }, where: { id: 1 } } }));
   await assert.doesNotReject(() => lifecycles.beforeUpdate({ params: { data: { receivedAmountMinor: 9500 }, where: { id: 1 } } }));
   await assert.rejects(
     () => lifecycleFor(expectedMoney).beforeUpdate({ params: { data: { receivedAmountMinor: 9500 }, where: { id: 1 } } }),
@@ -43,13 +43,46 @@ test("merges partial payment updates with persisted money without allowing incom
   );
   await assert.rejects(
     () => lifecycleFor({ amountMinor: 10000, currency: "USD" }).beforeUpdate({ params: { data: { amountMinor: 12000 }, where: { id: 1 } } }),
-    /currency/,
+    /immutable/,
   );
 });
 
 test("rejects partial money updates in bulk so they cannot bypass validation", () => {
   const lifecycles = lifecycleFor();
-  assert.doesNotThrow(() => lifecycles.beforeUpdateMany({ params: { data: { amountMinor: 12000, currency: "RON" } } }));
-  assert.throws(() => lifecycles.beforeUpdateMany({ params: { data: { amountMinor: 12000 } } }), /amountMinor/);
+  assert.throws(
+    () => lifecycles.beforeUpdateMany({ params: { data: { amountMinor: 12000, currency: "RON" } } }),
+    /immutable/i,
+  );
   assert.throws(() => lifecycles.beforeUpdateMany({ params: { data: { receivedCurrency: "EUR" } } }), /received/);
+});
+
+test("payment identity, target, expected money, expiry, and snapshots are immutable after create", async () => {
+  const existing = {
+    paymentNumber: "PAY-1",
+    idempotencyKey: "prepare-1",
+    subjectType: "order",
+    subjectId: "order-1",
+    ownerDocumentId: "customer-1",
+    amountMinor: 10000,
+    currency: "RON",
+    priceSnapshot: { bankTransfer: { iban: "RO49AAAA1B31007593840000" } },
+    expiresAt: "2026-07-26T00:00:00.000Z",
+  };
+  const lifecycles = lifecycleFor(existing);
+  for (const [field, value] of [
+    ["subjectId", "order-2"],
+    ["amountMinor", 1],
+    ["currency", "EUR"],
+    ["priceSnapshot", { forged: true }],
+    ["expiresAt", "2030-01-01T00:00:00.000Z"],
+  ]) {
+    await assert.rejects(
+      () => lifecycles.beforeUpdate({ params: { data: { [field]: value }, where: { id: 1 } } }),
+      /immutable/i,
+    );
+    assert.throws(
+      () => lifecycles.beforeUpdateMany({ params: { data: { [field]: value } } }),
+      /immutable/i,
+    );
+  }
 });

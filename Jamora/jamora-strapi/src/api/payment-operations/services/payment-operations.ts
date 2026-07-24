@@ -1,0 +1,199 @@
+import { factories } from "@strapi/strapi";
+import { isDeepStrictEqual } from "node:util";
+import {
+  assertOrderPaymentBinding,
+  beneficiaryFromEnv,
+  createPaymentTransactions,
+  createPaymentSubjectSettlement,
+  createStrapiPaymentAdapter,
+  deriveAuthoritativePaymentSubject,
+} from "./payment-transaction.cjs";
+
+const uid = {
+  payment: "api::payment.payment",
+  order: "api::order.order",
+  reservation: "api::stock-reservation.stock-reservation",
+};
+
+export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
+  function assertPaymentsEnabled() {
+    if (process.env.PAYMENTS_ENABLED !== "true") throw new Error("Not found.");
+  }
+
+  const withTransaction = (trx: any, value: any) => ({ ...value, transacting: trx });
+
+  async function lockDocument(
+    uidValue: string,
+    table: string,
+    documentId: string,
+    trx: any,
+  ) {
+    await strapi.db.connection(table)
+      .where({ document_id: documentId })
+      .transacting(trx)
+      .forUpdate()
+      .first();
+    return strapi.db.query(uidValue).findOne(withTransaction(trx, {
+      where: { documentId },
+    }));
+  }
+
+  async function lockReservation(token: string, trx: any) {
+    if (!token) return null;
+    const query = strapi.db.query(uid.reservation);
+    const candidate = await query.findOne(withTransaction(trx, {
+      where: { token },
+    }));
+    if (!candidate) return null;
+    await strapi.db.connection("stock_reservations")
+      .where({ document_id: candidate.documentId })
+      .transacting(trx)
+      .forUpdate()
+      .first();
+    return query.findOne(withTransaction(trx, {
+      where: { documentId: candidate.documentId },
+    }));
+  }
+
+  async function resolvePaymentSubject(input: any, context: { trx: any; now: Date }) {
+    const subject = input.subjectType === "membership"
+      ? await lockDocument(
+          "api::membership.membership",
+          "memberships",
+          input.subjectId,
+          context.trx,
+        )
+      : await lockDocument(uid.order, "orders", input.subjectId, context.trx);
+    const reservation = input.guestCheckoutCapability
+      ? await lockReservation(input.guestCheckoutCapability, context.trx)
+      : null;
+    return deriveAuthoritativePaymentSubject(
+      input,
+      subject,
+      reservation,
+      context.now,
+    );
+  }
+
+  function comparableSnapshot(snapshot: any) {
+    const copy = structuredClone(snapshot ?? {});
+    delete copy.bankTransfer;
+    return copy;
+  }
+
+  async function validateSettlementSubject(
+    payment: any,
+    context: { trx: any; occurredAt: string },
+  ) {
+    const input = {
+      subjectType: payment.subjectType,
+      subjectId: payment.subjectId,
+      purpose: payment.purpose,
+      customerDocumentId: payment.customerDocumentId,
+      currency: payment.currency,
+      ...(!payment.customerDocumentId && payment.ownerDocumentId?.startsWith("guest:")
+        ? { guestCheckoutCapability: payment.ownerDocumentId.slice("guest:".length) }
+        : {}),
+    };
+    const resolved = await resolvePaymentSubject(input, {
+      trx: context.trx,
+      now: new Date(context.occurredAt),
+    });
+    for (const field of [
+      "subjectType", "subjectId", "ownerDocumentId", "customerDocumentId",
+      "purpose", "orderDocumentId", "membershipDocumentId", "amountMinor", "currency",
+    ]) {
+      if ((resolved[field] ?? null) !== (payment[field] ?? null)) {
+        throw new Error("Authoritative payment subject binding changed.");
+      }
+    }
+    if (!isDeepStrictEqual(
+      comparableSnapshot(payment.priceSnapshot),
+      comparableSnapshot(resolved.priceSnapshot),
+    )) {
+      throw new Error("Authoritative payment price snapshot changed.");
+    }
+  }
+
+  async function settleOrdinaryOrder(payment: any, trx: any) {
+    const documentId = payment.orderDocumentId || payment.subjectId;
+    await strapi.db.connection("orders")
+      .where({ document_id: documentId })
+      .transacting(trx)
+      .forUpdate()
+      .first();
+    const orderQuery = strapi.db.query(uid.order);
+    const order = await orderQuery.findOne({
+      where: { documentId },
+      transacting: trx,
+    } as any);
+    if (!order) throw new Error("Payment order not found.");
+    assertOrderPaymentBinding(order, payment);
+    if (order.status === "paid" && order.paymentDocumentId === payment.documentId) {
+      return { order, idempotent: true };
+    }
+    if (order.status !== "pending") throw new Error("Payment order is not pending.");
+    const statusHistory = Array.isArray(order.statusHistory)
+      ? [...order.statusHistory]
+      : [];
+    statusHistory.push({
+      type: "status",
+      status: "paid",
+      note: "Payment confirmed by bank transfer reconciliation.",
+      actor: "Payment",
+      at: payment.paidAt,
+    });
+    const updated = await orderQuery.update({
+      where: { documentId },
+      data: {
+        status: "paid",
+        paymentDocumentId: payment.documentId,
+        statusHistory,
+      },
+      transacting: trx,
+    } as any);
+    return { order: updated, idempotent: false };
+  }
+
+  const settleSubject = createPaymentSubjectSettlement({
+    activateMembership: (input: any) => (
+      strapi.service("api::membership-operations.membership-operations") as any
+    ).activateMembership(input),
+    finalizeMembershipCheckout: (input: any) => (
+      strapi.service("api::membership-operations.membership-operations") as any
+    ).finalizeMembershipCheckout(input),
+    settleOrder: (payment: any, context: { trx?: any }) =>
+      settleOrdinaryOrder(payment, context.trx),
+  });
+
+  const adapter = createStrapiPaymentAdapter(strapi, {
+    resolvePaymentSubject,
+    validateSettlementSubject,
+    settleSubject,
+  });
+  const operations = (beneficiary: any = {}) =>
+    createPaymentTransactions(adapter, { env: process.env, beneficiary });
+
+  return {
+    async prepareBankTransfer(input: any) {
+      assertPaymentsEnabled();
+      return operations(beneficiaryFromEnv(process.env)).prepareBankTransfer(input);
+    },
+    recordBankReceipt(input: any) {
+      assertPaymentsEnabled();
+      return operations().recordBankReceipt(input);
+    },
+    resolvePaymentMismatch(input: any) {
+      assertPaymentsEnabled();
+      return operations().resolvePaymentMismatch(input);
+    },
+    expireDuePayments(now = new Date(), limit = 100) {
+      assertPaymentsEnabled();
+      return operations().expireDuePayments(now, limit);
+    },
+    settlePayment(input: any) {
+      assertPaymentsEnabled();
+      return operations().settlePayment(input);
+    },
+  } as any;
+});
