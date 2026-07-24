@@ -1,0 +1,12 @@
+export function membershipSurfaceEnabled(env?: Record<string, string | undefined>): boolean;
+
+export function visibleAdminNavigation<TGroup>(
+  groups: readonly TGroup[],
+  role: string,
+  membershipEnabled: boolean,
+): TGroup[];
+
+export function membershipCheckoutMode(
+  body: { membershipCheckout?: unknown } | null | undefined,
+  env?: Record<string, string | undefined>,
+): "ordinary" | "membership-disabled" | "membership";

@@ -9,6 +9,9 @@ import {
   createMemoryMembershipCheckoutAdapter,
 } from "./services/membership-checkout.cjs";
 import { listCustomerMemberships } from "./services/membership-customer-projection.cjs";
+import { prepareMembershipPurchase } from "./services/membership-purchase.cjs";
+import { createPhase1MembershipConfirmation } from "./services/phase1-membership-confirmation.cjs";
+import { assertMembershipEnabled } from "./services/membership-service-contract.cjs";
 
 const enabled = { MEMBERSHIP_ENABLED: "true" };
 const now = new Date("2026-07-24T00:00:00.000Z");
@@ -26,13 +29,31 @@ function adminContext(body = {}, documentId) {
   };
 }
 
+function customerContext(body = {}) {
+  const headers = {
+    "x-jamora-storefront-secret": "storefront-secret",
+    "x-jamora-customer-document-id": "customer-1",
+    "x-jamora-customer-session-version": "3",
+  };
+  return {
+    request: { body },
+    get: (name) => headers[name.toLowerCase()] ?? "",
+  };
+}
+
 test("Phase 1 route and service fixture smoke", async () => {
   const previous = {
     enabled: process.env.MEMBERSHIP_ENABLED,
     secret: process.env.JAMORA_ADMIN_API_SECRET,
+    storefrontSecret: process.env.JAMORA_STOREFRONT_API_SECRET,
     strapi: globalThis.strapi,
   };
   const plans = new Map();
+  let membershipSequence = 0;
+  const purchaseMemberships = new Map();
+  const membershipAdapter = createMemoryMembershipAdapter();
+  const transactions = createMembershipTransactions(membershipAdapter, enabled);
+  const confirmation = createPhase1MembershipConfirmation(transactions.activateMembership);
   const routeService = {
     listPlans: async () => [...plans.values()],
     createPlan: async (input) => {
@@ -45,18 +66,69 @@ test("Phase 1 route and service fixture smoke", async () => {
       plans.set(documentId, plan);
       return plan;
     },
+    preparePurchase: (customerDocumentId, planDocumentId, idempotencyKey, renewalOf) =>
+      prepareMembershipPurchase({
+        findPlan: async (documentId) => plans.get(documentId) ?? null,
+        findMembership: async (documentId) => purchaseMemberships.get(documentId) ?? null,
+        findByPaymentReference: async (paymentDocumentId) =>
+          [...purchaseMemberships.values()].find((item) =>
+            item.paymentDocumentId === paymentDocumentId) ?? null,
+        async createMembership(data) {
+          const membership = { documentId: `membership-${++membershipSequence}`, ...data };
+          purchaseMemberships.set(membership.documentId, membership);
+          membershipAdapter.memberships.set(membership.documentId, structuredClone(membership));
+          return membership;
+        },
+        confirm: async (input) => {
+          const result = await confirmation.confirm({ ...input, now });
+          purchaseMemberships.set(result.membership.documentId, structuredClone(result.membership));
+          return result;
+        },
+        randomUUID: () => `${String(membershipSequence + 1).padStart(8, "0")}-fixture`,
+      }, {
+        customerDocumentId,
+        planDocumentId,
+        operation: renewalOf ? "renew" : "purchase",
+        idempotencyKey,
+        renewalOf,
+      }),
   };
-  globalThis.strapi = { service: () => routeService };
+  globalThis.strapi = {
+    service(uid) {
+      if (uid === "api::customer-auth.customer-auth") {
+        return {
+          async findActiveSessionCustomer(documentId, sessionVersion) {
+            assert.equal(documentId, "customer-1");
+            assert.equal(sessionVersion, 3);
+            return { documentId, email: "customer@example.test" };
+          },
+        };
+      }
+      return routeService;
+    },
+  };
 
   try {
     process.env.JAMORA_ADMIN_API_SECRET = "admin-secret";
+    process.env.JAMORA_STOREFRONT_API_SECRET = "storefront-secret";
     delete process.env.MEMBERSHIP_ENABLED;
     const controller = (await import(`./controllers/membership-operations.ts?smoke=${Date.now()}`)).default;
 
-    const disabled = adminContext();
-    await controller.adminPlans(disabled);
-    assert.equal(disabled.status, 404);
-    assert.deepEqual(disabled.body, { error: "Not found." });
+    const disabledCalls = [
+      [controller.plans, customerContext()],
+      [controller.purchase, customerContext({ planDocumentId: "plan-1", idempotencyKey: "disabled" })],
+      [controller.adminPlans, adminContext()],
+      [controller.createPlan, adminContext({ name: "hidden" })],
+    ];
+    for (const [handler, disabled] of disabledCalls) {
+      await handler(disabled);
+      assert.equal(disabled.status, 404);
+      assert.deepEqual(disabled.body, { error: "Not found." });
+    }
+    assert.throws(() => assertMembershipEnabled({ MEMBERSHIP_ENABLED: "FALSE" }), /not found/i);
+    await assert.rejects(() => createMembershipTransactions(
+      createMemoryMembershipAdapter(), {},
+    ).activateMembership({}), /not found/i);
 
     process.env.MEMBERSHIP_ENABLED = "true";
     const create = adminContext({
@@ -69,44 +141,47 @@ test("Phase 1 route and service fixture smoke", async () => {
     const update = adminContext({ packageCredits: 4 }, "plan-1");
     await controller.updatePlan(update);
     assert.equal(update.body.packageCredits, 4);
+    const deactivate = adminContext({ active: false }, "plan-1");
+    await controller.updatePlan(deactivate);
+    assert.equal(deactivate.body.active, false);
+    const reactivate = adminContext({ active: true }, "plan-1");
+    await controller.updatePlan(reactivate);
+    assert.equal(reactivate.body.active, true);
     const list = adminContext();
     await controller.adminPlans(list);
-    assert.deepEqual(list.body.plans, [update.body]);
+    assert.deepEqual(list.body.plans, [reactivate.body]);
 
-    const oldMembership = {
-      documentId: "membership-old", customerDocumentId: "customer-1",
-      status: "active", startsAt: "2026-01-01T00:00:00.000Z",
-      endsAt: "2027-01-01T00:00:00.000Z", cachedRemainingCredits: 99,
-      planSnapshot: { name: "Balance 3", durationMonths: 3, packageCredits: 4 },
-    };
-    const renewal = {
-      ...oldMembership, documentId: "membership-renewal", status: "pending_payment",
-      startsAt: null, endsAt: null, cachedRemainingCredits: 0,
-    };
-    const membershipAdapter = createMemoryMembershipAdapter({
-      memberships: [oldMembership, renewal],
-      entries: [{
-        entryId: "grant-old", idempotencyKey: "grant-old",
-        membershipDocumentId: oldMembership.documentId, kind: "grant",
-        credits: 4, actor: "payment", occurredAt: oldMembership.startsAt,
-      }],
-    });
-    const transactions = createMembershipTransactions(membershipAdapter, enabled);
-
-    await transactions.activateMembership({
-      membershipId: renewal.documentId, paymentDocumentId: "mock-payment-1",
-      now, idempotencyKey: "activate:renewal",
-    });
-    await transactions.activateMembership({
-      membershipId: renewal.documentId, paymentDocumentId: "mock-payment-1",
-      now, idempotencyKey: "activate:renewal",
-    });
+    const purchaseInput = { planDocumentId: "plan-1", idempotencyKey: "purchase-1" };
+    const purchase = customerContext(purchaseInput);
+    await controller.purchase(purchase);
+    const purchaseRetry = customerContext(purchaseInput);
+    await controller.purchase(purchaseRetry);
+    assert.equal(purchase.body.membership.status, "active");
+    assert.equal(purchaseRetry.body.membership.documentId, purchase.body.membership.documentId);
     assert.equal(membershipAdapter.entries.filter((entry) =>
-      entry.kind === "grant" && entry.membershipDocumentId === renewal.documentId).length, 1);
-    assert.equal(membershipAdapter.memberships.get(oldMembership.documentId).endsAt, oldMembership.endsAt);
+      entry.kind === "grant" &&
+      entry.membershipDocumentId === purchase.body.membership.documentId).length, 1);
+
+    const renew = customerContext({
+      planDocumentId: "plan-1",
+      membershipDocumentId: purchase.body.membership.documentId,
+      idempotencyKey: "renew-1",
+    });
+    await controller.renew(renew);
+    assert.notEqual(renew.body.membership.documentId, purchase.body.membership.documentId);
+    assert.equal(
+      purchaseMemberships.get(renew.body.membership.documentId).renewalOfMembershipDocumentId,
+      purchase.body.membership.documentId,
+    );
+    assert.equal(membershipAdapter.entries.filter((entry) =>
+      entry.kind === "grant" &&
+      entry.membershipDocumentId === renew.body.membership.documentId).length, 1);
+
+    const oldMembership = membershipAdapter.memberships.get(purchase.body.membership.documentId);
+    oldMembership.cachedRemainingCredits = 99;
 
     const dashboard = await listCustomerMemberships({
-      findMemberships: async () => [membershipAdapter.memberships.get(oldMembership.documentId)],
+      findMemberships: async () => [oldMembership],
       findEntries: async () => membershipAdapter.entries.filter((entry) =>
         entry.membershipDocumentId === oldMembership.documentId),
     }, "customer-1");
@@ -192,6 +267,8 @@ test("Phase 1 route and service fixture smoke", async () => {
     else process.env.MEMBERSHIP_ENABLED = previous.enabled;
     if (previous.secret === undefined) delete process.env.JAMORA_ADMIN_API_SECRET;
     else process.env.JAMORA_ADMIN_API_SECRET = previous.secret;
+    if (previous.storefrontSecret === undefined) delete process.env.JAMORA_STOREFRONT_API_SECRET;
+    else process.env.JAMORA_STOREFRONT_API_SECRET = previous.storefrontSecret;
     globalThis.strapi = previous.strapi;
   }
 });

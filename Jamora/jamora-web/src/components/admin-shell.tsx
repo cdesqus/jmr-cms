@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { AdminLogoutButton } from "@/components/admin-logout-button";
 import type { AdminIdentity, AdminRole } from "@/lib/admin-auth";
+import { visibleAdminNavigation } from "@/lib/membership-surface-policy.cjs";
 
 const NAV_GROUPS = [
   { label: "Overview", items: [
@@ -39,11 +40,7 @@ export function AdminShell({ children, identity, membershipEnabled = false }: { 
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(true);
   const role: AdminRole = identity?.role ?? "owner";
-  const visibleGroups = NAV_GROUPS
-    .map((group) => ({ ...group, items: group.items.filter((item) =>
-      (item.roles as AdminRole[]).includes(role) && (!("membershipOnly" in item) || !item.membershipOnly || membershipEnabled),
-    ) }))
-    .filter((group) => group.items.length > 0);
+  const visibleGroups = visibleAdminNavigation(NAV_GROUPS, role, membershipEnabled);
   const visibleNav = visibleGroups.flatMap((group) => group.items);
 
   if (pathname === "/admin/login") return <>{children}</>;

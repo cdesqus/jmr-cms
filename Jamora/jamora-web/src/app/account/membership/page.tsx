@@ -2,9 +2,10 @@ import { notFound, redirect } from "next/navigation";
 import { MembershipDashboard } from "@/components/membership-dashboard";
 import { getCurrentCustomer } from "@/lib/customer-api";
 import { getCustomerMemberships } from "@/lib/membership-customer-api";
+import { membershipSurfaceEnabled } from "@/lib/membership-surface-policy.cjs";
 
 export default async function MembershipPage() {
-  if (process.env.MEMBERSHIP_ENABLED !== "true") notFound();
+  if (!membershipSurfaceEnabled(process.env)) notFound();
   const customer = await getCurrentCustomer();
   if (!customer) redirect("/account/login");
   const memberships = await getCustomerMemberships(customer);

@@ -3,9 +3,10 @@ import { AdminMembershipManager } from "@/components/admin-membership-manager";
 import { getAdminProducts } from "@/lib/admin-api";
 import { getAdminIdentity } from "@/lib/admin-session";
 import { getMembershipPlans, getMemberships } from "@/lib/membership-api";
+import { membershipSurfaceEnabled } from "@/lib/membership-surface-policy.cjs";
 
 export default async function AdminMembershipPage() {
-  if (process.env.MEMBERSHIP_ENABLED !== "true") notFound();
+  if (!membershipSurfaceEnabled(process.env)) notFound();
   const identity = await getAdminIdentity();
   if (identity?.role !== "owner") redirect("/admin");
 

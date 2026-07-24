@@ -3,6 +3,7 @@ import { prepareCheckoutPayloadText } from "@/lib/commerce/checkout.cjs";
 import { getCurrentCustomer } from "@/lib/customer-api";
 import { membershipCustomerFetch } from "@/lib/membership-customer-api";
 import { checkoutReference } from "@/lib/commerce/membership-checkout.cjs";
+import { membershipCheckoutMode } from "@/lib/membership-surface-policy.cjs";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
@@ -31,9 +32,13 @@ export async function POST(request: Request) {
   } catch {
     membershipCheckout = undefined;
   }
-  if (membershipCheckout) {
-    if (process.env.MEMBERSHIP_ENABLED !== "true") {
+  const checkoutMode = membershipCheckoutMode({ membershipCheckout }, process.env);
+  if (checkoutMode !== "ordinary") {
+    if (checkoutMode === "membership-disabled") {
       return NextResponse.json({ error: "Not found." }, { status: 404 });
+    }
+    if (!membershipCheckout) {
+      return NextResponse.json({ error: "Invalid membership checkout." }, { status: 400 });
     }
     const customer = await getCurrentCustomer();
     if (!customer) return NextResponse.json({ error: "Authentication required." }, { status: 401 });

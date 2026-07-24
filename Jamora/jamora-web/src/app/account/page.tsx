@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { CustomerLogoutButton } from "@/components/customer-auth-form";
 import { getCurrentCustomer } from "@/lib/customer-api";
 import { AccountPageFrame, requireCustomerAccounts } from "./account-page";
+import { membershipSurfaceEnabled } from "@/lib/membership-surface-policy.cjs";
 
 export default async function AccountPage() {
   requireCustomerAccounts();
@@ -21,7 +22,7 @@ export default async function AccountPage() {
           <dt className="font-semibold text-bark">Status</dt>
           <dd className="text-herb-deep">Verified</dd>
         </dl>
-        {process.env.MEMBERSHIP_ENABLED === "true" && (
+        {membershipSurfaceEnabled(process.env) && (
           <div className="mb-7 flex flex-wrap gap-3">
             <a href="/account/membership" className="rounded-full bg-bark px-5 py-3 text-sm font-semibold text-white">
               Membership dashboard

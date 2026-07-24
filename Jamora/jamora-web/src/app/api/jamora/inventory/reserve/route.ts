@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentCustomer } from "@/lib/customer-api";
 import { membershipCustomerFetch } from "@/lib/membership-customer-api";
 import { opaqueCheckoutReference } from "@/lib/commerce/membership-checkout.cjs";
+import { membershipCheckoutMode } from "@/lib/membership-surface-policy.cjs";
 
 const STRAPI_URL = process.env.STRAPI_URL ?? process.env.NEXT_PUBLIC_STRAPI_URL ?? "http://localhost:9014";
 
@@ -22,7 +23,8 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
-  if (!body.membershipCheckout) {
+  const checkoutMode = membershipCheckoutMode(body, process.env);
+  if (checkoutMode === "ordinary") {
     const response = await fetch(`${STRAPI_URL}/api/jamora/inventory/reserve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -32,10 +34,13 @@ export async function POST(request: Request) {
     const json = await response.json().catch(() => ({ error: "Inventory service unavailable." }));
     return NextResponse.json(json, { status: response.status });
   }
-  if (process.env.MEMBERSHIP_ENABLED !== "true") {
+  if (checkoutMode === "membership-disabled") {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
   const membershipCheckout = body.membershipCheckout;
+  if (!membershipCheckout) {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
   const customer = await getCurrentCustomer();
   if (!customer) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   const idempotencyKey = String(membershipCheckout.idempotencyKey ?? "").trim();

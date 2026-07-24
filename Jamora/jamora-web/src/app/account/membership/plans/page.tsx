@@ -2,9 +2,10 @@ import { notFound, redirect } from "next/navigation";
 import { MembershipPlanPicker } from "@/components/membership-plan-picker";
 import { getCurrentCustomer } from "@/lib/customer-api";
 import { getCustomerMembershipPlans } from "@/lib/membership-customer-api";
+import { membershipSurfaceEnabled } from "@/lib/membership-surface-policy.cjs";
 
 export default async function MembershipPlansPage() {
-  if (process.env.MEMBERSHIP_ENABLED !== "true") notFound();
+  if (!membershipSurfaceEnabled(process.env)) notFound();
   const customer = await getCurrentCustomer();
   if (!customer) redirect("/account/login");
   const plans = await getCustomerMembershipPlans(customer);
