@@ -32,8 +32,17 @@ export function opaqueCheckoutReference(
   customerDocumentId: string,
   idempotencyKey: string,
 ): string;
-
-export function createMembershipCheckout(adapter: Record<string, (...args: unknown[]) => Promise<unknown>>): {
-  reserve(input: Record<string, unknown>): Promise<unknown>;
-  finalize(input: Record<string, unknown>): Promise<unknown>;
+export function membershipCartProjection(input: {
+  selected: boolean;
+  coveredMerchandiseMinor?: number;
+  subtotalMinor?: number;
+  shippingMinor: number;
+  discountMinor?: number;
+}): {
+  membership: boolean;
+  merchandiseLabel: string;
+  merchandiseMinor: number;
+  shippingMinor: number;
+  discountMinor?: number;
+  totalMinor: number;
 };

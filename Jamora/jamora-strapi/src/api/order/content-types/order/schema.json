@@ -16,6 +16,7 @@
     "customerName": { "type": "string" },
     "email": { "type": "email", "required": true },
     "customerDocumentId": { "type": "string" },
+    "checkoutReference": { "type": "string" },
     "anonymousSessionId": { "type": "string" },
     "status": {
       "type": "enumeration",
@@ -46,6 +47,8 @@
     "paymentDocumentId": { "type": "string" },
     "membershipDocumentId": { "type": "string" },
     "membershipSnapshot": { "type": "json" },
+    "nonFulfillable": { "type": "boolean", "default": false },
+    "failureReason": { "type": "text" },
     "trackingPreviewUrl": { "type": "string" },
     "deliveryLabelUrl": { "type": "string" },
     "estimatedDelivery": { "type": "datetime" }

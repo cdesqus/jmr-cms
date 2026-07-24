@@ -428,21 +428,7 @@ async function expireReservations() {
   }
 }
 
-async function createStockReservation(items: any[], email = "", checkoutReference = "", idempotencyKey = "") {
-  if (checkoutReference && idempotencyKey) {
-    const existing = await reservationDocuments().findMany({
-      filters: {
-        checkoutReference: { $eq: checkoutReference },
-        idempotencyKey: { $eq: idempotencyKey },
-      },
-      limit: 1,
-    });
-    if (existing[0]) {
-      return existing[0].status === "reserved"
-        ? { reservation: existing[0] }
-        : { error: "Checkout reservation is no longer active." };
-    }
-  }
+async function createStockReservation(items: any[], email = "") {
   await expireReservations();
   const activeReservations = await reservationDocuments().findMany({
     fields: ["allocations"],
@@ -537,11 +523,7 @@ async function createStockReservation(items: any[], email = "", checkoutReferenc
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
   const token = `rsv_${crypto.randomUUID()}`;
   const reservation = await reservationDocuments().create({
-    data: {
-      token, status: "reserved", allocations, expiresAt, email,
-      checkoutReference: checkoutReference || undefined,
-      idempotencyKey: idempotencyKey || undefined,
-    },
+    data: { token, status: "reserved", allocations, expiresAt, email },
   });
   return { reservation };
 }
@@ -660,12 +642,7 @@ export default {
       ctx.body = { error: "Cart is empty." };
       return;
     }
-    const result = await createStockReservation(
-      items,
-      asString(body.email),
-      asString(body.checkoutReference),
-      asString(body.idempotencyKey),
-    );
+    const result = await createStockReservation(items, asString(body.email));
     if ("error" in result) {
       ctx.status = 409;
       ctx.body = result;

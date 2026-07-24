@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   createMockOrder,
   saveMockOrder,
@@ -26,6 +26,7 @@ import {
   getOrCreateAnonymousSessionId,
   guestShippingCents,
 } from "@/lib/commerce/checkout.cjs";
+import { membershipCartProjection } from "@/lib/commerce/membership-checkout.cjs";
 
 const PAYMENTS = ["Card", "iDEAL", "Bancontact", "Klarna", "Apple Pay", "Google Pay"];
 
@@ -60,6 +61,7 @@ export function CartView({
   const [checkingCoupon, setCheckingCoupon] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
   const [membershipMode, setMembershipMode] = useState(false);
+  const membershipAttempt = useRef<{ signature: string; key: string } | null>(null);
 
   if (items.length === 0) {
     return (
@@ -90,6 +92,18 @@ export function CartView({
     ? appliedCoupon
     : null;
   const discountCents = activeCoupon?.discountCents ?? 0;
+  const cartSummary = membershipCartProjection(activeMembershipMode
+    ? {
+        selected: true,
+        coveredMerchandiseMinor: membershipCoveredMinor,
+        shippingMinor: membershipShipping,
+      }
+    : {
+        selected: false,
+        subtotalMinor: subtotalCents,
+        shippingMinor: shipping,
+        discountMinor: discountCents,
+      });
   const canCheckout = customer.name.trim() && customer.email.trim()
     && (structuredCheckoutEnabled
       ? validateRomanianAddress(normaliseRomanianAddress(shippingAddress)).length === 0
@@ -155,7 +169,7 @@ export function CartView({
     setCheckingOut(true);
     setError("");
     try {
-      let checkoutCoupon = activeCoupon;
+      let checkoutCoupon = activeMembershipMode ? null : activeCoupon;
       if (activeCoupon) {
         const refreshed = await validateCoupon(activeCoupon.code);
         checkoutCoupon = {
@@ -166,6 +180,10 @@ export function CartView({
         };
       }
 
+      if (!membershipAttempt.current || membershipAttempt.current.signature !== cartSignature) {
+        membershipAttempt.current = { signature: cartSignature, key: crypto.randomUUID() };
+      }
+      const membershipAttemptKey = membershipAttempt.current.key;
       const reservationResponse = await fetch("/api/jamora/inventory/reserve", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -174,8 +192,7 @@ export function CartView({
           ...(activeMembershipMode ? {
             membershipCheckout: {
               membershipDocumentId: membership.documentId,
-              shippingMinor: membershipShipping,
-              idempotencyKey: crypto.randomUUID(),
+              idempotencyKey: membershipAttemptKey,
             },
           } : {}),
           items: items.map((item) => ({
@@ -220,16 +237,14 @@ export function CartView({
         Object.assign(order, {
           membershipCheckout: {
             checkoutReference: reservation.checkoutReference,
-            membershipDocumentId: membership.documentId,
-            coveredMerchandiseMinor: membershipCoveredMinor,
-            creditsRequired: membershipCreditsRequired,
-            idempotencyKey: crypto.randomUUID(),
+            idempotencyKey: `${membershipAttemptKey}:finalize`,
           },
         });
       }
       const synced = await syncMockOrderToStrapi(order);
       if (!synced.ok) throw new Error(synced.error);
       saveMockOrder(order);
+      membershipAttempt.current = null;
       clear();
       router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
     } catch (caught) {
@@ -308,16 +323,20 @@ export function CartView({
         <h2 className="font-display text-xl text-ink">Order summary</h2>
         <dl className="mt-4 space-y-2 text-sm">
           <div className="flex justify-between">
-            <dt className="text-bark">Subtotal</dt>
-            <dd className="text-ink">{formatEUR(subtotalCents)}</dd>
+            <dt className="text-bark">{cartSummary.merchandiseLabel}</dt>
+            <dd className="text-ink">
+              {activeMembershipMode
+                ? `${formatEUR(cartSummary.merchandiseMinor)} covered`
+                : formatEUR(cartSummary.merchandiseMinor)}
+            </dd>
           </div>
           <div className="flex justify-between">
             <dt className="text-bark">Shipping (EU)</dt>
             <dd className="text-ink">
-              {shipping === 0 ? "Free" : formatEUR(shipping)}
+              {cartSummary.shippingMinor === 0 ? "Free" : formatEUR(cartSummary.shippingMinor)}
             </dd>
           </div>
-          {discountCents > 0 ? (
+          {!activeMembershipMode && discountCents > 0 ? (
             <div className="flex justify-between text-herb-deep">
               <dt>Discount ({activeCoupon?.code})</dt>
               <dd>-{formatEUR(discountCents)}</dd>
@@ -325,17 +344,17 @@ export function CartView({
           ) : null}
           <div className="flex justify-between border-t border-clay/60 pt-2 font-semibold">
             <dt className="text-ink">Total</dt>
-            <dd className="text-ink">{formatEUR(Math.max(0, subtotalCents - discountCents + shipping))}</dd>
+            <dd className="text-ink">{formatEUR(cartSummary.totalMinor)}</dd>
           </div>
         </dl>
 
-        {remainingForFree > 0 && (
+        {!activeMembershipMode && remainingForFree > 0 && (
           <p className="mt-3 rounded-lg bg-cream px-3 py-2 text-xs text-bark">
             Add {formatEUR(remainingForFree)} more for free EU shipping.
           </p>
         )}
 
-        <div className="mt-4 border-t border-clay/60 pt-4">
+        {!activeMembershipMode ? <div className="mt-4 border-t border-clay/60 pt-4">
           <label className="text-xs font-semibold uppercase text-stone">Coupon code</label>
           <div className="mt-1 flex gap-2">
             <input
@@ -364,7 +383,7 @@ export function CartView({
           {appliedCoupon && !activeCoupon ? (
             <p className="mt-2 text-xs text-terracotta-deep">Cart changed. Apply the coupon again.</p>
           ) : null}
-        </div>
+        </div> : null}
 
         {membership ? (
           <MembershipRedemption

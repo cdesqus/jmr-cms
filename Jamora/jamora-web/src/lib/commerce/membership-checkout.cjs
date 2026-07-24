@@ -93,120 +93,33 @@ function opaqueCheckoutReference(secret, customerDocumentId, idempotencyKey) {
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
 }
 
-function stableKey(key, operation) {
-  if (typeof key !== "string" || !key.trim()) throw new TypeError("idempotencyKey is required.");
-  return `${key.trim()}:${operation}`;
-}
-
-function sameReservation(existing, input) {
-  return ["checkoutReference", "customerDocumentId", "membershipDocumentId", "creditsRequired"]
-    .every((field) => existing[field] === input[field]);
-}
-
-function createMembershipCheckout(adapter) {
+function membershipCartProjection(input) {
+  const shippingMinor = safeInteger(input.shippingMinor, "shippingMinor");
+  if (input.selected) {
+    const covered = safeInteger(input.coveredMerchandiseMinor, "coveredMerchandiseMinor");
+    return {
+      membership: true,
+      merchandiseLabel: "Covered merchandise",
+      merchandiseMinor: covered,
+      shippingMinor,
+      totalMinor: shippingMinor,
+    };
+  }
+  const subtotal = safeInteger(input.subtotalMinor, "subtotalMinor");
+  const discount = safeInteger(input.discountMinor ?? 0, "discountMinor");
   return {
-    async reserve(input) {
-      checkoutReference(input.checkoutReference);
-      safeInteger(input.creditsRequired, "creditsRequired", { positive: true });
-      const existing = await adapter.findCheckout(input.checkoutReference);
-      if (existing) {
-        if (!sameReservation(existing, input)) throw new Error("Checkout idempotency conflict.");
-        return existing;
-      }
-      const stock = await adapter.reserveStock({
-        checkoutReference: input.checkoutReference,
-        items: input.items,
-        idempotencyKey: stableKey(input.idempotencyKey, "stock-reserve"),
-      });
-      try {
-        const credit = await adapter.reserveCredits({
-          membershipDocumentId: input.membershipDocumentId,
-          checkoutReference: input.checkoutReference,
-          credits: input.creditsRequired,
-          idempotencyKey: stableKey(input.idempotencyKey, "credit-reserve"),
-        });
-        return adapter.saveCheckout({
-          ...input,
-          stockReservationToken: stock.token,
-          creditReservationEntryId: credit.entryId,
-          status: "reserved",
-        });
-      } catch (error) {
-        await adapter.releaseStock({
-          checkoutReference: input.checkoutReference,
-          stockReservationToken: stock.token,
-          idempotencyKey: stableKey(input.idempotencyKey, "stock-release"),
-        });
-        throw error;
-      }
-    },
-
-    async finalize(input) {
-      checkoutReference(input.checkoutReference);
-      const shippingMinor = safeInteger(input.shippingMinor, "shippingMinor", { positive: true });
-      if (input.merchandiseMinor !== 0) throw new Error("Membership merchandise must not be charged.");
-      const checkout = await adapter.findCheckout(input.checkoutReference);
-      if (!checkout || checkout.status !== "reserved") throw new Error("Checkout reservation not found.");
-      let order;
-      try {
-        order = await adapter.payAndCreateOrder({
-          ...input,
-          items: checkout.items,
-          totalMinor: shippingMinor,
-          membershipSnapshot: {
-            membershipDocumentId: checkout.membershipDocumentId,
-            creditsRedeemed: checkout.creditsRequired,
-            coveredMerchandiseMinor: checkout.coveredMerchandiseMinor,
-          },
-          idempotencyKey: stableKey(input.idempotencyKey, "order"),
-        });
-      } catch (error) {
-        await settleFailure(adapter, checkout, input.idempotencyKey, false);
-        throw error;
-      }
-      await adapter.consumeStock({
-        checkoutReference: checkout.checkoutReference,
-        stockReservationToken: checkout.stockReservationToken,
-        orderDocumentId: order.documentId,
-        idempotencyKey: stableKey(input.idempotencyKey, "stock-consume"),
-      });
-      try {
-        await adapter.redeemCredits({
-          membershipDocumentId: checkout.membershipDocumentId,
-          checkoutReference: checkout.checkoutReference,
-          orderDocumentId: order.documentId,
-          idempotencyKey: stableKey(input.idempotencyKey, "credit-redeem"),
-        });
-      } catch (error) {
-        await settleFailure(adapter, checkout, input.idempotencyKey, true);
-        throw error;
-      }
-      return adapter.saveCheckout({
-        ...checkout,
-        orderDocumentId: order.documentId,
-        status: "paid",
-      });
-    },
+    membership: false,
+    merchandiseLabel: "Subtotal",
+    merchandiseMinor: subtotal,
+    shippingMinor,
+    discountMinor: discount,
+    totalMinor: Math.max(0, subtotal - discount + shippingMinor),
   };
-}
-
-async function settleFailure(adapter, checkout, key, consumed) {
-  await adapter.releaseStock({
-    checkoutReference: checkout.checkoutReference,
-    stockReservationToken: checkout.stockReservationToken,
-    consumed,
-    idempotencyKey: stableKey(key, consumed ? "stock-reverse" : "stock-release"),
-  });
-  await adapter.releaseCredits({
-    membershipDocumentId: checkout.membershipDocumentId,
-    checkoutReference: checkout.checkoutReference,
-    idempotencyKey: stableKey(key, "credit-release"),
-  });
 }
 
 module.exports = {
   buildMembershipTotals,
   checkoutReference,
-  createMembershipCheckout,
   opaqueCheckoutReference,
+  membershipCartProjection,
 };
