@@ -18,7 +18,7 @@
     "provider": { "type": "string", "required": true },
     "status": { "type": "enumeration", "enum": ["created", "awaiting_payment", "processing", "pending_provider", "paid", "underpaid", "overpaid", "currency_mismatch", "expired", "failed", "cancelled", "refunded"], "required": true },
     "amountMinor": { "type": "integer", "required": true, "min": 0 },
-    "currency": { "type": "string", "required": true },
+    "currency": { "type": "enumeration", "enum": ["RON", "EUR"], "required": true },
     "providerReference": { "type": "string" },
     "priceSnapshot": { "type": "json", "required": true },
     "paidAt": { "type": "datetime" },
@@ -30,7 +30,7 @@
     "membershipDocumentId": { "type": "string" },
     "paymentReference": { "type": "string", "unique": true },
     "receivedAmountMinor": { "type": "integer", "min": 0 },
-    "receivedCurrency": { "type": "string" },
+    "receivedCurrency": { "type": "enumeration", "enum": ["RON", "EUR"] },
     "receivedAt": { "type": "datetime" },
     "settlementKey": { "type": "string", "unique": true }
   }

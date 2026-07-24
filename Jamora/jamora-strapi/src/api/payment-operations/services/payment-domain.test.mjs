@@ -38,10 +38,15 @@ test("classifies receipts against the expected amount and currency", () => {
 });
 
 test("permits only explicit payment status transitions", () => {
+  assert.equal(canTransition("created", "awaiting_payment"), true);
+  assert.equal(canTransition("created", "paid"), true);
+  assert.equal(canTransition("processing", "pending_provider"), true);
+  assert.equal(canTransition("processing", "paid"), true);
   assert.equal(canTransition("awaiting_payment", "pending_provider"), true);
   assert.equal(canTransition("pending_provider", "paid"), true);
   assert.equal(canTransition("paid", "refunded"), true);
   assert.equal(canTransition("paid", "awaiting_payment"), false);
+  assert.equal(canTransition("expired", "awaiting_payment"), false);
   assert.equal(canTransition("refunded", "paid"), false);
   assert.equal(canTransition("unknown", "paid"), false);
 });

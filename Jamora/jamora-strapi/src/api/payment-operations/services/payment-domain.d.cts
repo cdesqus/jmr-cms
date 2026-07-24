@@ -1,6 +1,8 @@
 export type PaymentCurrency = "RON" | "EUR";
 
 export type PaymentStatus =
+  | "created"
+  | "processing"
   | "awaiting_payment"
   | "pending_provider"
   | "paid"

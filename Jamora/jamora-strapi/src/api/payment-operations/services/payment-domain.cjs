@@ -3,6 +3,12 @@
 const CURRENCIES = new Set(["RON", "EUR"]);
 
 const TRANSITIONS = Object.freeze({
+  created: new Set([
+    "awaiting_payment", "pending_provider", "paid", "underpaid", "overpaid", "currency_mismatch", "expired", "cancelled", "failed",
+  ]),
+  processing: new Set([
+    "awaiting_payment", "pending_provider", "paid", "underpaid", "overpaid", "currency_mismatch", "expired", "cancelled", "failed",
+  ]),
   awaiting_payment: new Set([
     "pending_provider", "paid", "underpaid", "overpaid", "currency_mismatch", "expired", "cancelled", "failed",
   ]),
