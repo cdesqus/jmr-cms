@@ -110,6 +110,7 @@ function createMembershipTransactions(adapter, env = process.env) {
       assertEnabled(env);
       const expected = entryData(input, "expire", undefined, "system");
       return execute(expected, async (tx) => {
+        await tx.settleReservedCheckouts(input.membershipId, input.now);
         const state = await authoritative(tx, input.membershipId);
         if (new Date(state.membership.endsAt) > new Date(input.now)) throw new Error("Membership is not due for expiry.");
         expected.credits = state.balance;
@@ -129,6 +130,9 @@ function createMembershipTransactions(adapter, env = process.env) {
       };
       return execute(expected, async (tx) => {
         const state = await authoritative(tx, input.membershipId);
+        if (state.balance + input.creditDelta < 0) {
+          throw new Error("Admin adjustment would reduce authoritative balance below zero.");
+        }
         return appendAndCache(tx, expected, state.entries);
       });
     },
@@ -166,7 +170,9 @@ function entryData(input, kind, credits, actor) {
   };
 }
 
-function createMemoryMembershipAdapter({ memberships = [], entries = [], failCreate = false } = {}) {
+function createMemoryMembershipAdapter({
+  memberships = [], entries = [], checkouts = [], stock = {}, failCreate = false,
+} = {}) {
   const seededEntries = structuredClone(entries);
   for (const membership of memberships) {
     if (
@@ -188,6 +194,8 @@ function createMemoryMembershipAdapter({ memberships = [], entries = [], failCre
   const adapter = {
     memberships: new Map(memberships.map((item) => [item.documentId, structuredClone(item)])),
     entries: seededEntries,
+    checkouts: new Map(checkouts.map((item) => [item.checkoutReference, structuredClone(item)])),
+    stock: new Map(Object.entries(stock)),
     queue: Promise.resolve(),
     findEntry: async (key) => adapter.entries.find((entry) => entry.idempotencyKey === key),
     findMembership: async (id) => adapter.memberships.get(id),
@@ -198,11 +206,15 @@ function createMemoryMembershipAdapter({ memberships = [], entries = [], failCre
       await prior;
       const membershipSnapshot = structuredClone([...adapter.memberships]);
       const entrySnapshot = structuredClone(adapter.entries);
+      const checkoutSnapshot = structuredClone([...adapter.checkouts]);
+      const stockSnapshot = structuredClone([...adapter.stock]);
       try {
         return await work(memoryTx(adapter, failCreate));
       } catch (error) {
         adapter.memberships = new Map(membershipSnapshot);
         adapter.entries.splice(0, adapter.entries.length, ...entrySnapshot);
+        adapter.checkouts = new Map(checkoutSnapshot);
+        adapter.stock = new Map(stockSnapshot);
         throw error;
       } finally {
         release();
@@ -222,6 +234,35 @@ function memoryTx(adapter, failCreate) {
     findEntry: adapter.findEntry,
     lockMembership: adapter.findMembership,
     listEntries: async (id) => adapter.entries.filter((entry) => entry.membershipDocumentId === id),
+    async settleReservedCheckouts(id, now) {
+      const checkouts = [...adapter.checkouts.values()]
+        .filter((checkout) => checkout.membershipDocumentId === id && checkout.status === "reserved")
+        .sort((left, right) => left.checkoutReference.localeCompare(right.checkoutReference));
+      for (const checkout of checkouts) {
+        const reservation = adapter.entries.find((entry) =>
+          entry.membershipDocumentId === id &&
+          entry.checkoutReference === checkout.checkoutReference &&
+          entry.kind === "reserve");
+        const settled = adapter.entries.some((entry) =>
+          entry.checkoutReference === checkout.checkoutReference &&
+          (entry.kind === "release" || entry.kind === "redeem"));
+        if (!reservation || settled) throw new Error("Checkout reservation binding is invalid.");
+        for (const item of checkout.items ?? []) {
+          adapter.stock.set(item.productDocumentId, (adapter.stock.get(item.productDocumentId) ?? 0) + item.qty);
+        }
+        adapter.entries.push({
+          entryId: `expiry-release:${checkout.checkoutReference}`,
+          idempotencyKey: `checkout:${checkout.checkoutReference}:release`,
+          membershipDocumentId: id,
+          checkoutReference: checkout.checkoutReference,
+          kind: "release",
+          credits: reservation.credits,
+          actor: "system",
+          occurredAt: iso(now),
+        });
+        checkout.status = "expired";
+      }
+    },
     async setBalance(id, balance) {
       const membership = requireMembership(id);
       membership.cachedRemainingCredits = balance;
@@ -250,6 +291,7 @@ function memoryTx(adapter, failCreate) {
 function createStrapiMembershipAdapter(strapi) {
   const membership = () => strapi.db.query("api::membership.membership");
   const ledger = () => strapi.db.query("api::membership-credit-entry.membership-credit-entry");
+  const checkout = () => strapi.db.query("api::membership-checkout.membership-checkout");
   const queryOptions = (trx, extra = {}) => ({ ...extra, transacting: trx });
   const findMembership = (id, trx) => membership().findOne(queryOptions(trx, { where: { documentId: id } }));
   const findEntry = (key, trx) => ledger().findOne(queryOptions(trx, { where: { idempotencyKey: key } }));
@@ -272,6 +314,57 @@ function createStrapiMembershipAdapter(strapi) {
           where: { membershipDocumentId: id },
           orderBy: { occurredAt: "asc" },
         })),
+        async settleReservedCheckouts(id, now) {
+          const reserved = await checkout().findMany(queryOptions(trx, {
+            where: { membershipDocumentId: id, status: "reserved" },
+            orderBy: { checkoutReference: "asc" },
+          }));
+          for (const candidate of reserved) {
+            await strapi.db.connection("membership_checkouts")
+              .where({ document_id: candidate.documentId })
+              .transacting(trx)
+              .forUpdate()
+              .first();
+            const current = await checkout().findOne(queryOptions(trx, {
+              where: { documentId: candidate.documentId },
+            }));
+            if (!current || current.status !== "reserved") continue;
+            const reservation = await ledger().findOne(queryOptions(trx, {
+              where: {
+                membershipDocumentId: id,
+                checkoutReference: current.checkoutReference,
+                kind: "reserve",
+              },
+            }));
+            const settled = await ledger().findOne(queryOptions(trx, {
+              where: {
+                checkoutReference: current.checkoutReference,
+                kind: { $in: ["release", "redeem"] },
+              },
+            }));
+            if (!reservation || settled) throw new Error("Checkout reservation binding is invalid.");
+            for (const item of current.items ?? []) {
+              await strapi.db.connection("products")
+                .where({ document_id: item.productDocumentId })
+                .transacting(trx)
+                .increment("stock", item.qty);
+            }
+            await ledger().create(queryOptions(trx, { data: {
+              entryId: randomUUID(),
+              idempotencyKey: `checkout:${current.checkoutReference}:release`,
+              membershipDocumentId: id,
+              checkoutReference: current.checkoutReference,
+              kind: "release",
+              credits: reservation.credits,
+              actor: "system",
+              occurredAt: iso(now),
+            } }));
+            await checkout().update(queryOptions(trx, {
+              where: { documentId: current.documentId },
+              data: { status: "expired" },
+            }));
+          }
+        },
         async setBalance(id, balance) {
           await membership().update(queryOptions(trx, { where: { documentId: id }, data: { cachedRemainingCredits: balance } }));
           return findMembership(id, trx);

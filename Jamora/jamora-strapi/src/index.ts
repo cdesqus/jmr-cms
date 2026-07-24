@@ -1,4 +1,5 @@
 import { products } from "./seed/products";
+import { runMembershipStartupSweeps } from "./membership-bootstrap.cjs";
 
 export default {
   async bootstrap({ strapi }) {
@@ -9,14 +10,10 @@ export default {
     await enablePublicProductRead(strapi);
     await configureOrderListView(strapi);
     if (process.env.MEMBERSHIP_ENABLED === "true") {
-      try {
-        const count = await strapi
-          .service("api::membership-operations.membership-operations")
-          .expireDueMemberships(new Date(), 100);
-        strapi.log.info(`Membership expiry sweep processed ${count} memberships`);
-      } catch (error) {
-        strapi.log.error("Membership expiry startup sweep failed");
-      }
+      await runMembershipStartupSweeps(
+        strapi.service("api::membership-operations.membership-operations"),
+        strapi.log,
+      );
     }
   },
 };
