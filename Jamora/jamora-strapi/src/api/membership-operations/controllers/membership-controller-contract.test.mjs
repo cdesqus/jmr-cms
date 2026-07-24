@@ -89,3 +89,45 @@ test("plans GET handler rejects forged header identity before service access", a
     globalThis.strapi = previousStrapi;
   }
 });
+
+test("plans GET handler accepts trusted session version zero", async () => {
+  const previousEnabled = process.env.MEMBERSHIP_ENABLED;
+  const previousSecret = process.env.JAMORA_STOREFRONT_API_SECRET;
+  const previousStrapi = globalThis.strapi;
+  process.env.MEMBERSHIP_ENABLED = "true";
+  process.env.JAMORA_STOREFRONT_API_SECRET = "trusted";
+  const authCalls = [];
+  globalThis.strapi = {
+    service(uid) {
+      if (uid === "api::customer-auth.customer-auth") {
+        return { findActiveSessionCustomer: async (...args) => {
+          authCalls.push(args);
+          return { documentId: "customer-1" };
+        } };
+      }
+      return { listPlans: async () => ["plan"] };
+    },
+  };
+  try {
+    const controller = (await import(`./membership-operations.ts?zero=${Date.now()}`)).default;
+    const ctx = {
+      request: { method: "GET" },
+      get(name) {
+        return {
+          "x-jamora-storefront-secret": "trusted",
+          "x-jamora-customer-document-id": "customer-1",
+          "x-jamora-customer-session-version": "0",
+        }[name.toLowerCase()] ?? "";
+      },
+    };
+    await controller.plans(ctx);
+    assert.deepEqual(authCalls, [["customer-1", 0]]);
+    assert.deepEqual(ctx.body, { plans: ["plan"] });
+  } finally {
+    if (previousEnabled === undefined) delete process.env.MEMBERSHIP_ENABLED;
+    else process.env.MEMBERSHIP_ENABLED = previousEnabled;
+    if (previousSecret === undefined) delete process.env.JAMORA_STOREFRONT_API_SECRET;
+    else process.env.JAMORA_STOREFRONT_API_SECRET = previousSecret;
+    globalThis.strapi = previousStrapi;
+  }
+});

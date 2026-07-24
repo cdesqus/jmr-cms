@@ -79,3 +79,9 @@ Behavioral controller tests cover bodyless `/plans` and `/me` requests, missing
 identity, malformed versions, and forged identity/secret attempts. Fresh final
 verification passed 79 tests and the Strapi build; runtime packaging copied 19
 CJS assets and validated 82 compiled JavaScript files.
+
+Session-version parsing was subsequently aligned with the existing customer
+schema: canonical non-negative safe integers are accepted, including version
+`0`; signed, fractional, padded, whitespace-prefixed, malformed, and unsafe
+values remain rejected. Unit and bodyless GET controller tests cover version
+zero. Final verification passed 81 tests and the Strapi build.

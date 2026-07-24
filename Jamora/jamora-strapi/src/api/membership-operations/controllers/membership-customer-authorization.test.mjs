@@ -31,6 +31,21 @@ test("standards-compliant GET authorizes trusted customer session headers withou
   assert.equal(customer.documentId, "customer-1");
 });
 
+test("GET accepts canonical session version zero", async () => {
+  const ctx = context({
+    "x-jamora-storefront-secret": "storefront-secret",
+    "x-jamora-customer-document-id": "customer-1",
+    "x-jamora-customer-session-version": "0",
+  }, { method: "GET" });
+  const calls = [];
+  const customer = await authorizeMembershipCustomer(ctx, async (...args) => {
+    calls.push(args);
+    return { documentId: "customer-1" };
+  }, env);
+  assert.deepEqual(calls, [["customer-1", 0]]);
+  assert.equal(customer.documentId, "customer-1");
+});
+
 test("GET rejects missing trusted identity headers", async () => {
   const ctx = context({ "x-jamora-storefront-secret": "storefront-secret" }, { method: "GET" });
   let called = false;
@@ -54,7 +69,7 @@ test("GET rejects forged identity before session lookup when storefront secret i
 });
 
 test("GET rejects malformed session versions without coercion", async () => {
-  for (const value of ["7x", "0", "-1", "1.5", ""]) {
+  for (const value of ["7x", "-1", "1.5", "", "01", " 1", "9007199254740992"]) {
     const ctx = context({
       "x-jamora-storefront-secret": "storefront-secret",
       "x-jamora-customer-document-id": "customer-1",

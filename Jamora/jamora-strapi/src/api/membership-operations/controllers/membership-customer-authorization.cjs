@@ -8,11 +8,11 @@ function fail(ctx, status, message) {
   return null;
 }
 
-function positiveInteger(value) {
+function nonNegativeInteger(value) {
   if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value > 0 ? value : null;
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
   }
-  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/.test(value)) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
@@ -30,7 +30,7 @@ async function authorizeMembershipCustomer(ctx, findActiveSessionCustomer, env =
   const documentId = typeof documentIdHeader === "string" && documentIdHeader.trim()
     ? documentIdHeader.trim()
     : typeof input.documentId === "string" ? input.documentId.trim() : "";
-  const sessionVersion = positiveInteger(
+  const sessionVersion = nonNegativeInteger(
     sessionVersionHeader || input.sessionVersion,
   );
   if (!documentId || sessionVersion === null) {
