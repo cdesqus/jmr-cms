@@ -35,6 +35,10 @@ test("allows only the customer membership route and method allowlist", () => {
   assert.equal(customerMembershipPath("GET", ["me"]), "/api/jamora/membership/me");
   assert.equal(customerMembershipPath("POST", ["purchase"]), "/api/jamora/membership/purchase");
   assert.equal(customerMembershipPath("POST", ["renew"]), "/api/jamora/membership/renew");
+  assert.equal(
+    customerMembershipPath("POST", ["checkout-release"]),
+    "/api/jamora/membership/checkout/release",
+  );
   assert.throws(() => customerMembershipPath("POST", ["me"]), /not found/i);
   assert.throws(() => customerMembershipPath("GET", ["reserve"]), /not found/i);
   assert.throws(() => customerMembershipPath("GET", ["..", "admin"]), /not found/i);
@@ -57,6 +61,14 @@ test("strips browser identity and validates purchase and renewal bodies", () => 
     idempotencyKey: "renew:abc",
   });
   assert.throws(() => membershipOperationBody("purchase", { planDocumentId: "" }), /invalid/i);
+  assert.deepEqual(membershipOperationBody("checkout-release", {
+    checkoutReference: "24b83a32-68b1-4db2-a6ad-2a3740053282",
+    idempotencyKey: "release-1",
+    customerDocumentId: "forged",
+  }), {
+    checkoutReference: "24b83a32-68b1-4db2-a6ad-2a3740053282",
+    idempotencyKey: "release-1",
+  });
 });
 
 test("derives dashboard totals only from authoritative ledger entries", () => {

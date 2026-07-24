@@ -41,12 +41,14 @@ export default {
   async renew(ctx: any) { const identity = await customer(ctx); if (identity) await run(ctx, () => service().preparePurchase(identity.documentId, text(body(ctx).planDocumentId), text(body(ctx).idempotencyKey), text(body(ctx).membershipDocumentId))); },
   async checkoutReserve(ctx: any) { const identity = await customer(ctx); if (identity) await run(ctx, () => service().reserveMembershipCheckout({ customerDocumentId: identity.documentId, membershipDocumentId: text(body(ctx).membershipDocumentId), checkoutReference: text(body(ctx).checkoutReference), idempotencyKey: text(body(ctx).idempotencyKey), items: body(ctx).items })); },
   async checkoutFinalize(ctx: any) { const identity = await customer(ctx); if (identity) await run(ctx, () => service().finalizeMembershipCheckout({ customerDocumentId: identity.documentId, checkoutReference: text(body(ctx).checkoutReference), idempotencyKey: text(body(ctx).idempotencyKey), orderMetadata: { customerName: text(body(ctx).customerName), email: identity.email, shippingAddressText: text(body(ctx).shippingAddressText), shippingAddress: body(ctx).shippingAddress, estimatedDelivery: body(ctx).estimatedDelivery } })); },
+  async checkoutRelease(ctx: any) { const identity = await customer(ctx); if (identity) await run(ctx, () => service().releaseMembershipCheckout({ customerDocumentId: identity.documentId, checkoutReference: text(body(ctx).checkoutReference), idempotencyKey: text(body(ctx).idempotencyKey) })); },
   async adminPlans(ctx: any) { if (admin(ctx)) ctx.body = { plans: await service().listPlans(false) }; },
   async createPlan(ctx: any) { if (admin(ctx)) await run(ctx, () => service().createPlan(body(ctx))); },
   async updatePlan(ctx: any) { if (admin(ctx)) await run(ctx, () => service().updatePlan(ctx.params.documentId, body(ctx))); },
   async memberships(ctx: any) { if (admin(ctx)) ctx.body = { memberships: await service().listMemberships() }; },
   async adjust(ctx: any) { const identity = admin(ctx); if (identity) await run(ctx, () => service().adjustCredits({ membershipId: ctx.params.documentId, creditDelta: body(ctx).creditDelta, reason: text(body(ctx).reason), actor: identity.actor, idempotencyKey: text(body(ctx).idempotencyKey) })); },
   async expireDue(ctx: any) { if (admin(ctx)) ctx.body = { expired: await service().expireDueMemberships(new Date(), 100) }; },
+  async expireDueCheckouts(ctx: any) { if (admin(ctx)) ctx.body = { expired: await service().expireDueMembershipCheckouts(new Date(), 100) }; },
 };
 
 async function ownedOperation(customerDocumentId: string, membershipDocumentId: unknown, work: () => Promise<unknown>) {

@@ -19,6 +19,35 @@ function multiply(a, b, name) {
 }
 
 function createMembershipCheckoutService(adapter, env = process.env) {
+  const ttlSeconds = checkoutTtlSeconds(env.MEMBERSHIP_CHECKOUT_TTL_SECONDS);
+
+  async function settleReserved(tx, checkout, status) {
+    if (checkout.status !== "reserved") return { ...checkout, idempotent: true };
+    const credit = await tx.lockCreditReservation(checkout.checkoutReference);
+    if (!credit || credit.membershipDocumentId !== checkout.membershipDocumentId ||
+        credit.credits !== checkout.totals.creditsRequired) {
+      throw new Error("Checkout credit binding is invalid.");
+    }
+    if (credit.status === "reserved") {
+      await tx.releaseStock(checkout.items);
+      await tx.releaseCredits(credit);
+    } else if (credit.status !== "release") {
+      throw new Error("Checkout credit is already settled.");
+    }
+    await tx.setCheckoutStatus(checkout.checkoutReference, status);
+    return { ...checkout, status, idempotent: false };
+  }
+
+  async function expireOne(reference, now) {
+    return adapter.transaction(async (tx) => {
+      const checkout = await tx.lockCheckout(reference);
+      if (!checkout || checkout.status !== "reserved" ||
+          new Date(checkout.expiresAt) > now) return false;
+      await settleReserved(tx, checkout, "expired");
+      return true;
+    });
+  }
+
   return {
     async reserve(input) {
       enabled(env);
@@ -78,6 +107,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             shippingMinor, totalMinor: shippingMinor,
           },
           status: "reserved",
+          expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
         });
         });
       } catch (error) {
@@ -104,6 +134,13 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           return { checkout, order: replayOrder, idempotent: true };
         }
         if (checkout.status !== "reserved") throw new Error("Checkout is already settled.");
+        const now = new Date(input.now ?? Date.now());
+        if (now >= new Date(checkout.expiresAt)) {
+          await settleReserved(tx, checkout, "expired");
+          const error = new Error("Checkout reservation expired.");
+          error.compensated = true;
+          throw error;
+        }
         let order = input.orderDocumentId
           ? await tx.lockOrder(input.orderDocumentId)
           : null;
@@ -117,6 +154,13 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             !credit || credit.membershipDocumentId !== membership.documentId ||
             credit.status !== "reserved" || credit.credits !== checkout.totals.creditsRequired) {
           throw new Error("Checkout binding is invalid.");
+        }
+        if (membership.status !== "active" || now < new Date(membership.startsAt) ||
+            now >= new Date(membership.endsAt)) {
+          await settleReserved(tx, checkout, "released");
+          const error = new Error("Membership is no longer active.");
+          error.compensated = true;
+          throw error;
         }
         const membershipSnapshot = {
           membershipDocumentId: membership.documentId,
@@ -152,7 +196,46 @@ function createMembershipCheckoutService(adapter, env = process.env) {
         }
       });
     },
+
+    async release(input) {
+      enabled(env);
+      if (typeof input.idempotencyKey !== "string" || !input.idempotencyKey.trim()) {
+        throw new Error("idempotencyKey is required.");
+      }
+      return adapter.transaction(async (tx) => {
+        const checkout = await tx.lockCheckout(input.checkoutReference);
+        if (!checkout || checkout.customerDocumentId !== input.customerDocumentId) {
+          throw new Error("Checkout not found.");
+        }
+        if (checkout.status === "released" || checkout.status === "expired") {
+          return { ...checkout, idempotent: true };
+        }
+        if (checkout.status !== "reserved") throw new Error("Checkout is already settled.");
+        return settleReserved(tx, checkout, "released");
+      });
+    },
+
+    async expireDue(now = new Date(), limit = 100) {
+      enabled(env);
+      const bounded = Math.min(Math.max(positive(limit, "limit"), 1), 100);
+      const instant = now instanceof Date ? now : new Date(now);
+      const due = await adapter.findExpired(instant, bounded);
+      let count = 0;
+      for (const checkout of due) {
+        if (await expireOne(checkout.checkoutReference, instant)) count += 1;
+      }
+      return count;
+    },
   };
+}
+
+function checkoutTtlSeconds(value) {
+  if (value === undefined || value === "") return 600;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 60 || parsed > 3600) {
+    throw new Error("MEMBERSHIP_CHECKOUT_TTL_SECONDS must be between 60 and 3600.");
+  }
+  return parsed;
 }
 
 function createMemoryMembershipCheckoutAdapter(options = {}) {
@@ -165,6 +248,10 @@ function createMemoryMembershipCheckoutAdapter(options = {}) {
     orders: new Map(),
     queue: Promise.resolve(),
     findCheckout: async (id) => adapter.checkouts.get(id),
+    findExpired: async (now, limit) => [...adapter.checkouts.values()]
+      .filter((checkout) => checkout.status === "reserved" && new Date(checkout.expiresAt) <= now)
+      .sort((left, right) => left.expiresAt.localeCompare(right.expiresAt))
+      .slice(0, limit),
     async transaction(work) {
       const prior = adapter.queue;
       let release;
@@ -211,6 +298,12 @@ function createStrapiMembershipCheckoutAdapter(strapi) {
   return {
     findCheckout: (reference) => query("api::membership-checkout.membership-checkout")
       .findOne({ where: { checkoutReference: reference } }),
+    findExpired: (now, limit) => query("api::membership-checkout.membership-checkout")
+      .findMany({
+        where: { status: "reserved", expiresAt: { $lte: now.toISOString() } },
+        orderBy: { expiresAt: "asc" },
+        limit,
+      }),
     async transaction(work) {
       let compensatedError;
       const result = await strapi.db.transaction(async ({ trx }) => {

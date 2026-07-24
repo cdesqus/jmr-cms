@@ -47,6 +47,90 @@ test("persists authoritative customer, membership, stock, credit, and totals bin
   assert.equal(adapter.checkouts.get(reserve.checkoutReference).customerDocumentId, "customer-1");
   assert.equal(adapter.stock.get("product-1"), 0);
   assert.equal(adapter.creditReservations.get(reserve.checkoutReference).credits, 2);
+  assert.equal(
+    adapter.checkouts.get(reserve.checkoutReference).expiresAt,
+    "2026-07-24T00:10:00.000Z",
+  );
+});
+
+test("authenticated manual release is idempotent and restores stock and credit once", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  const input = {
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "release-1",
+  };
+  const first = await service.release(input);
+  const retry = await service.release(input);
+  assert.equal(first.status, "released");
+  assert.equal(retry.idempotent, true);
+  assert.equal(adapter.stock.get("product-1"), 2);
+  assert.equal(adapter.creditReservations.get(checkout.checkoutReference).status, "released");
+  await assert.rejects(() => service.release({
+    ...input, customerDocumentId: "customer-2",
+  }), /not found/i);
+});
+
+test("bounded expiry sweep releases abandoned reservations exactly once", async () => {
+  const { adapter, service } = fixture();
+  await service.reserve(reserve);
+  const expired = await service.expireDue(new Date("2026-07-24T00:11:00.000Z"), 1);
+  assert.equal(expired, 1);
+  assert.equal(await service.expireDue(new Date("2026-07-24T00:12:00.000Z"), 1), 0);
+  assert.equal(adapter.stock.get("product-1"), 2);
+  assert.equal(adapter.checkouts.get(reserve.checkoutReference).status, "expired");
+});
+
+test("finalize after expiry compensates and cannot create a paid order", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  await assert.rejects(() => service.finalize({
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "final-1",
+    now: new Date("2026-07-24T00:11:00.000Z"),
+  }), /expired/i);
+  assert.equal(adapter.orders.size, 0);
+  assert.equal(adapter.stock.get("product-1"), 2);
+  assert.equal(adapter.checkouts.get(checkout.checkoutReference).status, "expired");
+});
+
+test("finalize revalidates membership and releases a now-expired membership checkout", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  adapter.memberships.get("membership-1").status = "expired";
+  await assert.rejects(() => service.finalize({
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "final-1",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+  }), /membership/i);
+  assert.equal(adapter.orders.size, 0);
+  assert.equal(adapter.stock.get("product-1"), 2);
+  assert.equal(adapter.checkouts.get(checkout.checkoutReference).status, "released");
+});
+
+test("finalize and release race serializes to one terminal outcome without double stock", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  const results = await Promise.allSettled([
+    service.finalize({
+      customerDocumentId: "customer-1",
+      checkoutReference: checkout.checkoutReference,
+      idempotencyKey: "final-1",
+      now: new Date("2026-07-24T00:05:00.000Z"),
+    }),
+    service.release({
+      customerDocumentId: "customer-1",
+      checkoutReference: checkout.checkoutReference,
+      idempotencyKey: "release-1",
+    }),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  const status = adapter.checkouts.get(checkout.checkoutReference).status;
+  assert.ok(status === "paid" || status === "released");
+  assert.equal(adapter.stock.get("product-1"), status === "paid" ? 0 : 2);
 });
 
 test("rejects cross-customer membership, checkout, token, and order settlement", async () => {
@@ -67,6 +151,7 @@ test("rejects cross-customer membership, checkout, token, and order settlement",
     checkoutReference: checkout.checkoutReference,
     orderDocumentId: "order-foreign",
     idempotencyKey: "final-2",
+    now: new Date("2026-07-24T00:05:00.000Z"),
   }), /order/i);
 });
 
@@ -82,6 +167,7 @@ test("ignores forged browser totals and derives paid snapshot from persisted che
     checkoutReference: checkout.checkoutReference,
     orderDocumentId: "order-1",
     idempotencyKey: "final-1",
+    now: new Date("2026-07-24T00:05:00.000Z"),
     credits: 999,
     shippingMinor: 0,
     coveredMerchandiseMinor: 1,
@@ -109,6 +195,7 @@ test("redemption failure leaves no paid fulfillable order and compensates stock 
     checkoutReference: checkout.checkoutReference,
     orderDocumentId: "order-1",
     idempotencyKey: "final-1",
+    now: new Date("2026-07-24T00:05:00.000Z"),
   }), /redeem/i);
   assert.equal(adapter.orders.get("order-1").status, "failed");
   assert.equal(adapter.orders.get("order-1").nonFulfillable, true);
@@ -123,6 +210,7 @@ test("payment/order creation failure releases stock and credit", async () => {
     customerDocumentId: "customer-1",
     checkoutReference: checkout.checkoutReference,
     idempotencyKey: "final-1",
+    now: new Date("2026-07-24T00:05:00.000Z"),
   }), /payment/i);
   assert.equal(adapter.stock.get("product-1"), 2);
   assert.equal(adapter.creditReservations.get(checkout.checkoutReference).status, "released");

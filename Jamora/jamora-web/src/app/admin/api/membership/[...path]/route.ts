@@ -69,6 +69,7 @@ function assertMethod(method: string, path: string[]) {
     (method === "POST" && path.length === 1 && path[0] === "plans") ||
     (method === "PATCH" && path.length === 2 && path[0] === "plans") ||
     (method === "POST" && path.length === 2 && path[0] === "memberships" && path[1] === "expire-due") ||
+    (method === "POST" && path.length === 2 && path[0] === "membership-checkouts" && path[1] === "expire-due") ||
     (method === "POST" && path.length === 3 && path[0] === "memberships" && path[2] === "adjust");
   if (!allowed) throw new Error("Method not allowed.");
 }

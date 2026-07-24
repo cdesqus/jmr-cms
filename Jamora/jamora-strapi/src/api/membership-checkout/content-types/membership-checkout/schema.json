@@ -20,6 +20,7 @@
       "default": "reserved",
       "required": true
     },
+    "expiresAt": { "type": "datetime", "required": true },
     "orderDocumentId": { "type": "string" }
   }
 }

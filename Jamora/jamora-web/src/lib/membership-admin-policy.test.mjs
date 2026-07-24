@@ -36,6 +36,10 @@ test("allows only the documented admin membership operations", () => {
     membershipAdminPath(["memberships", "expire-due"]),
     "/api/jamora/admin/memberships/expire-due",
   );
+  assert.equal(
+    membershipAdminPath(["membership-checkouts", "expire-due"]),
+    "/api/jamora/admin/membership-checkouts/expire-due",
+  );
   assert.throws(() => membershipAdminPath(["memberships", "member-1"]), /not allowed/i);
   assert.throws(() => membershipAdminPath(["..", "orders"]), /not allowed/i);
 });

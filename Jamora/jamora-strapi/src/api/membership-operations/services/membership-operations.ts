@@ -37,6 +37,8 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
     ...transactions,
     reserveMembershipCheckout: checkout.reserve,
     finalizeMembershipCheckout: checkout.finalize,
+    releaseMembershipCheckout: checkout.release,
+    expireDueMembershipCheckouts: checkout.expireDue,
     listPlans(activeOnly = false) {
       assertMembershipEnabled();
       return documents(uid.plan).findMany({

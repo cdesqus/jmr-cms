@@ -5,6 +5,7 @@ export default {
     { method: "POST", path: "/jamora/membership/purchase", handler: "membership-operations.purchase", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/checkout/reserve", handler: "membership-operations.checkoutReserve", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/checkout/finalize", handler: "membership-operations.checkoutFinalize", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/checkout/release", handler: "membership-operations.checkoutRelease", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/renew", handler: "membership-operations.renew", config: { auth: false } },
     { method: "GET", path: "/jamora/admin/membership/plans", handler: "membership-operations.adminPlans", config: { auth: false } },
     { method: "POST", path: "/jamora/admin/membership/plans", handler: "membership-operations.createPlan", config: { auth: false } },
@@ -12,5 +13,6 @@ export default {
     { method: "GET", path: "/jamora/admin/memberships", handler: "membership-operations.memberships", config: { auth: false } },
     { method: "POST", path: "/jamora/admin/memberships/:documentId/adjust", handler: "membership-operations.adjust", config: { auth: false } },
     { method: "POST", path: "/jamora/admin/memberships/expire-due", handler: "membership-operations.expireDue", config: { auth: false } },
+    { method: "POST", path: "/jamora/admin/membership-checkouts/expire-due", handler: "membership-operations.expireDueCheckouts", config: { auth: false } },
   ],
 };

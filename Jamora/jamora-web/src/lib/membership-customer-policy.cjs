@@ -5,6 +5,7 @@ const ROUTES = new Map([
   ["GET:me", "/api/jamora/membership/me"],
   ["POST:purchase", "/api/jamora/membership/purchase"],
   ["POST:renew", "/api/jamora/membership/renew"],
+  ["POST:checkout-release", "/api/jamora/membership/checkout/release"],
 ]);
 
 function text(value) {
@@ -35,11 +36,19 @@ function trustedMembershipHeaders(inputHeaders, secret, customer) {
 
 function membershipOperationBody(operation, input) {
   if (!input || typeof input !== "object") throw new Error("Invalid request.");
-  const planDocumentId = text(input.planDocumentId);
   const idempotencyKey = text(input.idempotencyKey);
-  if (!planDocumentId || !idempotencyKey || idempotencyKey.length > 200) {
+  if (!idempotencyKey || idempotencyKey.length > 200) {
     throw new Error("Invalid request.");
   }
+  if (operation === "checkout-release") {
+    const checkoutReference = text(input.checkoutReference);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(checkoutReference)) {
+      throw new Error("Invalid request.");
+    }
+    return { checkoutReference, idempotencyKey };
+  }
+  const planDocumentId = text(input.planDocumentId);
+  if (!planDocumentId) throw new Error("Invalid request.");
   if (operation === "purchase") return { planDocumentId, idempotencyKey };
   if (operation === "renew") {
     const membershipDocumentId = text(input.membershipDocumentId);

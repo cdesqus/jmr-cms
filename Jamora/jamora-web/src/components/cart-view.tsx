@@ -168,6 +168,7 @@ export function CartView({
 
     setCheckingOut(true);
     setError("");
+    let reservedCheckoutReference: string | undefined;
     try {
       let checkoutCoupon = activeMembershipMode ? null : activeCoupon;
       if (activeCoupon) {
@@ -210,6 +211,9 @@ export function CartView({
       if (!reservationResponse.ok || !reservation.reservationToken) {
         throw new Error(reservation.error ?? "Stock could not be reserved.");
       }
+      reservedCheckoutReference = activeMembershipMode
+        ? reservation.checkoutReference
+        : undefined;
 
       const normalizedShippingAddress = structuredCheckoutEnabled
         ? normaliseRomanianAddress(shippingAddress)
@@ -248,6 +252,16 @@ export function CartView({
       clear();
       router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
     } catch (caught) {
+      if (activeMembershipMode && reservedCheckoutReference && membershipAttempt.current) {
+        await fetch("/api/jamora/membership/checkout-release", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            checkoutReference: reservedCheckoutReference,
+            idempotencyKey: `${membershipAttempt.current.key}:release`,
+          }),
+        }).catch(() => undefined);
+      }
       setError(caught instanceof Error ? caught.message : "Checkout could not be completed.");
     } finally {
       setCheckingOut(false);

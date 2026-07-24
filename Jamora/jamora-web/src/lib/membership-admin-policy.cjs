@@ -14,6 +14,7 @@ function membershipAdminPath(segments) {
     (path.length === 1 && (path[0] === "plans" || path[0] === "memberships")) ||
     (path.length === 2 && path[0] === "plans" && safeSegment(path[1])) ||
     (path.length === 2 && path[0] === "memberships" && path[1] === "expire-due") ||
+    (path.length === 2 && path[0] === "membership-checkouts" && path[1] === "expire-due") ||
     (path.length === 3 && path[0] === "memberships" && safeSegment(path[1]) && path[2] === "adjust");
   if (!allowed) throw new Error("Membership admin path is not allowed.");
   const prefix = path[0] === "plans"
