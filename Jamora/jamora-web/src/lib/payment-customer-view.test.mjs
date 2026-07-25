@@ -74,7 +74,11 @@ test("terminal status refresh removes provider action links", () => {
     expiresAt: "2026-07-25T10:00:00.000Z",
   });
   assert.equal(
-    mergePaymentSnapshot(current, { ...current, qrUrl: undefined, deepLink: undefined })
+    mergePaymentSnapshot(
+      current,
+      { ...current, qrUrl: undefined, deepLink: undefined },
+      new Date("2026-07-25T09:59:59.000Z"),
+    )
       .qrUrl,
     "https://mock.ropay.invalid/qr/token",
   );

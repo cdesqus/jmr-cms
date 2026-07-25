@@ -1,0 +1,56 @@
+{
+  "kind": "collectionType",
+  "collectionName": "shipment_compensations",
+  "info": {
+    "singularName": "shipment-compensation",
+    "pluralName": "shipment-compensations",
+    "displayName": "Shipment Compensation"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "compensationKey": {
+      "type": "string",
+      "required": true,
+      "unique": true,
+      "private": true
+    },
+    "orderDocumentId": {
+      "type": "string",
+      "required": true
+    },
+    "provider": {
+      "type": "string",
+      "required": true
+    },
+    "awb": {
+      "type": "string"
+    },
+    "labelReference": {
+      "type": "string",
+      "private": true
+    },
+    "status": {
+      "type": "enumeration",
+      "enum": [
+        "pending",
+        "resolved"
+      ],
+      "required": true,
+      "default": "pending"
+    },
+    "attempts": {
+      "type": "integer",
+      "required": true,
+      "min": 1
+    },
+    "lastAttemptAt": {
+      "type": "datetime",
+      "required": true
+    },
+    "resolvedAt": {
+      "type": "datetime"
+    }
+  }
+}

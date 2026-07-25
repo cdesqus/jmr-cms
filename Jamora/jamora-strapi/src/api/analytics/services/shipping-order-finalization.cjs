@@ -8,6 +8,34 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalisePackingChecklistInput(value) {
+  return (Array.isArray(value) ? value : []).map((item) => {
+    const qty = Number(item?.qty);
+    const scannedQty = Number(item?.scannedQty);
+    return {
+      productId: text(item?.productId).slice(0, 255),
+      sku: text(item?.sku).slice(0, 255),
+      name: text(item?.name).slice(0, 255),
+      batchDocumentId: text(item?.batchDocumentId).slice(0, 255) || null,
+      batchNumber: text(item?.batchNumber).slice(0, 255),
+      qty: Number.isSafeInteger(qty) && qty > 0 ? qty : 0,
+      scannedQty:
+        Number.isSafeInteger(scannedQty) && scannedQty >= 0
+          ? scannedQty
+          : 0,
+      checked: item?.checked === true,
+    };
+  });
+}
+
+function assertManualOrderStatusTransition(existingStatus, nextStatus) {
+  if (nextStatus === "shipped" && existingStatus !== "shipped") {
+    throw new Error(
+      "Use the shipment workflow to create a provider-bound shipment.",
+    );
+  }
+}
+
 function requiredOrderReservationToken(value, options = {}) {
   const token = text(value);
   if ((options.shippingEnabled || options.pendingPayment) &&
@@ -184,7 +212,9 @@ function exactAllocationUpdate(allocation, row) {
 module.exports = {
   assertExistingOrderReplay,
   assertLiveReservationBinding,
+  assertManualOrderStatusTransition,
   exactAllocationUpdate,
+  normalisePackingChecklistInput,
   reservationExpiryForSelection,
   requiredOrderReservationToken,
 };

@@ -96,6 +96,8 @@ export interface FulfilmentChecklistItem {
   productId?: string;
   sku?: string;
   name: string;
+  batchDocumentId?: string | null;
+  batchNumber?: string;
   qty: number;
   scannedQty?: number;
   checked: boolean;

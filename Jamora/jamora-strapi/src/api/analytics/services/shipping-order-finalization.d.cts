@@ -28,7 +28,23 @@ export function assertExistingOrderReplay(
     now: Date | string;
   },
 ): void;
+export function assertManualOrderStatusTransition(
+  existingStatus: unknown,
+  nextStatus: unknown,
+): void;
 export function exactAllocationUpdate(
   allocation: Record<string, unknown>,
   row: Record<string, unknown> | null,
 ): Record<string, unknown>;
+export function normalisePackingChecklistInput(
+  value: unknown,
+): Array<{
+  productId: string;
+  sku: string;
+  name: string;
+  batchDocumentId: string | null;
+  batchNumber: string;
+  qty: number;
+  scannedQty: number;
+  checked: boolean;
+}>;

@@ -9,7 +9,6 @@ const STATUSES: AdminOrderStatus[] = [
   "pending",
   "paid",
   "processing",
-  "shipped",
   "fulfilled",
   "failed",
   "refunded",
@@ -28,6 +27,9 @@ export function AdminOrderActions({ order, products }: { order: AdminOrder; prod
   const [scanCode, setScanCode] = useState("");
   const [scanMessage, setScanMessage] = useState("");
   const [scanMatched, setScanMatched] = useState<boolean | null>(null);
+  const manualStatuses = order.status === "shipped"
+    ? (["shipped", ...STATUSES] as AdminOrderStatus[])
+    : STATUSES;
 
   function scan() {
     const code = scanCode.trim().toLowerCase();
@@ -92,7 +94,7 @@ export function AdminOrderActions({ order, products }: { order: AdminOrder; prod
       </div>
       <details className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
         <summary className="cursor-pointer text-sm font-bold text-slate-700">Manual status correction</summary>
-        <label className="mt-3 block max-w-sm text-sm font-semibold text-slate-700">Status<select value={status} onChange={(event) => setStatus(event.target.value as AdminOrderStatus)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-normal outline-none focus:border-blue-500">{STATUSES.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label className="mt-3 block max-w-sm text-sm font-semibold text-slate-700">Status<select value={status} onChange={(event) => setStatus(event.target.value as AdminOrderStatus)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-normal outline-none focus:border-blue-500">{manualStatuses.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
       </details>
       <label className="mt-4 block text-sm font-semibold text-slate-700">
         Internal note

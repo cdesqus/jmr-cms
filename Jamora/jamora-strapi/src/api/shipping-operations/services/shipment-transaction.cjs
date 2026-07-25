@@ -34,6 +34,13 @@ function hash(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function providerIdentifier(value) {
+  const identifier = text(value);
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(identifier)
+    ? identifier
+    : "";
+}
+
 function assertActor(value) {
   const actor = text(value);
   if (!actor) throw new TypeError("Shipment actor is required.");
@@ -56,7 +63,148 @@ function assertFormat(value) {
   return format;
 }
 
-function assertPaidAndPacked(order, payment, providerCarrier) {
+function packingKey(value) {
+  return [
+    text(value?.productId ?? value?.productDocumentId),
+    text(value?.sku),
+    text(value?.batchDocumentId),
+    text(value?.batchNumber),
+  ].join("\u0000");
+}
+
+function assertExactPacking(order, products, batches) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const allocations = Array.isArray(order?.batchAllocations)
+    ? order.batchAllocations
+    : [];
+  const checklist = Array.isArray(order?.fulfilmentChecklist)
+    ? order.fulfilmentChecklist
+    : [];
+  if (!items.length || !allocations.length || !checklist.length) {
+    throw new Error("A completed authoritative packing checklist is required.");
+  }
+
+  const productRows = new Map();
+  for (const product of Array.isArray(products) ? products : []) {
+    const documentId = text(product?.documentId);
+    if (!documentId || productRows.has(documentId)) {
+      throw new Error("Packing product inventory binding is invalid.");
+    }
+    productRows.set(documentId, product);
+  }
+  const itemRows = new Map();
+  for (const item of items) {
+    const productId = text(item?.productId ?? item?.productDocumentId);
+    const slug = text(item?.slug);
+    const sku = text(item?.sku);
+    const name = text(item?.name);
+    const qty = Number(item?.qty);
+    const product = productRows.get(productId);
+    if (!productId || !slug || !sku || !name ||
+        !Number.isSafeInteger(qty) || qty <= 0 ||
+        !product ||
+        text(product.documentId) !== productId ||
+        text(product.slug) !== slug ||
+        text(product.sku) !== sku ||
+        text(product.name) !== name ||
+        itemRows.has(productId)) {
+      throw new Error("Packing product inventory binding is invalid.");
+    }
+    itemRows.set(productId, { productId, slug, sku, name, qty });
+  }
+  if (productRows.size !== itemRows.size) {
+    throw new Error("Packing product inventory binding is invalid.");
+  }
+
+  const batchRows = new Map();
+  for (const batch of Array.isArray(batches) ? batches : []) {
+    const documentId = text(batch?.documentId);
+    if (!documentId || batchRows.has(documentId)) {
+      throw new Error("Packing batch inventory binding is invalid.");
+    }
+    batchRows.set(documentId, batch);
+  }
+  const expected = new Map();
+  const allocatedByProduct = new Map();
+  const referencedBatches = new Set();
+  for (const allocation of allocations) {
+    const productId = text(allocation?.productDocumentId);
+    const item = itemRows.get(productId);
+    const qty = Number(allocation?.qty);
+    const batchDocumentId = text(allocation?.batchDocumentId);
+    const batchNumber = text(allocation?.batchNumber);
+    if (!item ||
+        text(allocation?.slug) !== item.slug ||
+        text(allocation?.sku) !== item.sku ||
+        text(allocation?.name) !== item.name ||
+        !Number.isSafeInteger(qty) ||
+        qty <= 0 ||
+        !batchNumber) {
+      throw new Error("Packing allocation binding is invalid.");
+    }
+    if (batchDocumentId) {
+      const batch = batchRows.get(batchDocumentId);
+      referencedBatches.add(batchDocumentId);
+      if (!batch ||
+          text(batch.productDocumentId) !== productId ||
+          text(batch.slug) !== item.slug ||
+          text(batch.sku) !== item.sku ||
+          text(batch.batchNumber) !== batchNumber) {
+        throw new Error("Packing batch inventory binding is invalid.");
+      }
+    } else if (batchNumber !== "LEGACY-STOCK") {
+      throw new Error("Packing batch inventory binding is invalid.");
+    }
+    const line = {
+      productId,
+      sku: item.sku,
+      name: item.name,
+      batchDocumentId,
+      batchNumber,
+      qty,
+    };
+    const key = packingKey(line);
+    if (expected.has(key)) {
+      throw new Error("Packing allocation binding is duplicated.");
+    }
+    expected.set(key, line);
+    allocatedByProduct.set(
+      productId,
+      (allocatedByProduct.get(productId) ?? 0) + qty,
+    );
+  }
+  if (batchRows.size !== referencedBatches.size) {
+    throw new Error("Packing batch inventory binding is invalid.");
+  }
+  for (const item of itemRows.values()) {
+    if (allocatedByProduct.get(item.productId) !== item.qty) {
+      throw new Error("Packing allocation quantity binding is invalid.");
+    }
+  }
+  if (checklist.length !== expected.size) {
+    throw new Error("Packing checklist has missing or extra rows.");
+  }
+  const seen = new Set();
+  for (const line of checklist) {
+    const key = packingKey(line);
+    const authoritative = expected.get(key);
+    const qty = Number(line?.qty);
+    const scannedQty = Number(line?.scannedQty);
+    if (!authoritative ||
+        seen.has(key) ||
+        text(line?.name) !== authoritative.name ||
+        qty !== authoritative.qty ||
+        !Number.isSafeInteger(qty) ||
+        line?.checked !== true ||
+        !Number.isSafeInteger(scannedQty) ||
+        scannedQty !== authoritative.qty) {
+      throw new Error("Packing checklist does not match authoritative inventory.");
+    }
+    seen.add(key);
+  }
+}
+
+function assertPaidAndPacked(order, payment, providerCarrier, inventory) {
   const membershipPaid = Boolean(text(order?.membershipDocumentId)) &&
     Boolean(text(order?.checkoutReference)) &&
     text(order?.membershipSnapshot?.membershipDocumentId) ===
@@ -82,23 +230,11 @@ function assertPaidAndPacked(order, payment, providerCarrier) {
   }
   const packedAtText = text(order.packedAt);
   const packedAt = new Date(packedAtText);
-  const checklist = Array.isArray(order.fulfilmentChecklist)
-    ? order.fulfilmentChecklist
-    : [];
   const packed = Boolean(packedAtText) &&
     Number.isFinite(packedAt.getTime()) &&
-    Boolean(text(order.packedBy)) &&
-    checklist.length > 0 &&
-    checklist.every((item) => {
-      const qty = Number(item?.qty);
-      const scannedQty = Number(item?.scannedQty);
-      return item?.checked === true &&
-        Number.isSafeInteger(qty) &&
-        qty > 0 &&
-        Number.isSafeInteger(scannedQty) &&
-        scannedQty >= qty;
-    });
+    Boolean(text(order.packedBy));
   if (!packed) throw new Error("A completed packed order is required to create a shipment.");
+  assertExactPacking(order, inventory?.products, inventory?.batches);
   if (text(order.shippingSnapshot?.carrier) !== providerCarrier ||
       !text(order.shippingSnapshot?.service)) {
     throw new Error("Order shipping carrier is not handled by this provider.");
@@ -165,6 +301,42 @@ function shippedOrderPatch(order, shipment, actor, occurredAt) {
   };
 }
 
+function existingShipmentReplay(order, shipment, providerCarrier) {
+  let validated;
+  try {
+    validated = assertProviderShipment(shipment, providerCarrier);
+  } catch {
+    throw new Error("Existing shipment binding is invalid.");
+  }
+  const expectedOrderNumber = text(order.orderNumber) || order.documentId;
+  if (text(shipment.orderDocumentId) !== order.documentId ||
+      text(shipment.orderNumber) !== expectedOrderNumber ||
+      text(shipment.provider) !== providerCarrier ||
+      text(shipment.carrier) !== providerCarrier ||
+      validated.carrier !== providerCarrier ||
+      text(shipment.service) !== text(order.shippingSnapshot?.service) ||
+      text(order.shippingSnapshot?.carrier) !== providerCarrier) {
+    throw new Error("Existing shipment binding is invalid.");
+  }
+
+  const orderCarrier = text(order.carrier);
+  const orderTracking = text(order.trackingNumber);
+  if ((orderCarrier && orderCarrier !== shipment.carrier) ||
+      (orderTracking && orderTracking !== shipment.awb)) {
+    throw new Error("Existing shipment order binding is invalid.");
+  }
+  if (["paid", "processing"].includes(order.status)) {
+    return { repair: true };
+  }
+  if (["shipped", "fulfilled", "refunded", "failed"].includes(order.status)) {
+    if (orderCarrier !== shipment.carrier || orderTracking !== shipment.awb) {
+      throw new Error("Existing shipment order binding is invalid.");
+    }
+    return { repair: false };
+  }
+  throw new Error("Existing shipment order state is invalid.");
+}
+
 function capabilitySignature(encodedPayload, secret) {
   return createHmac("sha256", secret).update(encodedPayload).digest("base64url");
 }
@@ -204,7 +376,13 @@ function createShipmentTransactions({
   capabilitySecret,
   capabilityTtlSeconds = DEFAULT_CAPABILITY_TTL_SECONDS,
 }) {
-  if (!adapter?.transaction) throw new TypeError("Shipment adapter is required.");
+  if (!adapter?.transaction ||
+      !adapter?.findPendingCompensationsByOrder ||
+      !adapter?.recordCompensation ||
+      !adapter?.markCompensationAttempt ||
+      !adapter?.resolveCompensation) {
+    throw new TypeError("Shipment adapter is required.");
+  }
   const carrier = text(provider?.carrier);
   if (!carrier || !provider?.createShipment || !provider?.cancelShipment ||
       !provider?.downloadLabel) {
@@ -220,14 +398,48 @@ function createShipmentTransactions({
     throw new TypeError("Label capability TTL must be between 1 and 300 seconds.");
   }
 
+  async function cancelAllocation(allocation) {
+    await provider.cancelShipment({
+      ...(allocation.awb ? { awb: allocation.awb } : {}),
+      ...(allocation.labelReference
+        ? { labelReference: allocation.labelReference }
+        : {}),
+    });
+  }
+
+  async function retryPendingCompensation(orderDocumentId, attemptedAt) {
+    const intents = await adapter.findPendingCompensationsByOrder(
+      orderDocumentId,
+    );
+    if (!Array.isArray(intents) || intents.length > 25) {
+      throw new Error("Shipment compensation binding is invalid.");
+    }
+    for (const intent of intents) {
+      const awb = providerIdentifier(intent.awb);
+      const labelReference = providerIdentifier(intent.labelReference);
+      if (text(intent.orderDocumentId) !== orderDocumentId ||
+          text(intent.provider) !== carrier ||
+          (!awb && !labelReference)) {
+        throw new Error("Shipment compensation binding is invalid.");
+      }
+      try {
+        await cancelAllocation({ awb, labelReference });
+      } catch {
+        await adapter.markCompensationAttempt(intent.documentId, attemptedAt);
+        throw new Error("Pending shipment compensation cleanup failed.");
+      }
+      await adapter.resolveCompensation(intent.documentId, attemptedAt);
+    }
+  }
+
   return {
     async createShipment({ orderDocumentId, actor, now = new Date() }) {
       const orderId = assertDocumentId(orderDocumentId, "Order document ID");
       const createdBy = assertActor(actor);
       const createdAt = iso(now);
-      let providerShipment;
-      try {
-        return await adapter.transaction(async (tx) => {
+      return adapter.transaction(async (tx) => {
+        let providerShipment;
+        try {
           const candidate = await tx.findOrder(orderId);
           const candidatePaymentId = text(candidate?.paymentDocumentId);
           const payment = candidatePaymentId
@@ -240,13 +452,25 @@ function createShipmentTransactions({
           }
           const existing = await tx.findShipmentByOrder(orderId);
           if (existing) {
-            await tx.updateOrder(
-              order.documentId,
-              shippedOrderPatch(order, existing, createdBy, createdAt),
-            );
+            const replay = existingShipmentReplay(order, existing, carrier);
+            if (replay.repair) {
+              await tx.updateOrder(
+                order.documentId,
+                shippedOrderPatch(order, existing, createdBy, createdAt),
+              );
+            }
             return { idempotent: true, shipment: safeShipment(existing) };
           }
-          assertPaidAndPacked(order, payment, carrier);
+          await retryPendingCompensation(orderId, createdAt);
+          const productIds = [...new Set(order.items.map((item) =>
+            text(item?.productId ?? item?.productDocumentId),
+          ))].sort();
+          const batchIds = [...new Set(order.batchAllocations.map((allocation) =>
+            text(allocation?.batchDocumentId),
+          ).filter(Boolean))].sort();
+          const batches = await tx.lockPackingBatches(batchIds);
+          const products = await tx.lockPackingProducts(productIds);
+          assertPaidAndPacked(order, payment, carrier, { products, batches });
           const providerResult = await provider.createShipment(
             structuredClone(order),
           );
@@ -273,22 +497,44 @@ function createShipmentTransactions({
             shippedOrderPatch(order, shipment, createdBy, createdAt),
           );
           return { idempotent: false, shipment: safeShipment(shipment) };
-        });
-      } catch (error) {
-        if (providerShipment?.awb || providerShipment?.labelReference) {
-          try {
-            await provider.cancelShipment({
-              ...(providerShipment.awb ? { awb: providerShipment.awb } : {}),
-              ...(providerShipment.labelReference
-                ? { labelReference: providerShipment.labelReference }
-                : {}),
-            });
-          } catch {
-            // Preserve the authoritative database error; provider cleanup can be retried operationally.
+        } catch (error) {
+          const allocation = {
+            awb: providerIdentifier(providerShipment?.awb),
+            labelReference: providerIdentifier(providerShipment?.labelReference),
+          };
+          if (allocation.awb || allocation.labelReference) {
+            try {
+              await cancelAllocation(allocation);
+            } catch {
+              const compensationKey = hash(JSON.stringify({
+                orderDocumentId: orderId,
+                provider: carrier,
+                awb: allocation.awb,
+                labelReference: allocation.labelReference,
+              }));
+              try {
+                await adapter.recordCompensation({
+                  compensationKey,
+                  orderDocumentId: orderId,
+                  provider: carrier,
+                  ...allocation,
+                  status: "pending",
+                  attempts: 1,
+                  createdAt,
+                  lastAttemptAt: createdAt,
+                });
+              } catch {
+                adapter.logCompensationFailure?.({
+                  orderDocumentId: orderId,
+                  provider: carrier,
+                  awb: allocation.awb,
+                });
+              }
+            }
           }
+          throw error;
         }
-        throw error;
-      }
+      });
     },
 
     async createLabelCapability({
@@ -485,9 +731,13 @@ function createMockShippingProvider() {
 function createMemoryShipmentAdapter({
   orders = [],
   payments = [],
+  products = [],
+  batches = [],
   shipments = [],
+  compensations = [],
   failCreateShipment = false,
   failUpdateOrder = false,
+  failRecordCompensation = false,
 } = {}) {
   const adapter = {
     orders: new Map(orders.map((order) => [order.documentId, structuredClone(order)])),
@@ -495,12 +745,84 @@ function createMemoryShipmentAdapter({
       payment.documentId,
       structuredClone(payment),
     ])),
+    products: new Map(products.map((product) => [
+      product.documentId,
+      structuredClone(product),
+    ])),
+    batches: new Map(batches.map((batch) => [
+      batch.documentId,
+      structuredClone(batch),
+    ])),
+    compensations: new Map(compensations.map((intent) => [
+      intent.documentId,
+      structuredClone(intent),
+    ])),
     shipments: new Map(shipments.map((shipment) => [
       shipment.documentId,
       structuredClone(shipment),
     ])),
     queue: Promise.resolve(),
     sequence: shipments.length,
+    compensationSequence: compensations.length,
+    compensationLogs: [],
+    lockLog: [],
+    failures: {
+      failCreateShipment,
+      failUpdateOrder,
+      failRecordCompensation,
+    },
+    async findPendingCompensationsByOrder(orderDocumentId) {
+      return [...adapter.compensations.values()]
+        .filter((candidate) =>
+          candidate.orderDocumentId === orderDocumentId &&
+          candidate.status === "pending")
+        .sort((left, right) =>
+          text(left.createdAt).localeCompare(text(right.createdAt)))
+        .slice(0, 26)
+        .map((intent) => structuredClone(intent));
+    },
+    async recordCompensation(data) {
+      if (adapter.failures.failRecordCompensation) {
+        throw new Error("Simulated compensation persistence failure.");
+      }
+      const existing = [...adapter.compensations.values()].find((candidate) =>
+        candidate.compensationKey === data.compensationKey,
+      );
+      if (existing) {
+        Object.assign(existing, structuredClone(data));
+        return structuredClone(existing);
+      }
+      adapter.compensationSequence += 1;
+      const intent = {
+        documentId: `shipment-compensation-${adapter.compensationSequence}`,
+        ...structuredClone(data),
+      };
+      adapter.compensations.set(intent.documentId, intent);
+      return structuredClone(intent);
+    },
+    logCompensationFailure(input) {
+      adapter.compensationLogs.push(structuredClone(input));
+    },
+    async markCompensationAttempt(documentId, attemptedAt) {
+      const intent = adapter.compensations.get(documentId);
+      if (!intent || intent.status !== "pending") {
+        throw new Error("Shipment compensation not found.");
+      }
+      intent.attempts += 1;
+      intent.lastAttemptAt = attemptedAt;
+      return structuredClone(intent);
+    },
+    async resolveCompensation(documentId, attemptedAt) {
+      const intent = adapter.compensations.get(documentId);
+      if (!intent || intent.status !== "pending") {
+        throw new Error("Shipment compensation not found.");
+      }
+      intent.attempts += 1;
+      intent.lastAttemptAt = attemptedAt;
+      intent.status = "resolved";
+      intent.resolvedAt = attemptedAt;
+      return structuredClone(intent);
+    },
     async transaction(work) {
       const prior = adapter.queue;
       let release;
@@ -508,16 +830,17 @@ function createMemoryShipmentAdapter({
       await prior;
       const orderSnapshot = structuredClone([...adapter.orders]);
       const paymentSnapshot = structuredClone([...adapter.payments]);
+      const productSnapshot = structuredClone([...adapter.products]);
+      const batchSnapshot = structuredClone([...adapter.batches]);
       const shipmentSnapshot = structuredClone([...adapter.shipments]);
       const sequenceSnapshot = adapter.sequence;
       try {
-        return await work(memoryTransaction(adapter, {
-          failCreateShipment,
-          failUpdateOrder,
-        }));
+        return await work(memoryTransaction(adapter, adapter.failures));
       } catch (error) {
         adapter.orders = new Map(orderSnapshot);
         adapter.payments = new Map(paymentSnapshot);
+        adapter.products = new Map(productSnapshot);
+        adapter.batches = new Map(batchSnapshot);
         adapter.shipments = new Map(shipmentSnapshot);
         adapter.sequence = sequenceSnapshot;
         throw error;
@@ -542,6 +865,20 @@ function memoryTransaction(adapter, failures) {
     async lockOrder(documentId) {
       const order = adapter.orders.get(documentId);
       return order ? structuredClone(order) : null;
+    },
+    async lockPackingProducts(documentIds) {
+      adapter.lockLog.push("products");
+      return documentIds
+        .map((documentId) => adapter.products.get(documentId))
+        .filter(Boolean)
+        .map((product) => structuredClone(product));
+    },
+    async lockPackingBatches(documentIds) {
+      adapter.lockLog.push("batches");
+      return documentIds
+        .map((documentId) => adapter.batches.get(documentId))
+        .filter(Boolean)
+        .map((batch) => structuredClone(batch));
     },
     async findShipmentByOrder(orderDocumentId) {
       const shipment = [...adapter.shipments.values()]
@@ -589,9 +926,81 @@ function memoryTransaction(adapter, failures) {
 function createStrapiShipmentAdapter(strapi) {
   const order = () => strapi.db.query("api::order.order");
   const payment = () => strapi.db.query("api::payment.payment");
+  const product = () => strapi.db.query("api::product.product");
+  const batch = () => strapi.db.query("api::inventory-batch.inventory-batch");
   const shipment = () => strapi.db.query("api::shipment.shipment");
+  const compensation = () =>
+    strapi.db.query("api::shipment-compensation.shipment-compensation");
   const options = (trx, extra = {}) => ({ ...extra, transacting: trx });
   return {
+    findPendingCompensationsByOrder: (orderDocumentId) =>
+      compensation().findMany({
+        where: { orderDocumentId, status: "pending" },
+        orderBy: { createdAt: "asc" },
+        limit: 26,
+      }),
+    async recordCompensation(data) {
+      const existing = await compensation().findOne({
+        where: { compensationKey: data.compensationKey },
+      });
+      if (existing) {
+        return compensation().update({
+          where: { documentId: existing.documentId },
+          data,
+        });
+      }
+      try {
+        return await compensation().create({ data });
+      } catch (error) {
+        const winner = await compensation().findOne({
+          where: { compensationKey: data.compensationKey },
+        });
+        if (!winner) throw error;
+        return compensation().update({
+          where: { documentId: winner.documentId },
+          data,
+        });
+      }
+    },
+    async markCompensationAttempt(documentId, attemptedAt) {
+      const intent = await compensation().findOne({
+        where: { documentId },
+      });
+      if (!intent || intent.status !== "pending") {
+        throw new Error("Shipment compensation not found.");
+      }
+      return compensation().update({
+        where: { documentId },
+        data: {
+          attempts: Number(intent.attempts) + 1,
+          lastAttemptAt: attemptedAt,
+        },
+      });
+    },
+    async resolveCompensation(documentId, attemptedAt) {
+      const intent = await compensation().findOne({
+        where: { documentId },
+      });
+      if (!intent || intent.status !== "pending") {
+        throw new Error("Shipment compensation not found.");
+      }
+      return compensation().update({
+        where: { documentId },
+        data: {
+          attempts: Number(intent.attempts) + 1,
+          lastAttemptAt: attemptedAt,
+          status: "resolved",
+          resolvedAt: attemptedAt,
+        },
+      });
+    },
+    logCompensationFailure({ orderDocumentId, provider, awb }) {
+      strapi.log.error("Shipment compensation persistence failed.", {
+        orderDocumentId,
+        provider,
+        ...(awb ? { awb } : {}),
+      });
+    },
     transaction: (work) => strapi.db.transaction(async ({ trx }) => work({
       findOrder: (documentId) => order().findOne(options(trx, {
         where: { documentId },
@@ -611,6 +1020,50 @@ function createStrapiShipmentAdapter(strapi) {
           .forUpdate()
           .first();
         return order().findOne(options(trx, { where: { documentId } }));
+      },
+      async lockPackingProducts(documentIds) {
+        const locked = [];
+        for (const documentId of documentIds) {
+          const candidates = await product().findMany(options(trx, {
+            where: {
+              documentId,
+              publishedAt: { $notNull: true },
+            },
+          }));
+          if (candidates.length !== 1 ||
+              !Number.isSafeInteger(candidates[0]?.id)) {
+            continue;
+          }
+          await strapi.db.connection("products")
+            .where({ id: candidates[0].id })
+            .transacting(trx)
+            .forUpdate()
+            .first();
+          const current = await product().findOne(options(trx, {
+            where: {
+              id: candidates[0].id,
+              documentId,
+              publishedAt: { $notNull: true },
+            },
+          }));
+          if (current) locked.push(current);
+        }
+        return locked;
+      },
+      async lockPackingBatches(documentIds) {
+        const locked = [];
+        for (const documentId of documentIds) {
+          await strapi.db.connection("inventory_batches")
+            .where({ document_id: documentId })
+            .transacting(trx)
+            .forUpdate()
+            .first();
+          const current = await batch().findOne(options(trx, {
+            where: { documentId },
+          }));
+          if (current) locked.push(current);
+        }
+        return locked;
       },
       findShipmentByOrder: (orderDocumentId) => shipment().findOne(options(trx, {
         where: { orderDocumentId },

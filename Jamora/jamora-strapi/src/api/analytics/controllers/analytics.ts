@@ -18,7 +18,9 @@ import {
 import {
   assertExistingOrderReplay,
   assertLiveReservationBinding,
+  assertManualOrderStatusTransition,
   exactAllocationUpdate,
+  normalisePackingChecklistInput,
   reservationExpiryForSelection,
   requiredOrderReservationToken,
 } from "../services/shipping-order-finalization.cjs";
@@ -465,12 +467,13 @@ async function createOrderWithLockedReservation(input: {
       return { order, allocations };
     }
 
-    const orderedAllocations = [...allocations].sort((left, right) =>
-      `${left?.productDocumentId ?? ""}:${left?.batchDocumentId ?? ""}`
-        .localeCompare(
-          `${right?.productDocumentId ?? ""}:${right?.batchDocumentId ?? ""}`,
+    const orderedBatchAllocations = [...allocations]
+      .filter((allocation) => allocation.batchDocumentId)
+      .sort((left, right) =>
+        String(left.batchDocumentId).localeCompare(
+          String(right.batchDocumentId),
         ));
-    for (const allocation of orderedAllocations) {
+    for (const allocation of orderedBatchAllocations) {
       if (allocation.batchDocumentId) {
         await strapi.db.connection("inventory_batches")
           .where({ document_id: allocation.batchDocumentId })
@@ -493,7 +496,14 @@ async function createOrderWithLockedReservation(input: {
           },
         }));
       }
+    }
 
+    const orderedProductAllocations = [...allocations].sort((left, right) =>
+      `${left?.productDocumentId ?? ""}:${left?.batchDocumentId ?? ""}`
+        .localeCompare(
+          `${right?.productDocumentId ?? ""}:${right?.batchDocumentId ?? ""}`,
+        ));
+    for (const allocation of orderedProductAllocations) {
       await strapi.db.connection("products")
         .where({ document_id: allocation.productDocumentId })
         .transacting(trx)
@@ -1407,6 +1417,15 @@ const controller = {
       ctx.body = { error: "Order not found." };
       return;
     }
+    try {
+      assertManualOrderStatusTransition((existing as any).status, status);
+    } catch {
+      ctx.status = 400;
+      ctx.body = {
+        error: "Use the shipment workflow to move an order to shipped.",
+      };
+      return;
+    }
 
     const existingHistory = parseHistory((existing as any).statusHistory);
     const history = [...existingHistory];
@@ -1432,15 +1451,15 @@ const controller = {
     if (typeof body.carrier === "string") data.carrier = body.carrier.trim();
     if (typeof body.estimatedDelivery === "string") data.estimatedDelivery = body.estimatedDelivery;
     if (Array.isArray(body.fulfilmentChecklist)) {
-      data.fulfilmentChecklist = body.fulfilmentChecklist.map((item: any) => ({
-        productId: asString(item.productId),
-        sku: asString(item.sku),
-        name: asString(item.name),
-        qty: Math.max(0, asNumber(item.qty)),
-        scannedQty: Math.max(0, asNumber(item.scannedQty)),
-        checked: Boolean(item.checked),
-      }));
-      const allChecked = (data.fulfilmentChecklist as any[]).length > 0 && (data.fulfilmentChecklist as any[]).every((item) => item.checked);
+      data.fulfilmentChecklist = normalisePackingChecklistInput(
+        body.fulfilmentChecklist,
+      );
+      const allChecked = (data.fulfilmentChecklist as any[]).length > 0 &&
+        (data.fulfilmentChecklist as any[]).every((item) =>
+          item.checked === true &&
+          item.qty > 0 &&
+          item.scannedQty === item.qty,
+        );
       data.packedAt = allChecked && asString(body.packedBy, asString((existing as any).packedBy)).trim()
         ? new Date().toISOString()
         : null;

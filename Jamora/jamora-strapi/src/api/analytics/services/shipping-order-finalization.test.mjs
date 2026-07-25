@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   assertExistingOrderReplay,
   assertLiveReservationBinding,
+  assertManualOrderStatusTransition,
   exactAllocationUpdate,
+  normalisePackingChecklistInput,
   reservationExpiryForSelection,
   requiredOrderReservationToken,
 } from "./shipping-order-finalization.cjs";
@@ -29,6 +31,44 @@ const quote = {
   quoteId: `shq_${"A".repeat(43)}`,
   expiresAt: "2026-07-25T08:10:00.000Z",
 };
+
+test("manual order correction cannot bypass provider shipment creation", () => {
+  assert.doesNotThrow(() =>
+    assertManualOrderStatusTransition("processing", "fulfilled"));
+  assert.doesNotThrow(() =>
+    assertManualOrderStatusTransition("shipped", "shipped"));
+  assert.throws(
+    () => assertManualOrderStatusTransition("processing", "shipped"),
+    /shipment workflow/i,
+  );
+  assert.throws(
+    () => assertManualOrderStatusTransition("fulfilled", "shipped"),
+    /shipment workflow/i,
+  );
+});
+
+test("packing persistence retains exact product and batch identity while stripping extra fields", () => {
+  assert.deepEqual(normalisePackingChecklistInput([{
+    productId: " product-1 ",
+    sku: " JAMU-1 ",
+    name: " Jamu Energy ",
+    batchDocumentId: " batch-1 ",
+    batchNumber: " LOT-1 ",
+    qty: 2,
+    scannedQty: 2,
+    checked: true,
+    providerUrl: "https://provider.example/private",
+  }]), [{
+    productId: "product-1",
+    sku: "JAMU-1",
+    name: "Jamu Energy",
+    batchDocumentId: "batch-1",
+    batchNumber: "LOT-1",
+    qty: 2,
+    scannedQty: 2,
+    checked: true,
+  }]);
+});
 
 test("shipping finalization requires an opaque reservation for legacy and pending orders", () => {
   for (const pendingPayment of [false, true]) {

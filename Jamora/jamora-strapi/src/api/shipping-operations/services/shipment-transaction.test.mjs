@@ -18,8 +18,33 @@ function packedOrder(overrides = {}) {
     stripeSessionId: "mock-paid-checkout",
     packedAt: "2026-07-25T11:59:00.000Z",
     packedBy: "Warehouse One",
+    items: [{
+      productId: "product-1",
+      slug: "jamu-one",
+      sku: "JAMU-1",
+      name: "Jamu One",
+      qty: 1,
+    }],
+    batchAllocations: [{
+      productDocumentId: "product-1",
+      slug: "jamu-one",
+      sku: "JAMU-1",
+      name: "Jamu One",
+      batchDocumentId: "batch-1",
+      batchNumber: "LOT-1",
+      qty: 1,
+    }],
     fulfilmentChecklist: [
-      { productId: "product-1", name: "Jamu One", qty: 1, scannedQty: 1, checked: true },
+      {
+        productId: "product-1",
+        sku: "JAMU-1",
+        name: "Jamu One",
+        batchDocumentId: "batch-1",
+        batchNumber: "LOT-1",
+        qty: 1,
+        scannedQty: 1,
+        checked: true,
+      },
     ],
     shippingSnapshot: {
       carrier: "jamora-mock",
@@ -37,6 +62,22 @@ function packedOrder(overrides = {}) {
     ...overrides,
   };
 }
+
+const defaultProducts = [{
+  documentId: "product-1",
+  slug: "jamu-one",
+  sku: "JAMU-1",
+  name: "Jamu One",
+  publishedAt: "2026-07-01T00:00:00.000Z",
+}];
+
+const defaultBatches = [{
+  documentId: "batch-1",
+  productDocumentId: "product-1",
+  slug: "jamu-one",
+  sku: "JAMU-1",
+  batchNumber: "LOT-1",
+}];
 
 function recordingProvider(overrides = {}) {
   const calls = { create: [], cancel: [], label: [] };
@@ -76,10 +117,18 @@ function recordingProvider(overrides = {}) {
 function service({
   orders = [packedOrder()],
   payments = [],
+  products = defaultProducts,
+  batches = defaultBatches,
   provider = recordingProvider(),
   adapterOptions = {},
 } = {}) {
-  const adapter = createMemoryShipmentAdapter({ orders, payments, ...adapterOptions });
+  const adapter = createMemoryShipmentAdapter({
+    orders,
+    payments,
+    products,
+    batches,
+    ...adapterOptions,
+  });
   return {
     adapter,
     provider,
@@ -108,7 +157,74 @@ test("rejects unpaid, unpacked, and foreign-carrier orders before provider acces
         actor: "warehouse@example.test",
         now: NOW,
       }),
-      /paid|packed|carrier/i,
+      /paid|pack|carrier/i,
+    );
+    assert.equal(provider.calls.create.length, 0);
+  }
+});
+
+test("locks packing inventory in the global batch-before-product order", async () => {
+  const { adapter, transactions } = service();
+
+  await transactions.createShipment({
+    orderDocumentId: "order-1",
+    actor: "warehouse@example.test",
+    now: NOW,
+  });
+
+  assert.deepEqual(adapter.lockLog, ["batches", "products"]);
+});
+
+test("packing must exactly bind authoritative order items, batches, products, and scanned quantities", async () => {
+  const exact = packedOrder();
+  const checklist = exact.fulfilmentChecklist[0];
+  const invalidOrders = [
+    packedOrder({ fulfilmentChecklist: [{ ...checklist, productId: "product-attacker" }] }),
+    packedOrder({ fulfilmentChecklist: [{ ...checklist, sku: "WHOLESALE-SKU" }] }),
+    packedOrder({ fulfilmentChecklist: [{ ...checklist, batchDocumentId: "batch-attacker" }] }),
+    packedOrder({ fulfilmentChecklist: [{ ...checklist, batchNumber: "WHOLESALE-LOT" }] }),
+    packedOrder({ fulfilmentChecklist: [{ ...checklist, qty: 100, scannedQty: 100 }] }),
+    packedOrder({ fulfilmentChecklist: [{ ...checklist, scannedQty: 2 }] }),
+    packedOrder({ fulfilmentChecklist: [checklist, { ...checklist }] }),
+  ];
+
+  for (const order of invalidOrders) {
+    const provider = recordingProvider();
+    const { transactions } = service({ orders: [order], provider });
+    await assert.rejects(
+      transactions.createShipment({
+        orderDocumentId: order.documentId,
+        actor: "warehouse@example.test",
+        now: NOW,
+      }),
+      /packing|packed/i,
+    );
+    assert.equal(provider.calls.create.length, 0);
+  }
+
+  for (const inventory of [
+    {
+      products: [{ ...defaultProducts[0], sku: "LIVE-OTHER" }],
+      batches: defaultBatches,
+    },
+    {
+      products: defaultProducts,
+      batches: [{ ...defaultBatches[0], batchNumber: "LIVE-OTHER" }],
+    },
+  ]) {
+    const provider = recordingProvider();
+    const { transactions } = service({
+      orders: [exact],
+      provider,
+      ...inventory,
+    });
+    await assert.rejects(
+      transactions.createShipment({
+        orderDocumentId: exact.documentId,
+        actor: "warehouse@example.test",
+        now: NOW,
+      }),
+      /packing|inventory|product|batch/i,
     );
     assert.equal(provider.calls.create.length, 0);
   }
@@ -249,6 +365,89 @@ test("idempotent creation repairs shipment state without another provider alloca
   assert.equal(order.statusHistory.length, 1);
 });
 
+test("idempotent replay never regresses terminal order states", async () => {
+  for (const terminalStatus of ["fulfilled", "refunded", "failed"]) {
+    const { adapter, provider, transactions } = service();
+    await transactions.createShipment({
+      orderDocumentId: "order-1",
+      actor: "warehouse@example.test",
+      now: NOW,
+    });
+    const order = adapter.orders.get("order-1");
+    order.status = terminalStatus;
+    order.statusHistory.push({
+      type: "status",
+      status: terminalStatus,
+      note: `Order ${terminalStatus}.`,
+      actor: "owner@example.test",
+      occurredAt: "2026-07-25T12:30:00.000Z",
+    });
+    const before = structuredClone(order);
+
+    const replay = await transactions.createShipment({
+      orderDocumentId: "order-1",
+      actor: "warehouse@example.test",
+      now: new Date("2026-07-25T13:00:00.000Z"),
+    });
+
+    assert.equal(replay.idempotent, true);
+    assert.deepEqual(order, before);
+    assert.equal(provider.calls.create.length, 1);
+  }
+});
+
+test("idempotent replay rejects changed shipment bindings and impossible order states", async () => {
+  const corruptions = [
+    ["provider", "foreign-provider"],
+    ["carrier", "foreign-carrier"],
+    ["service", "express"],
+    ["orderNumber", "JMR-FOREIGN"],
+    ["awb", "AWB-FOREIGN"],
+    ["labelReference", "bad"],
+  ];
+  for (const [field, value] of corruptions) {
+    const { adapter, provider, transactions } = service();
+    await transactions.createShipment({
+      orderDocumentId: "order-1",
+      actor: "warehouse@example.test",
+      now: NOW,
+    });
+    const shipment = [...adapter.shipments.values()][0];
+    shipment[field] = value;
+    const before = structuredClone(adapter.orders.get("order-1"));
+
+    await assert.rejects(
+      transactions.createShipment({
+        orderDocumentId: "order-1",
+        actor: "warehouse@example.test",
+        now: new Date("2026-07-25T13:00:00.000Z"),
+      }),
+      /binding|shipment/i,
+    );
+    assert.deepEqual(adapter.orders.get("order-1"), before);
+    assert.equal(provider.calls.create.length, 1);
+  }
+
+  const impossible = service();
+  await impossible.transactions.createShipment({
+    orderDocumentId: "order-1",
+    actor: "warehouse@example.test",
+    now: NOW,
+  });
+  const pending = impossible.adapter.orders.get("order-1");
+  pending.status = "pending";
+  const before = structuredClone(pending);
+  await assert.rejects(
+    impossible.transactions.createShipment({
+      orderDocumentId: "order-1",
+      actor: "warehouse@example.test",
+      now: new Date("2026-07-25T13:00:00.000Z"),
+    }),
+    /state|status|binding/i,
+  );
+  assert.deepEqual(pending, before);
+});
+
 test("provider shipment is compensated and database state rolls back when persistence fails", async () => {
   const provider = recordingProvider();
   const { adapter, transactions } = service({
@@ -273,6 +472,197 @@ test("provider shipment is compensated and database state rolls back when persis
   assert.equal(adapter.shipments.size, 0);
   assert.equal(adapter.orders.get("order-1").status, "processing");
   assert.equal(adapter.orders.get("order-1").trackingNumber, undefined);
+});
+
+test("failed provider cancellation persists a bounded orphan intent and retries it before allocation", async () => {
+  let cancellationAttempt = 0;
+  const provider = recordingProvider({
+    async cancelShipment(shipment) {
+      provider.calls.cancel.push(structuredClone(shipment));
+      cancellationAttempt += 1;
+      if (cancellationAttempt < 3) {
+        throw new Error("provider secret must not escape");
+      }
+    },
+  });
+  const { adapter, transactions } = service({
+    provider,
+    adapterOptions: { failCreateShipment: true },
+  });
+
+  await assert.rejects(
+    transactions.createShipment({
+      orderDocumentId: "order-1",
+      actor: "warehouse@example.test",
+      now: NOW,
+    }),
+    /simulated shipment persistence failure/i,
+  );
+
+  assert.equal(adapter.compensations.size, 1);
+  const intent = [...adapter.compensations.values()][0];
+  assert.deepEqual({
+    ...intent,
+    compensationKey: undefined,
+  }, {
+    documentId: "shipment-compensation-1",
+    compensationKey: undefined,
+    orderDocumentId: "order-1",
+    provider: "jamora-mock",
+    awb: "AWB-JMR-1001",
+    labelReference: "lbl_order-1",
+    status: "pending",
+    attempts: 1,
+    createdAt: NOW.toISOString(),
+    lastAttemptAt: NOW.toISOString(),
+  });
+  assert.match(intent.compensationKey, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(intent).includes("secret"), false);
+  assert.equal(JSON.stringify(intent).includes("http"), false);
+
+  adapter.failures.failCreateShipment = false;
+  await assert.rejects(
+    transactions.createShipment({
+      orderDocumentId: "order-1",
+      actor: "warehouse@example.test",
+      now: new Date("2026-07-25T12:01:00.000Z"),
+    }),
+    /cleanup|compensation/i,
+  );
+  assert.equal(provider.calls.create.length, 1);
+  assert.equal(intent.status, "pending");
+  assert.equal(intent.attempts, 2);
+
+  const created = await transactions.createShipment({
+    orderDocumentId: "order-1",
+    actor: "warehouse@example.test",
+    now: new Date("2026-07-25T12:02:00.000Z"),
+  });
+  assert.equal(created.idempotent, false);
+  assert.equal(provider.calls.create.length, 2);
+  assert.equal(provider.calls.cancel.length, 3);
+  assert.equal(intent.status, "resolved");
+  assert.equal(intent.attempts, 3);
+  assert.equal(intent.resolvedAt, "2026-07-25T12:02:00.000Z");
+});
+
+test("every pending orphan for an order is cleaned before a new provider allocation", async () => {
+  const provider = recordingProvider();
+  const compensations = ["A", "B"].map((suffix, index) => ({
+    documentId: `compensation-${suffix}`,
+    compensationKey: suffix.repeat(64).toLowerCase(),
+    orderDocumentId: "order-1",
+    provider: "jamora-mock",
+    awb: `AWB-ORPHAN-${suffix}`,
+    labelReference: `lbl_orphan_${suffix}`,
+    status: "pending",
+    attempts: 1,
+    createdAt: `2026-07-25T11:0${index}:00.000Z`,
+    lastAttemptAt: `2026-07-25T11:0${index}:00.000Z`,
+  }));
+  const { adapter, transactions } = service({
+    provider,
+    adapterOptions: { compensations },
+  });
+
+  await transactions.createShipment({
+    orderDocumentId: "order-1",
+    actor: "warehouse@example.test",
+    now: NOW,
+  });
+
+  assert.deepEqual(
+    provider.calls.cancel.map((entry) => entry.awb),
+    ["AWB-ORPHAN-A", "AWB-ORPHAN-B"],
+  );
+  assert.equal(provider.calls.create.length, 1);
+  assert.equal(
+    [...adapter.compensations.values()].every((intent) =>
+      intent.status === "resolved"),
+    true,
+  );
+});
+
+test("compensation persistence failure emits only a bounded safe operational log", async () => {
+  const provider = recordingProvider({
+    async cancelShipment(shipment) {
+      provider.calls.cancel.push(structuredClone(shipment));
+      throw new Error("provider secret must not escape");
+    },
+  });
+  const { adapter, transactions } = service({
+    provider,
+    adapterOptions: {
+      failCreateShipment: true,
+      failRecordCompensation: true,
+    },
+  });
+
+  await assert.rejects(
+    transactions.createShipment({
+      orderDocumentId: "order-1",
+      actor: "warehouse@example.test",
+      now: NOW,
+    }),
+    /simulated shipment persistence failure/i,
+  );
+
+  assert.equal(adapter.compensations.size, 0);
+  assert.deepEqual(adapter.compensationLogs, [{
+    orderDocumentId: "order-1",
+    provider: "jamora-mock",
+    awb: "AWB-JMR-1001",
+  }]);
+  assert.equal(JSON.stringify(adapter.compensationLogs).includes("secret"), false);
+  assert.equal(JSON.stringify(adapter.compensationLogs).includes("http"), false);
+  assert.equal(JSON.stringify(adapter.compensationLogs).includes("labelReference"), false);
+});
+
+test("a concurrent request cannot allocate after an orphan is recorded behind its initial check", async () => {
+  let releaseFirstCancellation;
+  let firstCancellationStarted;
+  const cancellationStarted = new Promise((resolve) => {
+    firstCancellationStarted = resolve;
+  });
+  const firstCancellationMayFinish = new Promise((resolve) => {
+    releaseFirstCancellation = resolve;
+  });
+  let cancellationAttempt = 0;
+  const provider = recordingProvider({
+    async cancelShipment(shipment) {
+      provider.calls.cancel.push(structuredClone(shipment));
+      cancellationAttempt += 1;
+      if (cancellationAttempt === 1) {
+        firstCancellationStarted();
+        await firstCancellationMayFinish;
+      }
+      throw new Error("provider cancellation unavailable");
+    },
+  });
+  const { adapter, transactions } = service({
+    provider,
+    adapterOptions: { failCreateShipment: true },
+  });
+
+  const first = transactions.createShipment({
+    orderDocumentId: "order-1",
+    actor: "warehouse-a@example.test",
+    now: NOW,
+  });
+  await cancellationStarted;
+  adapter.failures.failCreateShipment = false;
+  const concurrent = transactions.createShipment({
+    orderDocumentId: "order-1",
+    actor: "warehouse-b@example.test",
+    now: new Date("2026-07-25T12:01:00.000Z"),
+  });
+  releaseFirstCancellation();
+
+  await assert.rejects(first, /simulated shipment persistence failure/i);
+  await assert.rejects(concurrent, /cleanup|compensation/i);
+  assert.equal(provider.calls.create.length, 1);
+  assert.equal(adapter.shipments.size, 0);
+  assert.equal([...adapter.compensations.values()][0].status, "pending");
 });
 
 test("allocated provider shipment is compensated when its returned label metadata is rejected", async () => {
