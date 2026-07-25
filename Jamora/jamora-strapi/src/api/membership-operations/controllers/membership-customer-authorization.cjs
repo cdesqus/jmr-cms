@@ -42,4 +42,10 @@ async function authorizeMembershipCustomer(ctx, findActiveSessionCustomer, env =
   return customer;
 }
 
-module.exports = { authorizeMembershipCustomer };
+function allowLegacyMembershipFinalize(ctx, env = process.env) {
+  if (env.PAYMENTS_ENABLED !== "true") return true;
+  fail(ctx, 404, "Not found.");
+  return false;
+}
+
+module.exports = { authorizeMembershipCustomer, allowLegacyMembershipFinalize };

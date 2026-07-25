@@ -34,6 +34,7 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
   return {
     ...transactions,
     reserveMembershipCheckout: checkout.reserve,
+    prepareMembershipCheckoutOrder: checkout.preparePendingOrder,
     finalizeMembershipCheckout: checkout.finalize,
     releaseMembershipCheckout: checkout.release,
     expireDueMembershipCheckouts: checkout.expireDue,

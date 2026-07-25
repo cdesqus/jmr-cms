@@ -47,7 +47,27 @@ function shouldPollPayment(status) {
   return !TERMINAL.has(status);
 }
 
+function effectivePaymentSnapshot(snapshot, now = new Date()) {
+  const result = { ...snapshot };
+  const expiresAt = new Date(result.expiresAt).getTime();
+  if (shouldPollPayment(result.status) &&
+      Number.isFinite(expiresAt) &&
+      expiresAt <= now.getTime()) {
+    result.status = "expired";
+  }
+  if (!shouldPollPayment(result.status)) {
+    delete result.qrUrl;
+    delete result.deepLink;
+  }
+  return result;
+}
+
+function shouldPollPaymentSnapshot(snapshot, now = new Date()) {
+  return shouldPollPayment(effectivePaymentSnapshot(snapshot, now).status);
+}
+
 function mergePaymentSnapshot(current, next, now = new Date()) {
+  next = effectivePaymentSnapshot(next, now);
   const expiresAt = new Date(next?.expiresAt).getTime();
   const actionable = shouldPollPayment(next?.status)
     && Number.isFinite(expiresAt)
@@ -129,10 +149,12 @@ function pendingCheckoutOrderState(orderId, createdAt = new Date().toISOString()
 module.exports = {
   acceptedPaymentMethods,
   checkoutAttempt,
+  effectivePaymentSnapshot,
   mergePaymentSnapshot,
   paymentStatusView,
   paymentPreparationRequest,
   pendingCheckoutOrderState,
   shouldPollPayment,
+  shouldPollPaymentSnapshot,
   snapshotInstructionRows,
 };

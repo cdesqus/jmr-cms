@@ -8,6 +8,10 @@ const STRAPI_URL = process.env.STRAPI_URL ?? process.env.NEXT_PUBLIC_STRAPI_URL 
 
 type ReserveBody = {
   email?: string;
+  customerName?: string;
+  shippingAddressText?: string;
+  shippingAddress?: unknown;
+  estimatedDelivery?: string;
   items?: { slug?: string; qty?: number }[];
   membershipCheckout?: {
     membershipDocumentId?: string;
@@ -70,6 +74,10 @@ export async function POST(request: Request) {
       checkoutReference,
       idempotencyKey,
       items: body.items?.map((item) => ({ slug: item.slug, qty: item.qty })),
+      customerName: body.customerName,
+      shippingAddressText: body.shippingAddressText,
+      shippingAddress: body.shippingAddress,
+      estimatedDelivery: body.estimatedDelivery,
     }),
   });
   if (response.status >= 400 || !response.body.checkoutReference || !response.body.totals) {

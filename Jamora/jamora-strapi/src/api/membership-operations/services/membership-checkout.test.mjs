@@ -54,6 +54,73 @@ test("persists authoritative customer, membership, stock, credit, and totals bin
   );
 });
 
+test("prepares one pending order from authoritative checkout bindings", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  const input = {
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "order-1",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+    orderMetadata: {
+      email: "customer@example.com",
+      customerName: "Customer",
+      shippingAddressText: "Authoritative address",
+      shippingAddress: { city: "Cluj" },
+    },
+  };
+  const first = await service.preparePendingOrder(input);
+  const replay = await service.preparePendingOrder({
+    ...input,
+    orderMetadata: { email: "forged@example.com" },
+  });
+  assert.equal(first.order.status, "pending");
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.order.documentId, first.order.documentId);
+  assert.equal(first.order.customerDocumentId, checkout.customerDocumentId);
+  assert.equal(first.order.membershipDocumentId, checkout.membershipDocumentId);
+  assert.equal(first.order.checkoutReference, checkout.checkoutReference);
+  assert.equal(first.order.totalCents, checkout.totals.totalMinor);
+  assert.deepEqual(first.order.items, checkout.items);
+  assert.equal(
+    adapter.checkouts.get(checkout.checkoutReference).orderDocumentId,
+    first.order.documentId,
+  );
+  assert.equal(adapter.creditReservations.get(checkout.checkoutReference).status, "reserved");
+});
+
+test("pending order preparation rejects cross-customer and expired checkouts", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  await assert.rejects(service.preparePendingOrder({
+    customerDocumentId: "customer-2",
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "order-1",
+  }), /not found/i);
+  await assert.rejects(service.preparePendingOrder({
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "order-1",
+    now: new Date("2026-07-24T00:11:00.000Z"),
+  }), /expired/i);
+  assert.equal(adapter.orders.size, 0);
+  assert.equal(adapter.stock.get("product-1"), 2);
+});
+
+test("pending order replay rejects changed immutable items and totals", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  const input = {
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "order-1",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+  };
+  const { order } = await service.preparePendingOrder(input);
+  order.items[0].qty = 1;
+  await assert.rejects(service.preparePendingOrder(input), /binding/i);
+});
+
 test("authenticated manual release is idempotent and restores stock and credit once", async () => {
   const { adapter, service } = fixture();
   const checkout = await service.reserve(reserve);

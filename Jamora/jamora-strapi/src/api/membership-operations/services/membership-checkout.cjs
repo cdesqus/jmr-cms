@@ -17,6 +17,25 @@ function multiply(a, b, name) {
   if (!Number.isSafeInteger(result)) throw new Error(`${name} must be a safe integer.`);
   return result;
 }
+function same(left, right) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function pendingOrderMatchesCheckout(order, checkout) {
+  const shipping = checkout.shippingSnapshot ?? {};
+  return order?.status === "pending" &&
+    order.customerDocumentId === checkout.customerDocumentId &&
+    order.membershipDocumentId === checkout.membershipDocumentId &&
+    order.checkoutReference === checkout.checkoutReference &&
+    order.currency?.toUpperCase() === checkout.currency &&
+    order.subtotalCents === checkout.totals.merchandiseMinor &&
+    order.shippingCents === checkout.totals.shippingMinor &&
+    order.discountCents === 0 &&
+    order.totalCents === checkout.totals.totalMinor &&
+    same(order.items, checkout.items) &&
+    (order.shippingAddressText ?? "") === (shipping.shippingAddressText ?? "") &&
+    same(order.shippingAddress, shipping.shippingAddress);
+}
 
 function createMembershipCheckoutService(adapter, env = process.env) {
   const ttlSeconds = checkoutTtlSeconds(env.MEMBERSHIP_CHECKOUT_TTL_SECONDS);
@@ -107,6 +126,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             merchandiseMinor: 0, coveredMerchandiseMinor, creditsRequired,
             shippingMinor, totalMinor: shippingMinor,
           },
+          shippingSnapshot: input.shippingSnapshot ?? {},
           status: "reserved",
           expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
         });
@@ -118,6 +138,44 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             winner.idempotencyKey === input.idempotencyKey) return winner;
         throw error;
       }
+    },
+
+    async preparePendingOrder(input) {
+      enabled(env);
+      if (typeof input.idempotencyKey !== "string" || !input.idempotencyKey.trim()) {
+        throw new Error("idempotencyKey is required.");
+      }
+      return adapter.transaction(async (tx) => {
+        const checkout = await tx.lockCheckout(input.checkoutReference);
+        if (!checkout || checkout.customerDocumentId !== input.customerDocumentId) {
+          throw new Error("Checkout not found.");
+        }
+        if (checkout.status !== "reserved") throw new Error("Checkout is already settled.");
+        const now = new Date(input.now ?? Date.now());
+        if (now >= new Date(checkout.expiresAt)) {
+          await settleReserved(tx, checkout, "expired");
+          const error = new Error("Checkout reservation expired.");
+          error.compensated = true;
+          throw error;
+        }
+        if (checkout.orderDocumentId) {
+          const order = await tx.lockOrder(checkout.orderDocumentId);
+          if (!pendingOrderMatchesCheckout(order, checkout)) {
+            throw new Error("Checkout order binding is invalid.");
+          }
+          return { checkout, order, idempotent: true };
+        }
+        const order = await tx.createPendingOrder(checkout, input.orderMetadata ?? {});
+        if (!pendingOrderMatchesCheckout(order, checkout)) {
+          throw new Error("Checkout order binding is invalid.");
+        }
+        await tx.bindCheckoutOrder(checkout.checkoutReference, order.documentId);
+        return {
+          checkout: { ...checkout, orderDocumentId: order.documentId },
+          order,
+          idempotent: false,
+        };
+      });
     },
 
     async finalize(input) {
@@ -225,7 +283,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           error.compensated = true;
           throw error;
         }
-      });
+      }, input.trx);
     },
 
     async release(input) {
@@ -335,7 +393,8 @@ function createStrapiMembershipCheckoutAdapter(strapi) {
         orderBy: { expiresAt: "asc" },
         limit,
       }),
-    async transaction(work) {
+    async transaction(work, externalTrx) {
+      if (externalTrx) return work(strapiTx(strapi, query, withTrx, externalTrx));
       let compensatedError;
       const result = await strapi.db.transaction(async ({ trx }) => {
         try { return await work(strapiTx(strapi, query, withTrx, trx)); }
@@ -433,6 +492,38 @@ function strapiTx(strapi, query, withTrx, trx) {
         estimatedDelivery: metadata.estimatedDelivery,
       } }));
     },
+    async createPendingOrder(checkout, metadata) {
+      const now = new Date();
+      const shipping = checkout.shippingSnapshot ?? {};
+      return orderQ.create(withTrx(trx, { data: {
+        orderNumber: metadata.orderNumber || `JMR-${now.getUTCFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+        trackingNumber: "", carrier: "Jamora EU Fulfilment",
+        customerName: shipping.customerName || "",
+        email: shipping.email,
+        customerDocumentId: checkout.customerDocumentId,
+        membershipDocumentId: checkout.membershipDocumentId,
+        checkoutReference: checkout.checkoutReference,
+        status: "pending", currency: checkout.currency.toLowerCase(),
+        subtotalCents: 0, shippingCents: checkout.totals.shippingMinor,
+        discountCents: 0, totalCents: checkout.totals.totalMinor,
+        items: checkout.items,
+        reservationToken: checkout.checkoutReference,
+        itemsSummary: JSON.stringify(checkout.items, null, 2),
+        shippingAddressText: shipping.shippingAddressText || "",
+        shippingAddress: shipping.shippingAddress,
+        estimatedDelivery: shipping.estimatedDelivery,
+        priceSnapshot: {
+          membershipCheckout: {
+            checkoutReference: checkout.checkoutReference,
+            membershipDocumentId: checkout.membershipDocumentId,
+            totals: checkout.totals,
+          },
+        },
+      } }));
+    },
+    bindCheckoutOrder: (reference, orderDocumentId) => checkoutQ.update(withTrx(trx, {
+      where: { checkoutReference: reference }, data: { orderDocumentId },
+    })),
     async lockCreditReservation(reference) {
       const credit = await ledgerQ.findOne(withTrx(trx, {
         where: { checkoutReference: reference, kind: "reserve" },
@@ -524,6 +615,35 @@ function memoryTx(adapter, options) {
       };
       adapter.orders.set(documentId, order);
       return order;
+    },
+    async createPendingOrder(checkout) {
+      const documentId = `order:${checkout.checkoutReference}`;
+      const shipping = checkout.shippingSnapshot ?? {};
+      const order = {
+        documentId,
+        customerDocumentId: checkout.customerDocumentId,
+        membershipDocumentId: checkout.membershipDocumentId,
+        checkoutReference: checkout.checkoutReference,
+        status: "pending",
+        currency: checkout.currency.toLowerCase(),
+        subtotalCents: 0,
+        shippingCents: checkout.totals.shippingMinor,
+        discountCents: 0,
+        totalCents: checkout.totals.totalMinor,
+        items: structuredClone(checkout.items),
+        shippingAddressText: shipping.shippingAddressText || "",
+        shippingAddress: structuredClone(shipping.shippingAddress),
+        priceSnapshot: { membershipCheckout: {
+          checkoutReference: checkout.checkoutReference,
+          membershipDocumentId: checkout.membershipDocumentId,
+          totals: structuredClone(checkout.totals),
+        } },
+      };
+      adapter.orders.set(documentId, order);
+      return order;
+    },
+    async bindCheckoutOrder(id, orderDocumentId) {
+      adapter.checkouts.get(id).orderDocumentId = orderDocumentId;
     },
     lockCreditReservation: async (id) => adapter.creditReservations.get(id),
     consumeStock: async () => undefined,

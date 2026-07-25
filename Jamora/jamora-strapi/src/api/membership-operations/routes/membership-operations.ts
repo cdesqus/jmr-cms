@@ -4,6 +4,7 @@ export default {
     { method: "GET", path: "/jamora/membership/me", handler: "membership-operations.me", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/purchase", handler: "membership-operations.purchase", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/checkout/reserve", handler: "membership-operations.checkoutReserve", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/checkout/order", handler: "membership-operations.checkoutOrder", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/checkout/finalize", handler: "membership-operations.checkoutFinalize", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/checkout/release", handler: "membership-operations.checkoutRelease", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/renew", handler: "membership-operations.renew", config: { auth: false } },

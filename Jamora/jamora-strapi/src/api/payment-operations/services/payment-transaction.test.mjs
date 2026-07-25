@@ -1303,8 +1303,9 @@ test("ordinary order settlement binds guests by capability and target separately
   }), /guest payment order binding/i);
 });
 
-test("membership checkout settlement prepays its bound pending order before Phase 1 finalization", async () => {
+test("membership checkout settlement prepays its bound pending order and finalizes in the same transaction", async () => {
   const calls = [];
+  const trx = { id: "payment-trx" };
   const settle = createPaymentSubjectSettlement({
     async activateMembership() { assert.fail("not an activation"); },
     async settleOrder(payment) {
@@ -1312,7 +1313,7 @@ test("membership checkout settlement prepays its bound pending order before Phas
       return { order: { documentId: payment.orderDocumentId, status: "paid" } };
     },
     async finalizeMembershipCheckout(input) {
-      calls.push(["finalize", input.orderDocumentId, input.idempotencyKey]);
+      calls.push(["finalize", input.orderDocumentId, input.idempotencyKey, input.trx]);
       return {
         checkout: {
           checkoutReference: input.checkoutReference,
@@ -1338,12 +1339,30 @@ test("membership checkout settlement prepays its bound pending order before Phas
     orderDocumentId: "order-1",
     paidAt: "2026-07-25T10:00:00.000Z",
     priceSnapshot: { membershipCheckout: { checkoutReference: "checkout-1" } },
-  }, { settlementKey: "payment:payment-1:settle" });
+  }, { settlementKey: "payment:payment-1:settle", trx });
 
   assert.deepEqual(calls, [
     ["settleOrder", "order-1"],
-    ["finalize", "order-1", "payment:payment-1:settle"],
+    ["finalize", "order-1", "payment:payment-1:settle", trx],
   ]);
+});
+
+test("pending provider payments expire once with a deterministic sweep event", async () => {
+  const { adapter, service } = operations();
+  const payment = await service.prepareBankTransfer(input({
+    idempotencyKey: "ropay:pending-expiry",
+  }));
+  adapter.payments.get(payment.documentId).status = "pending_provider";
+  assert.equal(adapter.payments.get(payment.documentId).status, "pending_provider");
+  const dueAt = new Date("2026-07-29T08:00:00.000Z");
+  assert.equal(await service.expireDuePayments(dueAt, 100), 1);
+  assert.equal(await service.expireDuePayments(dueAt, 100), 0);
+  assert.equal(adapter.payments.get(payment.documentId).status, "expired");
+  assert.deepEqual(
+    adapter.events.filter((event) => event.providerEventId === `expiry:${payment.documentId}`)
+      .map((event) => event.transition),
+    ["expired"],
+  );
 });
 
 test("membership checkout settlement rejects a Phase 1 result for another paid order", async () => {

@@ -10,7 +10,7 @@ const {
 } = require("./payment-domain.cjs");
 
 const MISMATCH_STATUSES = new Set(["underpaid", "overpaid", "currency_mismatch"]);
-const EXPIRABLE_STATUSES = new Set(["awaiting_payment"]);
+const EXPIRABLE_STATUSES = new Set(["awaiting_payment", "pending_provider"]);
 
 function assertEnabled(env) {
   if (env.PAYMENTS_ENABLED !== "true") {
@@ -160,7 +160,11 @@ function assertMembershipCheckoutOrderAggregate(checkout, order, binding) {
       order.shippingCents !== checkout.totals.shippingMinor ||
       order.discountCents !== 0 ||
       orderMoney.amountMinor !== money.amountMinor ||
-      orderMoney.currency !== money.currency) {
+      orderMoney.currency !== money.currency ||
+      !same(order.items, checkout.items) ||
+      (order.shippingAddressText ?? "") !==
+        (checkout.shippingSnapshot?.shippingAddressText ?? "") ||
+      !same(order.shippingAddress, checkout.shippingSnapshot?.shippingAddress)) {
     throw new Error("Membership checkout order totals or currency binding is invalid.");
   }
   return money;
@@ -429,6 +433,7 @@ function createPaymentSubjectSettlement(adapters) {
         paymentDocumentId: payment.documentId,
         orderMetadata: snapshot.orderMetadata ?? payment.priceSnapshot?.orderMetadata ?? {},
         now: new Date(payment.paidAt),
+        trx: context.trx,
       });
       if (!result?.checkout ||
           result.checkout.status !== "paid" ||

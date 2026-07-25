@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import {
   acceptedPaymentMethods,
   checkoutAttempt,
+  effectivePaymentSnapshot,
   mergePaymentSnapshot,
   paymentPreparationRequest,
   pendingCheckoutOrderState,
   paymentStatusView,
   shouldPollPayment,
+  shouldPollPaymentSnapshot,
   snapshotInstructionRows,
 } from "./payment-customer-view.cjs";
 
@@ -79,6 +81,31 @@ test("terminal status refresh removes provider action links", () => {
     }, new Date("2026-07-25T10:00:00.000Z")).qrUrl,
     undefined,
   );
+});
+
+test("authoritative expiry locally returns expired and stops polling without another response", () => {
+  const snapshot = {
+    method: "ropay",
+    status: "pending_provider",
+    paymentReference: "JMR-ROPAY-EXPIRY",
+    amountMinor: 495,
+    currency: "RON",
+    expiresAt: "2026-07-25T10:00:00.000Z",
+    qrUrl: "https://mock.ropay.invalid/qr/token",
+    deepLink: "ropay://pay/token",
+  };
+  assert.equal(
+    shouldPollPaymentSnapshot(snapshot, new Date("2026-07-25T09:59:59.999Z")),
+    true,
+  );
+  const expired = effectivePaymentSnapshot(
+    snapshot,
+    new Date("2026-07-25T10:00:00.000Z"),
+  );
+  assert.equal(expired.status, "expired");
+  assert.equal(expired.qrUrl, undefined);
+  assert.equal(expired.deepLink, undefined);
+  assert.equal(shouldPollPaymentSnapshot(expired), false);
 });
 
 test("checkout retries reuse one coherent attempt until checkout input changes", () => {

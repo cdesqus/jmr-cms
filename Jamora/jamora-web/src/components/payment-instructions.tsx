@@ -7,7 +7,8 @@ import type { CustomerPaymentSnapshot } from "@/lib/payment-customer-policy.cjs"
 import {
   mergePaymentSnapshot,
   paymentStatusView,
-  shouldPollPayment,
+  effectivePaymentSnapshot,
+  shouldPollPaymentSnapshot,
   snapshotInstructionRows,
 } from "@/lib/payment-customer-view.cjs";
 
@@ -38,12 +39,35 @@ export function PaymentInstructions({
 
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    let latest = initialSnapshot
+      ? effectivePaymentSnapshot(initialSnapshot)
+      : undefined;
     const capability = guestCheckoutCapability ||
       sessionStorage.getItem(capabilityKey(reference)) ||
       "";
     if (guestCheckoutCapability) {
       sessionStorage.setItem(capabilityKey(reference), guestCheckoutCapability);
+    }
+
+    function schedule(next: CustomerPaymentSnapshot, delay = 3_000) {
+      latest = effectivePaymentSnapshot(next);
+      if (pollTimer) clearTimeout(pollTimer);
+      if (expiryTimer) clearTimeout(expiryTimer);
+      if (!shouldPollPaymentSnapshot(latest)) return;
+      const remaining = new Date(latest.expiresAt).getTime() - Date.now();
+      if (Number.isFinite(remaining)) {
+        expiryTimer = setTimeout(() => {
+          if (!active || !latest) return;
+          latest = effectivePaymentSnapshot(latest);
+          setSnapshot(latest);
+          if (pollTimer) clearTimeout(pollTimer);
+        }, Math.max(0, remaining));
+        if (delay < remaining) pollTimer = setTimeout(refresh, delay);
+      } else {
+        pollTimer = setTimeout(refresh, delay);
+      }
     }
 
     async function refresh() {
@@ -60,24 +84,32 @@ export function PaymentInstructions({
         if (!response.ok) throw new Error("Payment status is unavailable.");
         const next = await response.json() as CustomerPaymentSnapshot;
         if (!active) return;
-        setSnapshot((current) => mergePaymentSnapshot(current, next));
+        const merged = mergePaymentSnapshot(latest, next);
+        latest = merged;
+        setSnapshot(merged);
         setError("");
-        if (shouldPollPayment(next.status)) {
-          timer = setTimeout(refresh, 3_000);
-        }
+        schedule(merged);
       } catch {
         if (!active) return;
+        if (latest && !shouldPollPaymentSnapshot(latest)) {
+          setSnapshot(effectivePaymentSnapshot(latest));
+          return;
+        }
         setError("Payment status is temporarily unavailable. We will retry.");
-        timer = setTimeout(refresh, 5_000);
+        if (latest) schedule(latest, 5_000);
+        else pollTimer = setTimeout(refresh, 5_000);
       }
     }
 
-    if (!initialSnapshot || shouldPollPayment(initialSnapshot.status)) {
+    if (!initialSnapshot) {
       void refresh();
+    } else if (shouldPollPaymentSnapshot(initialSnapshot)) {
+      schedule(initialSnapshot, 0);
     }
     return () => {
       active = false;
-      if (timer) clearTimeout(timer);
+      if (pollTimer) clearTimeout(pollTimer);
+      if (expiryTimer) clearTimeout(expiryTimer);
     };
   }, [guestCheckoutCapability, initialSnapshot, reference]);
 

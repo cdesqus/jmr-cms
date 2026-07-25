@@ -232,6 +232,6 @@ test("Phase 2 removes ordinary customer access to the Phase 1 paid adapter", () 
   );
   assert.equal(
     phase1PaidCheckoutAllowed({ PAYMENTS_ENABLED: "true" }, "membership"),
-    true,
+    false,
   );
 });

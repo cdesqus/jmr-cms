@@ -6,6 +6,7 @@ const ROUTES = new Map([
   ["POST:purchase", "/api/jamora/membership/purchase"],
   ["POST:renew", "/api/jamora/membership/renew"],
   ["POST:checkout-release", "/api/jamora/membership/checkout/release"],
+  ["POST:checkout-order", "/api/jamora/membership/checkout/order"],
 ]);
 
 function text(value) {
@@ -40,7 +41,7 @@ function membershipOperationBody(operation, input) {
   if (!idempotencyKey || idempotencyKey.length > 200) {
     throw new Error("Invalid request.");
   }
-  if (operation === "checkout-release") {
+  if (operation === "checkout-release" || operation === "checkout-order") {
     const checkoutReference = text(input.checkoutReference);
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(checkoutReference)) {
       throw new Error("Invalid request.");

@@ -61,9 +61,11 @@ interface CheckoutAttempt {
 const EMPTY_ADDRESS = normaliseRomanianAddress();
 export function CartView({
   structuredCheckoutEnabled = false,
+  paymentsEnabled = false,
   membership,
 }: {
   structuredCheckoutEnabled?: boolean;
+  paymentsEnabled?: boolean;
   membership?: RedemptionMembership;
 }) {
   const router = useRouter();
@@ -246,6 +248,11 @@ export function CartView({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             email: customer.email.trim(),
+            customerName: customer.name.trim(),
+            shippingAddressText: normalizedShippingAddress
+              ? formatRomanianAddress(normalizedShippingAddress)
+              : customer.address.trim(),
+            shippingAddress: normalizedShippingAddress,
             ...(activeMembershipMode ? {
               membershipCheckout: {
                 membershipDocumentId: membership.documentId,
@@ -312,15 +319,22 @@ export function CartView({
         }
         attempt.order = order;
       }
-      if (activeMembershipMode) {
+      if (activeMembershipMode && !paymentsEnabled) {
         const synced = await syncMockOrderToStrapi(order);
         if (!synced.ok) throw new Error(synced.error);
       } else {
         if (!attempt.preparedOrderDocumentId) {
-          const orderResponse = await fetch("/api/jamora/orders/pending-payment", {
+          const orderResponse = await fetch(
+            activeMembershipMode
+              ? "/api/jamora/membership/checkout-order"
+              : "/api/jamora/orders/pending-payment",
+            {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(order),
+            body: JSON.stringify(activeMembershipMode ? {
+              checkoutReference: reservation.checkoutReference,
+              idempotencyKey: `${membershipAttemptKey}:order`,
+            } : order),
           });
           const preparedOrder = await orderResponse.json().catch(() => ({})) as {
             order?: { documentId?: string };
@@ -336,8 +350,10 @@ export function CartView({
           subjectType: "order",
           subjectId: attempt.preparedOrderDocumentId,
           purpose: "order",
-          currency: "RON",
-          guestCheckoutCapability: reservation.reservationToken,
+          currency: activeMembershipMode ? "EUR" : "RON",
+          ...(activeMembershipMode
+            ? { checkoutReference: reservation.checkoutReference }
+            : { guestCheckoutCapability: reservation.reservationToken }),
         });
         const paymentResponse = await fetch(request.endpoint, {
           method: "POST",
@@ -349,12 +365,12 @@ export function CartView({
           throw new Error("Payment instructions could not be prepared.");
         }
         setPayment(snapshot as CustomerPaymentSnapshot);
-        setPaymentCapability(reservation.reservationToken);
+        setPaymentCapability(activeMembershipMode ? "" : reservation.reservationToken);
       }
       saveMockOrder(order);
       checkoutAttemptRef.current = null;
       clear();
-      if (activeMembershipMode) {
+      if (activeMembershipMode && !paymentsEnabled) {
         router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
       }
     } catch (caught) {
@@ -522,7 +538,7 @@ export function CartView({
           />
         ) : null}
 
-        {!activeMembershipMode ? (
+        {!activeMembershipMode || paymentsEnabled ? (
           <PaymentMethodSelector
             value={paymentMethod}
             onChange={setPaymentMethod}

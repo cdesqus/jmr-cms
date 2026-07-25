@@ -16,6 +16,14 @@ export function paymentStatusView(status: PaymentStatus): {
   paid: boolean;
 };
 export function shouldPollPayment(status: PaymentStatus): boolean;
+export function effectivePaymentSnapshot(
+  snapshot: CustomerPaymentSnapshot,
+  now?: Date,
+): CustomerPaymentSnapshot;
+export function shouldPollPaymentSnapshot(
+  snapshot: CustomerPaymentSnapshot,
+  now?: Date,
+): boolean;
 export function mergePaymentSnapshot(
   current: CustomerPaymentSnapshot | undefined,
   next: CustomerPaymentSnapshot,

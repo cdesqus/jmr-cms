@@ -186,6 +186,24 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
 
   async function settleOrdinaryOrder(payment: any, trx: any) {
     const query = (uidValue: string) => strapi.db.query(uidValue);
+    if (payment.membershipDocumentId || payment.priceSnapshot?.membershipCheckout) {
+      const order = await lockDocument(uid.order, "orders", payment.orderDocumentId, trx);
+      assertOrderPaymentBinding(order, payment);
+      const marker = order?.priceSnapshot?.membershipCheckout;
+      if (!marker ||
+          marker.checkoutReference !== payment.priceSnapshot?.membershipCheckout?.checkoutReference ||
+          order.membershipDocumentId !== payment.membershipDocumentId ||
+          order.checkoutReference !== marker.checkoutReference) {
+        throw new Error("Membership payment order binding is invalid.");
+      }
+      return query(uid.order).update(withTransaction(trx, {
+        where: { documentId: order.documentId },
+        data: {
+          status: "paid",
+          paymentDocumentId: payment.documentId,
+        },
+      }));
+    }
 
     async function consumeOrderReservation(
       token: string,

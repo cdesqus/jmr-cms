@@ -20,6 +20,7 @@
     },
     "items": { "type": "json", "required": true },
     "totals": { "type": "json", "required": true },
+    "shippingSnapshot": { "type": "json" },
     "status": {
       "type": "enumeration",
       "enum": ["reserved", "paid", "failed", "released", "expired"],

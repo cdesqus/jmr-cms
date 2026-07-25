@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { authorizeMembershipCustomer } from "./membership-customer-authorization.cjs";
+import {
+  authorizeMembershipCustomer,
+  allowLegacyMembershipFinalize,
+} from "./membership-customer-authorization.cjs";
 
 const env = {
   MEMBERSHIP_ENABLED: "true",
@@ -79,4 +82,15 @@ test("GET rejects malformed session versions without coercion", async () => {
     assert.equal(customer, null);
     assert.equal(ctx.status, 400);
   }
+});
+
+test("legacy customer membership finalize is hidden when payments are enabled", () => {
+  const ctx = {};
+  assert.equal(allowLegacyMembershipFinalize(ctx, { PAYMENTS_ENABLED: "true" }), false);
+  assert.equal(ctx.status, 404);
+  assert.deepEqual(ctx.body, { error: "Not found." });
+  assert.equal(
+    allowLegacyMembershipFinalize({}, { PAYMENTS_ENABLED: "false" }),
+    true,
+  );
 });

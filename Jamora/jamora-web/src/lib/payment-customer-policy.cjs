@@ -240,8 +240,8 @@ function safePendingOrderResponse(input) {
   };
 }
 
-function phase1PaidCheckoutAllowed(env, checkoutMode) {
-  return checkoutMode !== "ordinary" || env.PAYMENTS_ENABLED !== "true";
+function phase1PaidCheckoutAllowed(env) {
+  return env.PAYMENTS_ENABLED !== "true";
 }
 
 module.exports = {
