@@ -10,6 +10,7 @@ import {
   createPaymentTransactions,
   createStrapiPaymentAdapter,
   deriveAuthoritativePaymentSubject,
+  lockAuthoritativeOrderSubject,
   lockMembershipCheckoutOrder,
   validateGuestCheckoutCapability,
 } from "./payment-transaction.cjs";
@@ -591,6 +592,32 @@ test("provider settlement replay requires exact optional-field presence and valu
   }
 });
 
+test("provider settlement rejects an explicitly empty provider reference", async () => {
+  const { service } = operations();
+  const payment = await service.prepareBankTransfer(input());
+  await assert.rejects(
+    service.settlePayment({
+      paymentDocumentId: payment.documentId,
+      actor: "provider",
+      providerEventId: "provider:empty-reference",
+      receivedAmountMinor: 10_000,
+      receivedCurrency: "RON",
+      providerReference: "   ",
+    }),
+    /providerReference is required/i,
+  );
+  const valid = {
+    paymentDocumentId: payment.documentId,
+    actor: "provider",
+    providerEventId: "provider:valid-reference",
+    receivedAmountMinor: 10_000,
+    receivedCurrency: "RON",
+    providerReference: "provider-reference-1",
+  };
+  await service.settlePayment(valid);
+  assert.equal((await service.settlePayment(valid)).idempotent, true);
+});
+
 test("exact provider replay reconciles before expiry while changed or new events do not", async () => {
   let clock = new Date("2026-07-25T09:00:00.000Z");
   const { service } = operations({ now: () => clock });
@@ -710,6 +737,139 @@ test("membership checkout/order locking always acquires checkout before order", 
   assert.equal(result.order.documentId, "order-1");
 });
 
+test("authoritative order discovery derives an omitted checkout reference before canonical locks", async () => {
+  const calls = [];
+  const order = {
+    documentId: "order-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    checkoutReference: "checkout-1",
+    status: "pending",
+    currency: "eur",
+    subtotalCents: 0,
+    discountCents: 0,
+    shippingCents: 495,
+    totalCents: 495,
+    priceSnapshot: {
+      membershipCheckout: {
+        checkoutReference: "checkout-1",
+        membershipDocumentId: "membership-1",
+      },
+    },
+  };
+  const checkout = {
+    checkoutReference: "checkout-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    status: "reserved",
+    expiresAt: "2026-07-25T09:00:00.000Z",
+    currency: "EUR",
+    totals: {
+      merchandiseMinor: 0,
+      shippingMinor: 495,
+      totalMinor: 495,
+    },
+  };
+  const result = await lockAuthoritativeOrderSubject({
+    async findOrder(documentId) {
+      calls.push(`find:${documentId}`);
+      return structuredClone(order);
+    },
+    async lockCheckout(reference) {
+      calls.push(`checkout:${reference}`);
+      return structuredClone(checkout);
+    },
+    async lockOrder(documentId) {
+      calls.push(`order:${documentId}`);
+      return structuredClone(order);
+    },
+  }, {
+    orderDocumentId: "order-1",
+    customerDocumentId: "customer-1",
+    now: new Date("2026-07-25T08:00:00.000Z"),
+  });
+
+  assert.equal(result.checkoutReference, "checkout-1");
+  assert.deepEqual(calls, [
+    "find:order-1",
+    "checkout:checkout-1",
+    "order:order-1",
+  ]);
+});
+
+test("authoritative order discovery rejects bogus caller references and incomplete markers", async () => {
+  const baseOrder = {
+    documentId: "order-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    checkoutReference: "checkout-1",
+    status: "pending",
+    currency: "eur",
+    subtotalCents: 0,
+    discountCents: 0,
+    shippingCents: 495,
+    totalCents: 495,
+  };
+  for (const [order, callerCheckoutReference] of [
+    [baseOrder, "checkout-bogus"],
+    [baseOrder, "   "],
+    [{ ...baseOrder, checkoutReference: undefined }, undefined],
+    [{
+      ...baseOrder,
+      priceSnapshot: {
+        membershipCheckout: { checkoutReference: "checkout-2" },
+      },
+    }, undefined],
+    [{
+      ...baseOrder,
+      membershipDocumentId: undefined,
+      priceSnapshot: {
+        membershipCheckout: { checkoutReference: "checkout-1" },
+      },
+    }, undefined],
+  ]) {
+    await assert.rejects(
+      lockAuthoritativeOrderSubject({
+        findOrder: async () => structuredClone(order),
+        lockCheckout: async () => assert.fail("must reject before checkout lock"),
+        lockOrder: async () => assert.fail("must reject before order lock"),
+      }, {
+        orderDocumentId: "order-1",
+        customerDocumentId: "customer-1",
+        callerCheckoutReference,
+        now: new Date("2026-07-25T08:00:00.000Z"),
+      }),
+      /checkout.*binding|marker/i,
+    );
+  }
+});
+
+test("authoritative order discovery fails closed if a missing candidate becomes a membership checkout", async () => {
+  await assert.rejects(
+    lockAuthoritativeOrderSubject({
+      findOrder: async () => null,
+      lockCheckout: async () => assert.fail("must not lock checkout after order"),
+      lockOrder: async () => ({
+        documentId: "order-1",
+        customerDocumentId: "customer-1",
+        membershipDocumentId: "membership-1",
+        checkoutReference: "checkout-1",
+        priceSnapshot: {
+          membershipCheckout: {
+            checkoutReference: "checkout-1",
+            membershipDocumentId: "membership-1",
+          },
+        },
+      }),
+    }, {
+      orderDocumentId: "order-1",
+      customerDocumentId: "customer-1",
+      now: new Date("2026-07-25T08:00:00.000Z"),
+    }),
+    /binding changed/i,
+  );
+});
+
 test("membership checkout payment derives money and expiry only from the locked checkout", () => {
   const checkout = {
     checkoutReference: "checkout-1",
@@ -789,9 +949,39 @@ test("membership checkout preparation replay uses checkout identity rather than 
     shippingCents: 495,
     totalCents: 495,
   };
+  const markedOrder = {
+    ...order,
+    priceSnapshot: {
+      membershipCheckout: {
+        checkoutReference: checkout.checkoutReference,
+        membershipDocumentId: checkout.membershipDocumentId,
+      },
+    },
+  };
   const adapter = createMemoryPaymentAdapter({
-    resolvePaymentSubject: async (requested) =>
-      deriveAuthoritativePaymentSubject(requested, order, null, now, checkout),
+    resolvePaymentSubject: async (requested) => {
+      const locked = await lockAuthoritativeOrderSubject({
+        findOrder: async () => structuredClone(markedOrder),
+        lockCheckout: async () => structuredClone(checkout),
+        lockOrder: async () => structuredClone(markedOrder),
+      }, {
+        orderDocumentId: requested.subjectId,
+        customerDocumentId: requested.customerDocumentId,
+        callerCheckoutReference: requested.checkoutReference,
+        now,
+      });
+      return deriveAuthoritativePaymentSubject(
+        {
+          ...requested,
+          checkoutReference: locked.checkoutReference,
+          membershipDocumentId: locked.order.membershipDocumentId,
+        },
+        locked.order,
+        null,
+        now,
+        locked.checkout,
+      );
+    },
   });
   const service = createPaymentTransactions(adapter, {
     env: enabled,
@@ -803,7 +993,6 @@ test("membership checkout preparation replay uses checkout identity rather than 
     subjectId: "order-1",
     customerDocumentId: "customer-1",
     purpose: "order",
-    checkoutReference: "checkout-1",
     currency: "USD",
     now,
   };
@@ -814,7 +1003,7 @@ test("membership checkout preparation replay uses checkout identity rather than 
   await assert.rejects(
     service.prepareBankTransfer({
       ...requested,
-      checkoutReference: "checkout-2",
+      checkoutReference: "checkout-bogus",
     }),
     /idempotency conflict/i,
   );

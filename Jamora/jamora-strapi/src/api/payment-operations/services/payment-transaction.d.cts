@@ -41,6 +41,23 @@ export function lockMembershipCheckoutOrder(
     now?: Date;
   },
 ): Promise<{ checkout: any; order: any }>;
+export function lockAuthoritativeOrderSubject(
+  adapters: {
+    findOrder(documentId: string): Promise<any>;
+    lockCheckout(reference: string): Promise<any>;
+    lockOrder(documentId: string): Promise<any>;
+  },
+  binding: {
+    orderDocumentId: string;
+    customerDocumentId?: string;
+    callerCheckoutReference?: string;
+    now?: Date;
+  },
+): Promise<{
+  checkout: any;
+  order: any;
+  checkoutReference: string | null;
+}>;
 export function createPaymentSubjectSettlement(adapters: {
   activateMembership(input: any): Promise<any>;
   finalizeMembershipCheckout(input: any): Promise<any>;

@@ -160,3 +160,35 @@ A later focused currency-authority command failed both selected tests because fo
 - `git diff --check`: exit `0`.
 - Build-generated `dist` and `.strapi-updater.json` changes were restored.
 - The live PostgreSQL dev-server gate remains outstanding and is not claimed here.
+
+## Authoritative Discovery and Provider Reference Fixes
+
+The final two review findings were completed in another TDD cycle:
+
+- Membership checkout detection no longer depends on optional caller input. The service performs a transaction-enlisted, non-locking order lookup only to discover an authoritative membership-checkout marker and stored reference, then acquires locks in canonical checkout→order order and revalidates the locked marker, customer, membership, reference, totals, currency, status, and expiry.
+- Omitted caller checkout references are accepted for marked orders and resolved from the order. Supplied references are consistency checks only. Bogus references, incomplete or inconsistent order/snapshot markers, and discovery races fail closed without acquiring order→checkout locks.
+- Preparation replay identity follows the persisted membership-checkout snapshot, so omission remains idempotent while a later bogus caller reference conflicts.
+- Provider settlement rejects an explicitly empty or whitespace-only `providerReference`; valid references remain trimmed, persisted, and exactly replayable.
+
+### Discovery RED Evidence
+
+The first focused run failed at module instantiation because the new
+`lockAuthoritativeOrderSubject` contract did not exist. After its initial
+implementation, a separate race regression failed because a missing discovery
+candidate that appeared as a membership checkout under the order lock was
+accepted. The resolver was changed to fail closed instead of acquiring a
+checkout lock after an order lock.
+
+The RED suite also included an explicit whitespace-only provider-reference
+case; the prior `optionalTextIdentity` path canonicalized that value to an
+accepted empty string, so the non-empty provider validation was added before
+the suite was rerun.
+
+### Discovery Verification Evidence
+
+- Focused checkout/payment suite: exit `0`; 45 tests passed, 0 failed.
+- Full `node --test` in `Jamora/jamora-strapi`: exit `0`; 164 tests passed, 0 failed.
+- `npm run build` in `Jamora/jamora-strapi`: exit `0`; TypeScript compilation and Strapi admin build completed. Runtime packaging reported 35 CJS assets and 92 compiled JavaScript files validated.
+- `git diff --check`: exit `0`.
+- Build-generated `dist` and `.strapi-updater.json` changes were restored.
+- No live PostgreSQL result is claimed.

@@ -308,6 +308,82 @@ async function lockMembershipCheckoutOrder(adapters, binding) {
   return { checkout, order };
 }
 
+function authoritativeMembershipCheckoutMarker(order) {
+  const snapshot = order?.priceSnapshot?.membershipCheckout;
+  const membershipDocumentId = typeof order?.membershipDocumentId === "string"
+    ? order.membershipDocumentId.trim()
+    : "";
+  const marked = Boolean(membershipDocumentId || snapshot);
+  if (!marked) return null;
+  const checkoutReference = typeof order?.checkoutReference === "string"
+    ? order.checkoutReference.trim()
+    : "";
+  if (!membershipDocumentId || !checkoutReference) {
+    throw new Error("Membership checkout marker binding is incomplete.");
+  }
+  if (snapshot) {
+    if (typeof snapshot !== "object" || Array.isArray(snapshot)) {
+      throw new Error("Membership checkout marker binding is invalid.");
+    }
+    const snapshotReference = typeof snapshot.checkoutReference === "string"
+      ? snapshot.checkoutReference.trim()
+      : "";
+    const snapshotMembership = typeof snapshot.membershipDocumentId === "string"
+      ? snapshot.membershipDocumentId.trim()
+      : membershipDocumentId;
+    if (!snapshotReference ||
+        snapshotReference !== checkoutReference ||
+        snapshotMembership !== membershipDocumentId) {
+      throw new Error("Membership checkout marker binding is inconsistent.");
+    }
+  }
+  return { checkoutReference, membershipDocumentId };
+}
+
+async function lockAuthoritativeOrderSubject(adapters, binding) {
+  const orderDocumentId = requiredText(binding.orderDocumentId, "orderDocumentId");
+  const candidate = await adapters.findOrder(orderDocumentId);
+  const marker = authoritativeMembershipCheckoutMarker(candidate);
+  const rawCallerCheckoutReference = binding.callerCheckoutReference;
+  if (rawCallerCheckoutReference !== undefined &&
+      (typeof rawCallerCheckoutReference !== "string" ||
+       !rawCallerCheckoutReference.trim())) {
+    throw new Error("Membership checkout caller binding is invalid.");
+  }
+  const callerCheckoutReference = rawCallerCheckoutReference?.trim() ?? "";
+  if (!marker) {
+    if (callerCheckoutReference) {
+      throw new Error("Membership checkout reference has no authoritative order binding.");
+    }
+    const order = await adapters.lockOrder(orderDocumentId);
+    if (authoritativeMembershipCheckoutMarker(order)) {
+      throw new Error("Authoritative order checkout binding changed.");
+    }
+    return { order, checkout: null, checkoutReference: null };
+  }
+  if (callerCheckoutReference &&
+      callerCheckoutReference !== marker.checkoutReference) {
+    throw new Error("Membership checkout caller binding is invalid.");
+  }
+  const locked = await lockMembershipCheckoutOrder(adapters, {
+    checkoutReference: marker.checkoutReference,
+    orderDocumentId,
+    customerDocumentId: binding.customerDocumentId,
+    membershipDocumentId: marker.membershipDocumentId,
+    now: binding.now,
+  });
+  const lockedMarker = authoritativeMembershipCheckoutMarker(locked.order);
+  if (!lockedMarker ||
+      lockedMarker.checkoutReference !== marker.checkoutReference ||
+      lockedMarker.membershipDocumentId !== marker.membershipDocumentId) {
+    throw new Error("Authoritative order checkout binding changed.");
+  }
+  return {
+    ...locked,
+    checkoutReference: lockedMarker.checkoutReference,
+  };
+}
+
 function createPaymentSubjectSettlement(adapters) {
   return async function settleSubject(payment, context) {
     if (payment.purpose === "membership_purchase" ||
@@ -480,16 +556,20 @@ function assertReplayIdentity(payment, input) {
   const checkoutReference = typeof input.checkoutReference === "string"
     ? input.checkoutReference.trim()
     : "";
-  if (checkoutReference) {
-    if (payment.priceSnapshot?.membershipCheckout?.checkoutReference !==
-        checkoutReference) {
+  const storedCheckoutReference =
+    payment.priceSnapshot?.membershipCheckout?.checkoutReference;
+  if (storedCheckoutReference) {
+    if (checkoutReference && storedCheckoutReference !== checkoutReference) {
       throw new Error("Payment preparation idempotency conflict.");
     }
-  } else if (payment.currency !== normaliseMoney({
-    amountMinor: 0,
-    currency: input.currency,
-  }).currency) {
-    throw new Error("Payment preparation idempotency conflict.");
+  } else {
+    if (checkoutReference ||
+        payment.currency !== normaliseMoney({
+          amountMinor: 0,
+          currency: input.currency,
+        }).currency) {
+      throw new Error("Payment preparation idempotency conflict.");
+    }
   }
   if (input.customerDocumentId) {
     if (payment.ownerDocumentId !== input.customerDocumentId ||
@@ -566,6 +646,9 @@ function createPaymentTransactions(adapter, options = {}) {
     const reasonIdentity = optionalTextIdentity(input, "reason");
     const reason = reasonIdentity.value ?? "";
     const providerReferenceIdentity = optionalTextIdentity(input, "providerReference");
+    if (providerReferenceIdentity.provided && !providerReferenceIdentity.value) {
+      throw new TypeError("providerReference is required when provided.");
+    }
     return transactionForPayment(input.paymentDocumentId, providerEventId, async (tx, payment, events, replay) => {
       if (!replay && MISMATCH_STATUSES.has(payment.status)) {
         throw new Error("Owner resolution is required for a payment mismatch.");
@@ -1054,6 +1137,7 @@ module.exports = {
   createPaymentTransactions,
   createStrapiPaymentAdapter,
   deriveAuthoritativePaymentSubject,
+  lockAuthoritativeOrderSubject,
   lockMembershipCheckoutOrder,
   ttlSeconds,
   validateGuestCheckoutCapability,

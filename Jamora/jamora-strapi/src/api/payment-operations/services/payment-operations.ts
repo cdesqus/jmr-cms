@@ -7,7 +7,7 @@ import {
   createPaymentSubjectSettlement,
   createStrapiPaymentAdapter,
   deriveAuthoritativePaymentSubject,
-  lockMembershipCheckoutOrder,
+  lockAuthoritativeOrderSubject,
 } from "./payment-transaction.cjs";
 const { withPaymentWriteAccess } = require(
   "../../payment/content-types/payment/payment-write-guard.cjs",
@@ -79,6 +79,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
   async function resolvePaymentSubject(input: any, context: { trx: any; now: Date }) {
     let subject;
     let checkout = null;
+    let authoritativeInput = input;
     if (input.subjectType === "membership") {
       subject = await lockDocument(
           "api::membership.membership",
@@ -86,26 +87,36 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
           input.subjectId,
           context.trx,
         );
-    } else if (input.checkoutReference) {
-      ({ checkout, order: subject } = await lockMembershipCheckoutOrder({
+    } else {
+      const locked = await lockAuthoritativeOrderSubject({
+        findOrder: (documentId: string) =>
+          strapi.db.query(uid.order).findOne(withTransaction(context.trx, {
+            where: { documentId },
+          })),
         lockCheckout: (reference: string) => lockCheckout(reference, context.trx),
         lockOrder: (documentId: string) =>
           lockDocument(uid.order, "orders", documentId, context.trx),
       }, {
-        checkoutReference: input.checkoutReference,
         orderDocumentId: input.subjectId,
         customerDocumentId: input.customerDocumentId,
-        membershipDocumentId: input.membershipDocumentId,
+        callerCheckoutReference: input.checkoutReference,
         now: context.now,
-      }));
-    } else {
-      subject = await lockDocument(uid.order, "orders", input.subjectId, context.trx);
+      });
+      subject = locked.order;
+      checkout = locked.checkout;
+      if (locked.checkoutReference) {
+        authoritativeInput = {
+          ...input,
+          checkoutReference: locked.checkoutReference,
+          membershipDocumentId: locked.order.membershipDocumentId,
+        };
+      }
     }
     const reservation = input.guestCheckoutCapability
       ? await lockReservation(input.guestCheckoutCapability, context.trx)
       : null;
     return deriveAuthoritativePaymentSubject(
-      input,
+      authoritativeInput,
       subject,
       reservation,
       context.now,
