@@ -24,5 +24,23 @@ export default {
       handler: "shipping-operations.selectShippingQuote",
       config: { auth: false },
     },
+    {
+      method: "POST",
+      path: "/jamora/admin/shipping/shipments/:orderDocumentId",
+      handler: "shipping-operations.createShipment",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
+      path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels/capability",
+      handler: "shipping-operations.createLabelCapability",
+      config: { auth: false },
+    },
+    {
+      method: "GET",
+      path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels",
+      handler: "shipping-operations.downloadLabel",
+      config: { auth: false },
+    },
   ],
 };

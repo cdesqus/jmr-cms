@@ -4,6 +4,12 @@ import {
 } from "../services/address-domain.cjs";
 import { suggestRomanianAddresses } from "../services/address-adapter.cjs";
 import { createHash } from "node:crypto";
+import {
+  LABEL_CONTENT_TYPES,
+  createMockShippingProvider,
+  createShipmentTransactions,
+  createStrapiShipmentAdapter,
+} from "../services/shipment-transaction.cjs";
 
 const MAX_BODY_BYTES = 4_096;
 const RATE_WINDOW_MS = 60_000;
@@ -265,7 +271,84 @@ async function run(ctx: any, action: () => Promise<unknown>) {
   }
 }
 
-export default {
+function shipmentAdmin(ctx: any) {
+  if (!shippingEnabled(ctx)) return null;
+  const configured = process.env.JAMORA_ADMIN_API_SECRET;
+  const actor = text(ctx.get("x-jamora-admin-actor"));
+  const role = text(ctx.get("x-jamora-admin-role"));
+  if (!configured ||
+      ctx.get("x-jamora-admin-secret") !== configured ||
+      !actor ||
+      !["owner", "warehouse"].includes(role)) {
+    fail(ctx, 401, "Owner or warehouse admin credentials required.");
+    return null;
+  }
+  return { actor, role };
+}
+
+function capabilityTtlSeconds() {
+  const configured = text(process.env.SHIPMENT_LABEL_CAPABILITY_TTL_SECONDS);
+  if (!configured) return 60;
+  if (!/^\d+$/.test(configured)) {
+    throw new TypeError("Label capability TTL is invalid.");
+  }
+  return Number(configured);
+}
+
+function defaultShipmentTransactions() {
+  return createShipmentTransactions({
+    adapter: createStrapiShipmentAdapter(strapi),
+    provider: createMockShippingProvider(),
+    capabilitySecret: process.env.SHIPMENT_LABEL_CAPABILITY_SECRET,
+    capabilityTtlSeconds: capabilityTtlSeconds(),
+  });
+}
+
+function safeCapability(value: any) {
+  return {
+    capability: text(value?.capability),
+    expiresAt: text(value?.expiresAt),
+    format: text(value?.format),
+  };
+}
+
+async function runShipment(ctx: any, action: () => Promise<unknown>) {
+  try {
+    ctx.body = await action();
+  } catch (caught) {
+    const error = caught instanceof Error
+      ? caught
+      : new Error("Shipping operation failed.");
+    if (/invalid label capability/i.test(error.message)) {
+      return fail(ctx, 401, "Invalid label capability.");
+    }
+    if (/expired label capability/i.test(error.message)) {
+      return fail(ctx, 410, "Expired label capability.");
+    }
+    if (/used label capability/i.test(error.message)) {
+      return fail(ctx, 409, "Used label capability.");
+    }
+    if (/not found/i.test(error.message)) return fail(ctx, 404, "Not found.");
+    if (/^(?:Order|Shipment) document ID is required\.$/.test(error.message) ||
+        error.message === "Label format must be PDF or ZPL.") {
+      return fail(ctx, 400, error.message);
+    }
+    if (/paid order|packed order|order shipping carrier|label format is unavailable|duplicate shipment/i.test(error.message)) {
+      return fail(ctx, 409, error.message);
+    }
+    return fail(ctx, 502, "Shipping service unavailable.");
+  }
+}
+
+function safeAttachmentFilename(value: unknown, contentType: string) {
+  const filename = text(value);
+  if (/^[A-Za-z0-9._-]+$/.test(filename)) return filename;
+  return contentType === LABEL_CONTENT_TYPES.zpl
+    ? "shipment-label.zpl"
+    : "shipment-label.pdf";
+}
+
+const publicController = {
   async suggestAddress(ctx: any) {
     const body = guarded(ctx);
     const identity = body ? await checkoutIdentity(ctx, body) : null;
@@ -333,3 +416,63 @@ export default {
     });
   },
 };
+
+export function createShippingOperationsController({
+  shipmentTransactions = defaultShipmentTransactions,
+}: {
+  shipmentTransactions?: () => any;
+} = {}) {
+  return {
+    ...publicController,
+
+    async createShipment(ctx: any) {
+      const identity = shipmentAdmin(ctx);
+      if (!identity || !isJsonRequest(ctx)) return;
+      if (!requestBody(ctx)) return;
+      await runShipment(ctx, async () => shipmentTransactions().createShipment({
+        orderDocumentId: text(ctx.params?.orderDocumentId),
+        actor: identity.actor,
+        now: new Date(),
+      }));
+    },
+
+    async createLabelCapability(ctx: any) {
+      const identity = shipmentAdmin(ctx);
+      if (!identity || !isJsonRequest(ctx)) return;
+      const body = requestBody(ctx);
+      if (!body) return;
+      await runShipment(ctx, async () => safeCapability(
+        await shipmentTransactions().createLabelCapability({
+          shipmentDocumentId: text(ctx.params?.shipmentDocumentId),
+          format: body?.format,
+          actor: identity.actor,
+          now: new Date(),
+        }),
+      ));
+    },
+
+    async downloadLabel(ctx: any) {
+      const identity = shipmentAdmin(ctx);
+      if (!identity) return;
+      await runShipment(ctx, async () => {
+        const label = await shipmentTransactions().downloadLabel({
+          shipmentDocumentId: text(ctx.params?.shipmentDocumentId),
+          capability: text(ctx.query?.capability),
+          now: new Date(),
+        });
+        if (!Object.values(LABEL_CONTENT_TYPES).includes(label?.contentType) ||
+            !Buffer.isBuffer(label?.body)) {
+          throw new Error("Invalid private label response.");
+        }
+        const filename = safeAttachmentFilename(label.filename, label.contentType);
+        ctx.set("Content-Type", label.contentType);
+        ctx.set("Content-Disposition", `attachment; filename="${filename}"`);
+        ctx.set("Cache-Control", "no-store, private");
+        ctx.set("X-Content-Type-Options", "nosniff");
+        return label.body;
+      });
+    },
+  };
+}
+
+export default createShippingOperationsController();
