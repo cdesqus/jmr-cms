@@ -14,7 +14,10 @@ const FIELDS = [
 
 const LOCALITY_SUBDIVISIONS = new Map([
   ["bucuresti", "B"],
+  ["cluj", "CJ"],
   ["cluj-napoca", "CJ"],
+  ["baia mare", "MM"],
+  ["brasov", "BV"],
   ["iasi", "IS"],
   ["timisoara", "TM"],
   ["constanta", "CT"],
@@ -22,6 +25,13 @@ const LOCALITY_SUBDIVISIONS = new Map([
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function canonicalLocality(value) {
+  return text(value)
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase("ro-RO");
 }
 
 function normaliseRomanianAddress(input = {}) {
@@ -54,7 +64,7 @@ function assessRomanianAddress(input = {}) {
   if (!address.building) errors.push("building");
 
   if (address.locality && address.subdivisionCode) {
-    const expected = LOCALITY_SUBDIVISIONS.get(address.locality.toLocaleLowerCase("ro-RO"));
+    const expected = LOCALITY_SUBDIVISIONS.get(canonicalLocality(address.locality));
     if (expected && expected !== address.subdivisionCode) {
       warnings.push("locality does not match subdivisionCode");
     }

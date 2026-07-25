@@ -239,6 +239,46 @@ test("an exact receipt settles the subject once and receipt replay is idempotent
   );
 });
 
+test("late settlement uses the server transaction clock while preserving receipt time for audit", async () => {
+  const serverNow = new Date("2026-07-25T10:16:00.000Z");
+  let validationContext;
+  const { adapter, service } = operations({
+    now: () => serverNow,
+    async validateSettlementSubject(_payment, context) {
+      validationContext = context;
+      if (new Date(context.validatedAt) >=
+          new Date("2026-07-25T10:15:00.000Z")) {
+        throw new Error("Shipping quote expired.");
+      }
+    },
+  });
+  const payment = await service.prepareBankTransfer(input());
+
+  await assert.rejects(
+    service.recordBankReceipt({
+      paymentDocumentId: payment.documentId,
+      amountMinor: payment.amountMinor,
+      currency: payment.currency,
+      receivedAt: "2026-07-25T10:05:00.000Z",
+      actor: "owner@example.test",
+      providerEventId: "late-backdated-receipt",
+      bankReference: "BANK-LATE",
+    }),
+    /shipping quote expired/i,
+  );
+
+  assert.deepEqual(validationContext, {
+    occurredAt: "2026-07-25T10:05:00.000Z",
+    validatedAt: serverNow.toISOString(),
+  });
+  assert.equal(adapter.payments.get(payment.documentId).status, "awaiting_payment");
+  assert.equal(
+    adapter.events.some((event) =>
+      event.providerEventId === "late-backdated-receipt"),
+    false,
+  );
+});
+
 test("underpayment, overpayment, and currency mismatch record receipt without settlement", async () => {
   for (const [suffix, receipt, expectedStatus] of [
     ["under", { amountMinor: 9_000, currency: "RON" }, "underpaid"],

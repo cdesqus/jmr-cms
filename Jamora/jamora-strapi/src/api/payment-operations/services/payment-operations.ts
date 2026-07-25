@@ -169,7 +169,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
 
   async function validateSettlementSubject(
     payment: any,
-    context: { trx: any; occurredAt: string },
+    context: { trx: any; occurredAt: string; validatedAt: string },
   ) {
     const input = {
       subjectType: payment.subjectType,
@@ -190,7 +190,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
     };
     const resolved = await resolvePaymentSubject(input, {
       trx: context.trx,
-      now: new Date(context.occurredAt),
+      now: new Date(context.validatedAt),
     });
     assertAuthoritativePaymentSubjectBinding(payment, resolved);
   }

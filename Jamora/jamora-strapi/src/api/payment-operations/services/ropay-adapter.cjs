@@ -392,15 +392,16 @@ async function handleRoPayCallback(adapter, request, options = {}) {
   assertRoPayEnabled(env);
   const verification = options.verification === "status" ? "status" : "callback";
   const clock = typeof options.now === "function" ? options.now : () => new Date();
+  const transactionNow = new Date(clock());
   const verified = verification === "status"
     ? verifyRoPayStatus(request, {
         secret: env.ROPAY_CALLBACK_SECRET,
-        now: clock(),
+        now: transactionNow,
         toleranceSeconds: options.toleranceSeconds,
       })
     : verifyRoPayCallback(request, {
         secret: env.ROPAY_CALLBACK_SECRET,
-        now: clock(),
+        now: transactionNow,
         toleranceSeconds: options.toleranceSeconds,
       });
   if (options.authenticatedLimiter) {
@@ -523,6 +524,7 @@ async function handleRoPayCallback(adapter, request, options = {}) {
     if (tx.validateSettlementSubject) {
       await tx.validateSettlementSubject(payment, {
         occurredAt: verified.occurredAt,
+        validatedAt: transactionNow.toISOString(),
       });
     }
     const settlementKey =
@@ -546,7 +548,7 @@ async function handleRoPayCallback(adapter, request, options = {}) {
     });
     await (options.settleSubject ?? tx.settleSubject ?? (async () => undefined))(
       paid,
-      { settlementKey, trx: tx.trx },
+      { settlementKey, trx: tx.trx, now: transactionNow },
     );
     return { ...paid, idempotent: false };
   });

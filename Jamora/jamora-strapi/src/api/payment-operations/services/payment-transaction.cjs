@@ -434,7 +434,7 @@ function createPaymentSubjectSettlement(adapters) {
         orderDocumentId: payment.orderDocumentId,
         paymentDocumentId: payment.documentId,
         orderMetadata: snapshot.orderMetadata ?? payment.priceSnapshot?.orderMetadata ?? {},
-        now: new Date(payment.paidAt),
+        now: context.now ?? new Date(payment.paidAt),
         trx: context.trx,
       });
       if (!result?.checkout ||
@@ -634,6 +634,7 @@ function createPaymentTransactions(adapter, options = {}) {
     if (tx.validateSettlementSubject) {
       await tx.validateSettlementSubject(payment, {
         occurredAt: eventData.occurredAt,
+        validatedAt: eventData.validatedAt,
       });
     }
     const settlementKey = payment.settlementKey || `payment:${payment.documentId}:settle`;
@@ -655,13 +656,14 @@ function createPaymentTransactions(adapter, options = {}) {
     });
     await (options.settleSubject ?? tx.settleSubject ?? (async () => undefined))(
       paid,
-      { settlementKey, trx: tx.trx },
+      { settlementKey, trx: tx.trx, now: new Date(eventData.validatedAt) },
     );
     return { ...paid, idempotent: false };
   }
 
   async function settlePayment(input) {
     assertEnabled(env);
+    const transactionNow = instant(clock(), "transaction clock");
     const actor = requiredText(input.actor, "actor");
     const providerEventId = requiredText(
       input.providerEventId ?? input.idempotencyKey,
@@ -670,7 +672,7 @@ function createPaymentTransactions(adapter, options = {}) {
     const { occurredAt, identity: occurredAtIdentity } = instantIdentity(
       input,
       ["occurredAt", "receivedAt"],
-      clock(),
+      transactionNow,
     );
     const reasonIdentity = optionalTextIdentity(input, "reason");
     const reason = reasonIdentity.value ?? "";
@@ -742,6 +744,7 @@ function createPaymentTransactions(adapter, options = {}) {
         actor,
         providerEventId,
         occurredAt,
+        validatedAt: transactionNow.toISOString(),
         reason,
         payload,
         paymentPatch: {
@@ -831,6 +834,7 @@ function createPaymentTransactions(adapter, options = {}) {
 
     async recordBankReceipt(input) {
       assertEnabled(env);
+      const transactionNow = instant(clock(), "transaction clock");
       const received = normaliseMoney(input);
       const actor = requiredText(input.actor, "actor");
       const providerEventId = requiredText(
@@ -840,7 +844,7 @@ function createPaymentTransactions(adapter, options = {}) {
       const { occurredAt, identity: receivedAtIdentity } = instantIdentity(
         input,
         ["receivedAt"],
-        new Date(),
+        transactionNow,
       );
       const bankReferenceIdentity = optionalTextIdentity(input, "bankReference");
       const reason = bankReferenceIdentity.value
@@ -890,6 +894,7 @@ function createPaymentTransactions(adapter, options = {}) {
             actor,
             providerEventId,
             occurredAt,
+            validatedAt: transactionNow.toISOString(),
             reason,
             payload,
             paymentPatch,
@@ -915,6 +920,7 @@ function createPaymentTransactions(adapter, options = {}) {
 
     async resolvePaymentMismatch(input) {
       assertEnabled(env);
+      const transactionNow = instant(clock(), "transaction clock");
       const actor = requiredText(input.actor, "actor");
       const reason = requiredText(input.reason, "reason");
       const providerEventId = requiredText(
@@ -924,7 +930,7 @@ function createPaymentTransactions(adapter, options = {}) {
       const { occurredAt, identity: occurredAtIdentity } = instantIdentity(
         input,
         ["occurredAt"],
-        new Date(),
+        transactionNow,
       );
       const resolution = input.resolution ?? "accept";
       if (!["accept", "cancel"].includes(resolution)) {
@@ -964,6 +970,7 @@ function createPaymentTransactions(adapter, options = {}) {
             actor,
             providerEventId,
             occurredAt,
+            validatedAt: transactionNow.toISOString(),
             reason,
             payload,
             paymentPatch: {},

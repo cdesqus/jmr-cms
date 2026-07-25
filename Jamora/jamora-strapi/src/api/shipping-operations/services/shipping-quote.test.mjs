@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import createShippingQuoteService from "./shipping-quote.ts";
+import createShippingQuoteService, {
+  assertShippingSubjectOwner,
+} from "./shipping-quote.ts";
 import {
   quoteShipping,
   selectShippingQuote,
@@ -19,20 +21,31 @@ const address = {
   building: "10",
 };
 const product = {
+  id: 101,
   documentId: "product-1",
   slug: "energy",
   netWeight: "90 g",
+  publishedAt: "2026-07-24T10:00:00.000Z",
 };
 const items = [{ slug: "energy", qty: 1 }];
 
 function fixture() {
   const locks = [];
+  const queries = [];
   const strapi = {
+    contentTypes: {
+      "api::product.product": {
+        pluginOptions: {},
+      },
+    },
     db: {
       query(uid) {
         assert.equal(uid, "api::product.product");
         return {
-          findMany: async () => [product],
+          findMany: async (query) => {
+            queries.push(query);
+            return [product];
+          },
         };
       },
       connection(table) {
@@ -58,7 +71,7 @@ function fixture() {
       },
     },
   };
-  return { locks, service: createShippingQuoteService({ strapi }) };
+  return { locks, queries, service: createShippingQuoteService({ strapi }) };
 }
 
 function selectedSnapshot() {
@@ -91,6 +104,58 @@ async function withShippingEnvironment(callback) {
     }
   }
 }
+
+test("shipping subject ownership separates membership customers from ordinary guest reservations", () => {
+  assert.throws(
+    () => assertShippingSubjectOwner(
+      {
+        customerDocumentId: "customer-1",
+        checkoutReference: "membership-checkout-reference",
+      },
+      { guestCheckoutCapability: "membership-checkout-reference" },
+      "membership_checkout",
+    ),
+    /shipping subject not found/i,
+  );
+  assert.throws(
+    () => assertShippingSubjectOwner(
+      {
+        checkoutReference: "ordinary-checkout-reference",
+        reservationToken: "reservation-capability",
+      },
+      { guestCheckoutCapability: "ordinary-checkout-reference" },
+      "order",
+    ),
+    /shipping subject not found/i,
+  );
+  assert.doesNotThrow(() => assertShippingSubjectOwner(
+    {
+      checkoutReference: "ordinary-checkout-reference",
+      reservationToken: "reservation-capability",
+    },
+    { guestCheckoutCapability: "reservation-capability" },
+    "order",
+  ));
+});
+
+test("shipping quotes select an explicit published product version without a limiting ambiguity", async () => {
+  await withShippingEnvironment(async () => {
+    const subjectService = fixture();
+    await subjectService.service.quoteShipping({
+      address,
+      items,
+      now: quotedAt,
+    });
+
+    assert.deepEqual(subjectService.queries, [{
+      where: {
+        slug: { $in: ["energy"] },
+        publishedAt: { $notNull: true },
+      },
+      select: ["id", "documentId", "slug", "netWeight", "publishedAt"],
+    }]);
+  });
+});
 
 test("locked ordinary payment subject revalidates exact shipping and RON aggregate", async () => {
   await withShippingEnvironment(async () => {
@@ -125,11 +190,19 @@ test("locked ordinary payment subject revalidates exact shipping and RON aggrega
       quote,
     );
     assert.deepEqual(subjectService.locks, [
-      ["where", { document_id: "product-1" }],
+      ["where", { id: 101 }],
       ["transacting", { id: "payment-transaction" }],
       ["forUpdate"],
       ["first"],
     ]);
+    assert.deepEqual(subjectService.queries[1], {
+      where: {
+        id: { $in: [101] },
+        publishedAt: { $notNull: true },
+      },
+      select: ["id", "documentId", "slug", "netWeight", "publishedAt"],
+      transacting: { id: "payment-transaction" },
+    });
     await assert.rejects(
       fixture().service.validateLockedSubject({
         order: { ...order, totalCents: order.totalCents + 1 },

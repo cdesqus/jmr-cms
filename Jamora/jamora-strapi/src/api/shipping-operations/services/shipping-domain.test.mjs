@@ -136,9 +136,42 @@ test("contradictory postal and subdivision signals can never select a cheaper zo
     items: [{ slug: "energy", qty: 1 }],
     products,
   }, options);
+  const bucharestSignalsWithClujLocality = quoteShipping({
+    address: {
+      ...address,
+      subdivisionCode: "B",
+      locality: "Cluj-Napoca",
+      postalCode: "010001",
+    },
+    items: [{ slug: "energy", qty: 1 }],
+    products,
+  }, options);
+  const bucharestSignalsWithClujAlias = quoteShipping({
+    address: {
+      ...address,
+      subdivisionCode: "B",
+      locality: "Cluj",
+      postalCode: "010001",
+    },
+    items: [{ slug: "energy", qty: 1 }],
+    products,
+  }, options);
+  const bucharestSignalsWithUnknownLocality = quoteShipping({
+    address: {
+      ...address,
+      subdivisionCode: "B",
+      locality: "Unknown locality",
+      postalCode: "010001",
+    },
+    items: [{ slug: "energy", qty: 1 }],
+    products,
+  }, options);
 
-  assert.equal(clujWithBucharestPostal[0].amountMinor, 2090);
+  assert.equal(clujWithBucharestPostal[0].amountMinor, 2440);
   assert.equal(bucharestWithClujPostal[0].amountMinor, 2440);
+  assert.equal(bucharestSignalsWithClujLocality[0].amountMinor, 2440);
+  assert.equal(bucharestSignalsWithClujAlias[0].amountMinor, 2440);
+  assert.equal(bucharestSignalsWithUnknownLocality[0].amountMinor, 2440);
 });
 
 test("selects one signed quote into an immutable snapshot and exact replay is idempotent", () => {

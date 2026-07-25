@@ -156,6 +156,50 @@ test("shipping quote routes require the exact gate and return only safe quote fi
   }
 });
 
+test("membership shipping quotes require a verified customer session", async () => {
+  const originalStrapi = globalThis.strapi;
+  let calls = 0;
+  globalThis.strapi = {
+    service(uid) {
+      assert.equal(uid, "api::shipping-operations.shipping-quote");
+      return {
+        async quoteShipping() {
+          calls += 1;
+          throw new Error("must not be called");
+        },
+      };
+    },
+  };
+  try {
+    await withEnvironment({
+      SHIPPING_ENABLED: "true",
+      JAMORA_STOREFRONT_API_SECRET: "secret",
+    }, async () => {
+      const ctx = context({
+        body: {
+          subjectType: "membership_checkout",
+          address: { locality: "Cluj-Napoca" },
+          items: [{ slug: "energy", qty: 1 }],
+        },
+        headers: {
+          "x-jamora-storefront-secret": "secret",
+          "x-jamora-checkout-capability": "checkout-reference",
+        },
+      });
+
+      await controller.quoteShipping(ctx);
+
+      assert.equal(ctx.status, 401);
+      assert.deepEqual(ctx.body, {
+        error: "Verified customer session required for membership checkout.",
+      });
+      assert.equal(calls, 0);
+    });
+  } finally {
+    globalThis.strapi = originalStrapi;
+  }
+});
+
 test("shipping selection binds verified identity and projects an idempotent safe snapshot", async () => {
   const originalStrapi = globalThis.strapi;
   let selected;
@@ -225,6 +269,50 @@ test("shipping selection binds verified identity and projects an idempotent safe
           expiresAt: "2026-07-25T10:15:00.000Z",
         },
       });
+    });
+  } finally {
+    globalThis.strapi = originalStrapi;
+  }
+});
+
+test("membership shipping selection requires a verified customer and rejects a guest checkout capability", async () => {
+  const originalStrapi = globalThis.strapi;
+  let calls = 0;
+  globalThis.strapi = {
+    service(uid) {
+      assert.equal(uid, "api::shipping-operations.shipping-quote");
+      return {
+        async selectShippingQuote() {
+          calls += 1;
+          throw new Error("must not be called");
+        },
+      };
+    },
+  };
+  try {
+    await withEnvironment({
+      SHIPPING_ENABLED: "true",
+      JAMORA_STOREFRONT_API_SECRET: "secret",
+    }, async () => {
+      const ctx = context({
+        body: {
+          subjectType: "membership_checkout",
+          subjectId: "checkout-reference",
+          selection: { quoteId: `shq_${"C".repeat(43)}` },
+        },
+        headers: {
+          "x-jamora-storefront-secret": "secret",
+          "x-jamora-checkout-capability": "checkout-reference",
+        },
+      });
+
+      await controller.selectShippingQuote(ctx);
+
+      assert.equal(ctx.status, 401);
+      assert.deepEqual(ctx.body, {
+        error: "Verified customer session required for membership checkout.",
+      });
+      assert.equal(calls, 0);
     });
   } finally {
     globalThis.strapi = originalStrapi;

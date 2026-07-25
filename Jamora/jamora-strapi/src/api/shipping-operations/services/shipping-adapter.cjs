@@ -31,13 +31,24 @@ function canonicalSubdivision(value) {
   return text(value).toUpperCase().replace(/^RO-/, "");
 }
 
+function canonicalLocality(value) {
+  return text(value)
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase("ro-RO");
+}
+
 function deriveRomanianShippingZone(address) {
   const subdivision = canonicalSubdivision(address?.subdivisionCode);
   const postalCode = text(address?.postalCode);
-  if ((subdivision === "B" || subdivision === "IF") &&
-      /^0[1-7]\d{4}$/.test(postalCode)) {
-    return "metro";
+  const metroSubdivision = subdivision === "B" || subdivision === "IF";
+  const metroPostalCode = /^0[1-7]\d{4}$/.test(postalCode);
+  if (metroSubdivision !== metroPostalCode) return "national";
+  if (subdivision === "B" &&
+      canonicalLocality(address?.locality) !== "bucuresti") {
+    return "national";
   }
+  if (metroSubdivision) return "metro";
   if (REGIONAL_SUBDIVISIONS.has(subdivision)) return "regional";
   return "national";
 }

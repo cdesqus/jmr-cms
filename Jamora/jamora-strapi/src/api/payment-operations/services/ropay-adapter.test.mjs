@@ -476,6 +476,37 @@ test("a valid callback settles once and an exact provider event replay is idempo
   assert.equal(adapter.events.filter((event) => event.providerEventId === "event-1").length, 1);
 });
 
+test("a backdated RoPay event cannot bypass shipping expiry at the server transaction clock", async () => {
+  const serverNow = new Date("2026-07-25T12:16:00.000Z");
+  let validationContext;
+  const adapter = createMemoryPaymentAdapter({
+    payments: [payment({ expiresAt: "2026-07-25T12:20:00.000Z" })],
+    async validateSettlementSubject(_payment, context) {
+      validationContext = context;
+      if (new Date(context.validatedAt) >=
+          new Date("2026-07-25T12:15:00.000Z")) {
+        throw new Error("Shipping quote expired.");
+      }
+    },
+  });
+
+  await assert.rejects(
+    () => handleRoPayCallback(
+      adapter,
+      signedRequest(payload(), "callback", serverNow.toISOString()),
+      { env: enabled, now: () => serverNow },
+    ),
+    /shipping quote expired/i,
+  );
+
+  assert.deepEqual(validationContext, {
+    occurredAt: "2026-07-25T12:00:00.000Z",
+    validatedAt: serverNow.toISOString(),
+  });
+  assert.equal(adapter.payments.get("payment-1").status, "pending_provider");
+  assert.equal(adapter.events.length, 0);
+});
+
 test("only authenticated provider events consume bounded reference and retry capacity", async () => {
   const adapter = createMemoryPaymentAdapter({
     payments: [payment()],

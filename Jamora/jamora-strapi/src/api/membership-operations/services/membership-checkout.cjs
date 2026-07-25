@@ -34,6 +34,11 @@ function shippingSecret(env) {
   return env.SHIPPING_QUOTE_SECRET || env.JAMORA_STOREFRONT_API_SECRET;
 }
 
+function itemsInLockOrder(items) {
+  return (Array.isArray(items) ? [...items] : []).sort((left, right) =>
+    String(left?.slug ?? "").localeCompare(String(right?.slug ?? "")));
+}
+
 function formatShippingAddress(address) {
   const unit = address.unit ? `, ap. ${address.unit}` : "";
   const county = address.subdivisionCode ? `, ${address.subdivisionCode}` : "";
@@ -89,7 +94,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
   async function revalidateShipping(tx, checkout, now) {
     if (!shippingEnabled(env)) return checkout.shippingSnapshot;
     const products = [];
-    for (const item of checkout.items ?? []) {
+    for (const item of itemsInLockOrder(checkout.items)) {
       const product = await tx.lockProductBySlug(item.slug);
       if (!product) throw new Error("Shipping snapshot binding changed.");
       products.push(product);
@@ -159,7 +164,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
         let creditsRequired = 0;
         const authoritativeItems = [];
         const authoritativeProducts = [];
-        for (const requested of input.items ?? []) {
+        for (const requested of itemsInLockOrder(input.items)) {
           const qty = positive(requested.qty, "qty");
           const product = await tx.lockProductBySlug(requested.slug);
           if (!product || !membership.eligibleProductSlugs.includes(product.slug)) {
@@ -167,12 +172,19 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           }
           const creditCost = positive(product.creditCost, "creditCost");
           const unitPriceMinor = positive(product.priceCents, "priceCents");
-          await tx.reserveStock(product.documentId, qty);
+          const stockIdentity = {
+            documentId: product.documentId,
+            ...(Number.isSafeInteger(product.id) && product.id > 0
+              ? { rowId: product.id }
+              : {}),
+          };
+          await tx.reserveStock(stockIdentity, qty);
           coveredMerchandiseMinor = add(coveredMerchandiseMinor, multiply(qty, unitPriceMinor, "covered merchandise"), "covered merchandise");
           creditsRequired = add(creditsRequired, multiply(qty, creditCost, "credits"), "credits");
           authoritativeItems.push({
             productDocumentId: product.documentId, slug: product.slug,
             qty, unitPriceMinor, creditCost,
+            ...(stockIdentity.rowId ? { productRowId: stockIdentity.rowId } : {}),
           });
           authoritativeProducts.push(product);
         }
@@ -235,7 +247,10 @@ function createMembershipCheckoutService(adapter, env = process.env) {
         const winner = await adapter.findCheckout?.(input.checkoutReference);
         if (winner && winner.customerDocumentId === input.customerDocumentId &&
             winner.membershipDocumentId === input.membershipDocumentId &&
-            winner.idempotencyKey === input.idempotencyKey) return winner;
+            winner.idempotencyKey === input.idempotencyKey) {
+          assertShippingReplay(winner, input, env);
+          return winner;
+        }
         throw error;
       }
     },
@@ -518,6 +533,16 @@ function strapiTx(strapi, query, withTrx, trx) {
   const checkoutQ = query("api::membership-checkout.membership-checkout");
   const ledgerQ = query("api::membership-credit-entry.membership-credit-entry");
   const orderQ = query("api::order.order");
+  const productLocalized =
+    strapi.contentTypes?.["api::product.product"]?.pluginOptions?.i18n?.localized === true;
+  const productLocale = productLocalized
+    ? String(process.env.SHIPPING_PRODUCT_LOCALE || "en").trim()
+    : null;
+  const publishedProductWhere = (where) => ({
+    ...where,
+    publishedAt: { $notNull: true },
+    ...(productLocalized ? { locale: productLocale } : {}),
+  });
   const lock = (table, documentId) => strapi.db.connection(table)
     .where({ document_id: documentId }).transacting(trx).forUpdate();
   const findCheckout = (reference) => checkoutQ.findOne(withTrx(trx, { where: { checkoutReference: reference } }));
@@ -546,14 +571,48 @@ function strapiTx(strapi, query, withTrx, trx) {
       };
     },
     async lockProductBySlug(slug) {
-      const product = await productQ.findOne(withTrx(trx, { where: { slug } }));
-      if (!product) return null;
-      await lock("products", product.documentId);
-      return productQ.findOne(withTrx(trx, { where: { documentId: product.documentId } }));
+      if (productLocalized && !productLocale) {
+        throw new Error("Authoritative membership product locale is required.");
+      }
+      const products = await productQ.findMany(withTrx(trx, {
+        where: publishedProductWhere({ slug }),
+      }));
+      if (products.length !== 1) {
+        throw new Error("Authoritative published membership product is missing or ambiguous.");
+      }
+      const product = products[0];
+      if (!Number.isSafeInteger(product?.id) ||
+          product.id <= 0 ||
+          !product.documentId ||
+          !Number.isFinite(new Date(product.publishedAt).getTime()) ||
+          (productLocalized && product.locale !== productLocale)) {
+        throw new Error("Authoritative published membership product is missing or ambiguous.");
+      }
+      await strapi.db.connection("products")
+        .where({ id: product.id })
+        .transacting(trx)
+        .forUpdate()
+        .first();
+      const locked = await productQ.findOne(withTrx(trx, {
+        where: publishedProductWhere({ id: product.id }),
+      }));
+      if (!locked ||
+          locked.id !== product.id ||
+          locked.documentId !== product.documentId ||
+          locked.slug !== product.slug ||
+          new Date(locked.publishedAt).toISOString() !==
+            new Date(product.publishedAt).toISOString() ||
+          (productLocalized && locked.locale !== productLocale)) {
+        throw new Error("Authoritative published membership product changed.");
+      }
+      return locked;
     },
-    async reserveStock(id, qty) {
+    async reserveStock(identity, qty) {
+      if (!Number.isSafeInteger(identity?.rowId) || identity.rowId <= 0) {
+        throw new Error("Authoritative published membership product row is required.");
+      }
       const updated = await strapi.db.connection("products")
-        .where({ document_id: id }).andWhere("stock", ">=", qty)
+        .where({ id: identity.rowId }).andWhere("stock", ">=", qty)
         .transacting(trx).decrement("stock", qty);
       if (Number(updated) < 1) throw new Error("Insufficient stock.");
     },
@@ -658,8 +717,21 @@ function strapiTx(strapi, query, withTrx, trx) {
     },
     async releaseStock(items) {
       for (const item of items) {
-        await strapi.db.connection("products").where({ document_id: item.productDocumentId })
-          .transacting(trx).increment("stock", item.qty);
+        const exactRow =
+          Number.isSafeInteger(item.productRowId) && item.productRowId > 0;
+        if (!exactRow && !item.productDocumentId) {
+          throw new Error("Checkout product row binding is invalid.");
+        }
+        const updated = await strapi.db.connection("products")
+          .where(exactRow
+            ? { id: item.productRowId }
+            : { document_id: item.productDocumentId })
+          .transacting(trx)
+          .increment("stock", item.qty);
+        if ((exactRow && Number(updated) !== 1) ||
+            (!exactRow && Number(updated) < 1)) {
+          throw new Error("Checkout product row binding is invalid.");
+        }
       }
     },
     async releaseCredits(credit) {
@@ -691,10 +763,10 @@ function memoryTx(adapter, options) {
     lockCheckout: async (id) => adapter.checkouts.get(id),
     lockMembership: async (id) => adapter.memberships.get(id),
     lockProductBySlug: async (slug) => productBySlug(slug),
-    async reserveStock(id, qty) {
-      const available = adapter.stock.get(id) ?? 0;
+    async reserveStock(identity, qty) {
+      const available = adapter.stock.get(identity.documentId) ?? 0;
       if (available < qty) throw new Error("Insufficient stock.");
-      adapter.stock.set(id, available - qty);
+      adapter.stock.set(identity.documentId, available - qty);
     },
     async reserveCredits(value) {
       adapter.creditReservations.set(value.checkoutReference, { ...value, status: "reserved" });

@@ -73,31 +73,152 @@ function convertRonToEur(ronMinor: number, rate: ReturnType<typeof parseRate>) {
   return result;
 }
 
+export function assertShippingSubjectOwner(
+  subject: any,
+  input: any,
+  subjectType: "order" | "membership_checkout",
+) {
+  if (subjectType === "membership_checkout") {
+    if (!input.customerDocumentId ||
+        subject?.customerDocumentId !== input.customerDocumentId) {
+      throw new Error("Shipping subject not found.");
+    }
+    return;
+  }
+  if (input.customerDocumentId) {
+    if (subject?.customerDocumentId !== input.customerDocumentId) {
+      throw new Error("Shipping subject not found.");
+    }
+    return;
+  }
+  const capability = text(input.guestCheckoutCapability);
+  if (!capability || subject?.reservationToken !== capability) {
+    throw new Error("Shipping subject not found.");
+  }
+}
+
 export default ({ strapi }: { strapi: any }) => {
   const productQuery = () => strapi.db.query(PRODUCT_UID);
+
+  function productPublication() {
+    const localized =
+      strapi.contentTypes?.[PRODUCT_UID]?.pluginOptions?.i18n?.localized === true;
+    const locale = localized
+      ? text(process.env.SHIPPING_PRODUCT_LOCALE || "en")
+      : null;
+    if (localized && !locale) {
+      throw new Error("Authoritative shipping product locale is required.");
+    }
+    return { localized, locale };
+  }
+
+  function productQueryShape(
+    where: Record<string, unknown>,
+    publication: ReturnType<typeof productPublication>,
+  ) {
+    return {
+      where: {
+        ...where,
+        publishedAt: { $notNull: true },
+        ...(publication.localized ? { locale: publication.locale } : {}),
+      },
+      select: [
+        "id",
+        "documentId",
+        "slug",
+        "netWeight",
+        "publishedAt",
+        ...(publication.localized ? ["locale"] : []),
+      ],
+    };
+  }
+
+  function assertAuthoritativeProductRows(
+    rows: any[],
+    slugs: string[],
+    publication: ReturnType<typeof productPublication>,
+  ) {
+    if (!Array.isArray(rows) || rows.length !== slugs.length) {
+      throw new Error("Authoritative published shipping product is missing or ambiguous.");
+    }
+    const expected = new Set(slugs);
+    const seenSlugs = new Set<string>();
+    const seenRows = new Set<string>();
+    for (const row of rows) {
+      const slug = text(row?.slug);
+      const rowId = Number.isSafeInteger(row?.id) && row.id > 0
+        ? String(row.id)
+        : text(row?.id);
+      const documentId = text(row?.documentId);
+      const publishedAt = new Date(row?.publishedAt);
+      if (!expected.has(slug) ||
+          seenSlugs.has(slug) ||
+          !rowId ||
+          seenRows.has(rowId) ||
+          !documentId ||
+          !Number.isFinite(publishedAt.getTime()) ||
+          (publication.localized && text(row?.locale) !== publication.locale)) {
+        throw new Error("Authoritative published shipping product is missing or ambiguous.");
+      }
+      seenSlugs.add(slug);
+      seenRows.add(rowId);
+    }
+    return rows;
+  }
 
   async function productsFor(items: unknown, trx?: any) {
     const slugs = requestedSlugs(items);
     if (!slugs.length) return [];
-    const query = {
-      where: { slug: { $in: slugs } },
-      select: ["documentId", "slug", "netWeight"],
-      limit: slugs.length,
-    };
-    const products = await productQuery().findMany(withTransaction(trx, query));
+    const publication = productPublication();
+    const products = assertAuthoritativeProductRows(
+      await productQuery().findMany(withTransaction(
+        trx,
+        productQueryShape({ slug: { $in: slugs } }, publication),
+      )),
+      slugs,
+      publication,
+    );
     if (!trx) return products;
-    const documentIds = products
-      .map((product: any) => text(product?.documentId))
-      .filter(Boolean)
-      .sort();
-    for (const documentId of documentIds) {
+    const rowIds = products
+      .map((product: any) => product.id)
+      .sort((left: unknown, right: unknown) =>
+        String(left).localeCompare(String(right)));
+    for (const rowId of rowIds) {
       await strapi.db.connection("products")
-        .where({ document_id: documentId })
+        .where({ id: rowId })
         .transacting(trx)
         .forUpdate()
         .first();
     }
-    return productQuery().findMany(withTransaction(trx, query));
+    const locked = assertAuthoritativeProductRows(
+      await productQuery().findMany(withTransaction(
+        trx,
+        productQueryShape({ id: { $in: rowIds } }, publication),
+      )),
+      slugs,
+      publication,
+    );
+    const before = new Map(products.map((product: any) => [
+      String(product.id),
+      {
+        documentId: text(product.documentId),
+        slug: text(product.slug),
+        locale: publication.localized ? text(product.locale) : null,
+        publishedAt: new Date(product.publishedAt).toISOString(),
+      },
+    ]));
+    for (const product of locked) {
+      const identity = before.get(String(product.id));
+      if (!identity ||
+          identity.documentId !== text(product.documentId) ||
+          identity.slug !== text(product.slug) ||
+          identity.locale !==
+            (publication.localized ? text(product.locale) : null) ||
+          identity.publishedAt !== new Date(product.publishedAt).toISOString()) {
+        throw new Error("Authoritative published shipping product changed.");
+      }
+    }
+    return locked;
   }
 
   async function lockByDocumentId(
@@ -114,21 +235,6 @@ export default ({ strapi }: { strapi: any }) => {
     return strapi.db.query(uid).findOne(withTransaction(trx, {
       where: { documentId },
     }));
-  }
-
-  function assertOwner(subject: any, input: any) {
-    if (input.customerDocumentId) {
-      if (subject?.customerDocumentId !== input.customerDocumentId) {
-        throw new Error("Shipping subject not found.");
-      }
-      return;
-    }
-    const capability = text(input.guestCheckoutCapability);
-    if (!capability ||
-        (subject?.reservationToken !== capability &&
-         subject?.checkoutReference !== capability)) {
-      throw new Error("Shipping subject not found.");
-    }
   }
 
   async function validateLockedSubject(input: {
@@ -191,6 +297,10 @@ export default ({ strapi }: { strapi: any }) => {
   return {
     async quoteShipping(input: any) {
       enabled();
+      if (input.subjectType === "membership_checkout" &&
+          !input.customerDocumentId) {
+        throw new Error("Shipping subject not found.");
+      }
       const products = await productsFor(input.items);
       return createQuotes({
         address: input.address,
@@ -204,7 +314,7 @@ export default ({ strapi }: { strapi: any }) => {
 
     async validateSelection(input: any) {
       enabled();
-      const products = input.products ?? await productsFor(input.items, input.trx);
+      const products = await productsFor(input.items, input.trx);
       return selectQuote({
         selection: input.selection,
         address: input.address,
@@ -242,7 +352,7 @@ export default ({ strapi }: { strapi: any }) => {
         if (!subject || !["pending", "reserved"].includes(subject.status)) {
           throw new Error("Shipping subject not found.");
         }
-        assertOwner(subject, input);
+        assertShippingSubjectOwner(subject, input, input.subjectType);
         const products = await productsFor(subject.items, trx);
         const selected = selectQuote({
           selection: input.selection,

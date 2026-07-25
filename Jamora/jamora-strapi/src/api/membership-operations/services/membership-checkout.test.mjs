@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   createMemoryMembershipCheckoutAdapter,
   createMembershipCheckoutService,
+  createStrapiMembershipCheckoutAdapter,
 } from "./membership-checkout.cjs";
 import { quoteShipping } from "../../shipping-operations/services/shipping-domain.cjs";
 
@@ -44,6 +45,171 @@ function fixture(extra = {}) {
     }),
   };
 }
+
+test("Strapi membership shipping locks one explicit published product row and re-reads it", async () => {
+  const queries = [];
+  const locks = [];
+  const publishedProduct = {
+    ...product,
+    id: 101,
+    publishedAt: "2026-07-24T10:00:00.000Z",
+  };
+  const trx = { id: "membership-transaction" };
+  const strapi = {
+    contentTypes: {
+      "api::product.product": { pluginOptions: {} },
+    },
+    db: {
+      query(uid) {
+        if (uid === "api::product.product") {
+          return {
+            findOne: async (query) => {
+              queries.push(["findOne", query]);
+              return publishedProduct;
+            },
+            findMany: async (query) => {
+              queries.push(["findMany", query]);
+              return [publishedProduct];
+            },
+          };
+        }
+        return {};
+      },
+      connection(table) {
+        assert.equal(table, "products");
+        const chain = {
+          where(value) {
+            locks.push(["where", value]);
+            return chain;
+          },
+          transacting(value) {
+            locks.push(["transacting", value]);
+            return chain;
+          },
+          forUpdate() {
+            locks.push(["forUpdate"]);
+            return chain;
+          },
+          first: async () => {
+            locks.push(["first"]);
+          },
+          andWhere(...values) {
+            locks.push(["andWhere", ...values]);
+            return chain;
+          },
+          decrement: async (...values) => {
+            locks.push(["decrement", ...values]);
+            return 1;
+          },
+          increment: async (...values) => {
+            locks.push(["increment", ...values]);
+            return 1;
+          },
+        };
+        return chain;
+      },
+      transaction: async (work) => work({ trx }),
+    },
+  };
+  const adapter = createStrapiMembershipCheckoutAdapter(strapi);
+
+  assert.equal(await adapter.transaction(async (tx) => {
+    const locked = await tx.lockProductBySlug(product.slug);
+    await tx.reserveStock({
+      rowId: locked.id,
+      documentId: locked.documentId,
+    }, 1);
+    await tx.releaseStock([{
+      productRowId: locked.id,
+      productDocumentId: locked.documentId,
+      qty: 1,
+    }]);
+    await tx.releaseStock([{
+      productDocumentId: locked.documentId,
+      qty: 1,
+    }]);
+    return locked;
+  }), publishedProduct);
+  assert.deepEqual(queries, [
+    ["findMany", {
+      where: {
+        slug: product.slug,
+        publishedAt: { $notNull: true },
+      },
+      transacting: trx,
+    }],
+    ["findOne", {
+      where: {
+        id: 101,
+        publishedAt: { $notNull: true },
+      },
+      transacting: trx,
+    }],
+  ]);
+  assert.deepEqual(locks, [
+    ["where", { id: 101 }],
+    ["transacting", trx],
+    ["forUpdate"],
+    ["first"],
+    ["where", { id: 101 }],
+    ["andWhere", "stock", ">=", 1],
+    ["transacting", trx],
+    ["decrement", "stock", 1],
+    ["where", { id: 101 }],
+    ["transacting", trx],
+    ["increment", "stock", 1],
+    ["where", { document_id: "product-1" }],
+    ["transacting", trx],
+    ["increment", "stock", 1],
+  ]);
+});
+
+test("multi-product membership reservations acquire product locks in stable slug order", async () => {
+  const products = [
+    {
+      ...product,
+      documentId: "product-z",
+      slug: "z-product",
+      stock: 1,
+    },
+    {
+      ...product,
+      documentId: "product-a",
+      slug: "a-product",
+      stock: 1,
+    },
+  ];
+  const adapter = createMemoryMembershipCheckoutAdapter({
+    memberships: [{
+      ...membership,
+      ledgerBalance: 10,
+      eligibleProductSlugs: products.map(({ slug }) => slug),
+    }],
+    products,
+  });
+  const transaction = adapter.transaction.bind(adapter);
+  const locks = [];
+  adapter.transaction = (work) => transaction((tx) => work({
+    ...tx,
+    async lockProductBySlug(slug) {
+      locks.push(slug);
+      return tx.lockProductBySlug(slug);
+    },
+  }));
+  const service = createMembershipCheckoutService(adapter, {
+    MEMBERSHIP_ENABLED: "true",
+  });
+
+  await service.reserve({
+    ...reserve,
+    items: [
+      { slug: "z-product", qty: 1 },
+      { slug: "a-product", qty: 1 },
+    ],
+  });
+
+  assert.deepEqual(locks, ["a-product", "z-product"]);
+});
 
 test("shipping-enabled membership checkout uses only the selected authoritative RON quote", async () => {
   const shippingAddress = {
@@ -458,4 +624,59 @@ test("concurrent unique loss rolls back stock inflation and returns one checkout
   assert.equal(adapter.stock.get("product-1"), 0);
   assert.equal(adapter.checkouts.size, 1);
   assert.equal(adapter.creditReservations.size, 1);
+});
+
+test("unique-conflict recovery rejects a winner with a changed shipping quote or address snapshot", async () => {
+  const shippingSelection = {
+    quoteId: `shq_${"D".repeat(43)}`,
+    carrier: "jamora-mock",
+    service: "standard",
+    amountMinor: 2090,
+    currency: "RON",
+    estimate: { minimumDays: 2, maximumDays: 3 },
+    quotedAt: "2026-07-25T10:00:00.000Z",
+    expiresAt: "2026-07-25T10:15:00.000Z",
+  };
+  const shippingAddress = {
+    recipient: "Ana Popescu",
+    countryCode: "RO",
+    subdivisionCode: "CJ",
+    locality: "Cluj-Napoca",
+    postalCode: "400001",
+    street: "Strada Memorandumului",
+    building: "10",
+  };
+  const winner = {
+    checkoutReference: reserve.checkoutReference,
+    idempotencyKey: reserve.idempotencyKey,
+    customerDocumentId: reserve.customerDocumentId,
+    membershipDocumentId: reserve.membershipDocumentId,
+    shippingSnapshot: {
+      quote: {
+        ...shippingSelection,
+        addressDigest: "opaque",
+        itemsDigest: "opaque",
+      },
+      shippingAddress: { ...shippingAddress, building: "99" },
+    },
+  };
+  const service = createMembershipCheckoutService({
+    transaction: async () => {
+      throw new Error("unique checkout conflict");
+    },
+    findCheckout: async () => winner,
+  }, {
+    MEMBERSHIP_ENABLED: "true",
+    SHIPPING_ENABLED: "true",
+    SHIPPING_QUOTE_SECRET: "membership-shipping-secret-at-least-32-bytes",
+  });
+
+  await assert.rejects(
+    service.reserve({
+      ...reserve,
+      shippingSelection,
+      shippingSnapshot: { shippingAddress },
+    }),
+    /checkout idempotency conflict/i,
+  );
 });

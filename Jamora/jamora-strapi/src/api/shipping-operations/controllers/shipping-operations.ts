@@ -116,6 +116,23 @@ async function checkoutIdentity(ctx: any, body: Record<string, unknown>) {
   return { guestCheckoutCapability };
 }
 
+function hasRequiredMembershipCustomer(
+  ctx: any,
+  body: Record<string, unknown>,
+  identity: any,
+) {
+  if (body.subjectType !== "membership_checkout" ||
+      identity.customerDocumentId) {
+    return true;
+  }
+  fail(
+    ctx,
+    401,
+    "Verified customer session required for membership checkout.",
+  );
+  return false;
+}
+
 function safeSuggestion(suggestion: any) {
   return {
     countryCode: suggestion.countryCode,
@@ -210,13 +227,15 @@ export default {
   async quoteShipping(ctx: any) {
     const body = shippingGuarded(ctx);
     const identity = body ? await checkoutIdentity(ctx, body) : null;
-    if (!body || !identity) return;
+    if (!body || !identity ||
+        !hasRequiredMembershipCustomer(ctx, body, identity)) return;
     await run(ctx, async () => ({
       quotes: (await (
         strapi.service("api::shipping-operations.shipping-quote") as any
       ).quoteShipping({
         address: body.address,
         items: body.items,
+        subjectType: body.subjectType,
         ...identity,
         now: new Date(),
       })).map(safeQuote),
@@ -226,7 +245,8 @@ export default {
   async selectShippingQuote(ctx: any) {
     const body = shippingGuarded(ctx);
     const identity = body ? await checkoutIdentity(ctx, body) : null;
-    if (!body || !identity) return;
+    if (!body || !identity ||
+        !hasRequiredMembershipCustomer(ctx, body, identity)) return;
     await run(ctx, async () => {
       const result = await (
         strapi.service("api::shipping-operations.shipping-quote") as any

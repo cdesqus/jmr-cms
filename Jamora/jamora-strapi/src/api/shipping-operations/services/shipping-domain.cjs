@@ -46,11 +46,14 @@ function digest(value) {
 }
 
 function authoritativeAddress(input) {
-  const assessed = assessRomanianAddress(input);
+  const assessed = assessRomanianAddress({
+    ...(input ?? {}),
+    subdivisionCode: text(input?.subdivisionCode).toUpperCase().replace(/^RO-/, ""),
+  });
   if (assessed.errors.length) {
     throw new TypeError(`Invalid shipping address: ${assessed.errors.join(", ")}.`);
   }
-  return assessed.address;
+  return assessed;
 }
 
 function positive(value, name) {
@@ -127,9 +130,12 @@ function safeQuote(quote, context, quoteSecret) {
 }
 
 function contextFor(input) {
-  const address = authoritativeAddress(input.address);
+  const assessedAddress = authoritativeAddress(input.address);
+  const address = assessedAddress.address;
   const items = authoritativeItemContext(input.items, input.products);
-  const zone = deriveRomanianShippingZone(address);
+  const zone = assessedAddress.warnings.length
+    ? "national"
+    : deriveRomanianShippingZone(address);
   return {
     address,
     addressDigest: digest(address),
