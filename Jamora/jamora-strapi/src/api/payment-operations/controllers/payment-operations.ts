@@ -94,6 +94,16 @@ async function run(ctx: any, action: () => Promise<unknown>) {
     ctx.body = await action();
   } catch (caught) {
     const error = caught instanceof Error ? caught : new Error("Payment operation failed.");
+    const statusCode = (error as any).statusCode;
+    const retryAfter = (error as any).retryAfter;
+    if (statusCode === 429) {
+      ctx.status = 429;
+      if (Number.isSafeInteger(retryAfter) && retryAfter > 0) {
+        ctx.set("Retry-After", String(retryAfter));
+      }
+      ctx.body = { error: "Request could not be completed." };
+      return;
+    }
     if (/signature verification failed/i.test(error.message)) ctx.status = 401;
     else if (/not found/i.test(error.message)) ctx.status = 404;
     else if (caught instanceof TypeError || /\brequired\b|\binvalid\b|safe integer/i.test(error.message)) {

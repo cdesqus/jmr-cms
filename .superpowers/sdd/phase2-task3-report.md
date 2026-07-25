@@ -178,3 +178,69 @@ Remediation commit message: `fix: harden verified ropay flow`
   these small provider JSON messages. Any real provider contract that requires
   chunked or compressed callbacks must be explicitly designed and bounded
   before enabling it.
+
+## Authenticated Rate-Limit Remediation
+
+Commit message: `fix: isolate authenticated ropay rate limits`
+
+- The pre-body limiter now keys state only by provider operation and client IP.
+  It continues to validate provider-reference header syntax for safe framing,
+  but never allocates or consumes a bucket selected by that unauthenticated
+  header.
+- A separate service-lifetime limiter runs only after the callback/status HMAC,
+  canonical payload, timestamp, and provider-reference header/payload binding
+  have all verified.
+- Authenticated storage uses opaque SHA-256 keys and is bounded at two levels:
+  at most 60 distinct provider event IDs per provider reference per 60-second
+  window and at most 10,000 active provider-reference buckets by default.
+  Exact and changed retries for one event ID share a separate default cap of
+  120 requests per window.
+- Callback and status transports share the same canonical authenticated event
+  identity. Exact provider retries remain available within the larger retry cap
+  and retain database idempotency, while new event IDs consume distinct-event
+  capacity.
+- Invalid HMACs and signed requests whose provider-reference header differs
+  from the canonical payload fail before authenticated limiter lookup. They
+  cannot exhaust or block a later valid request for that reference.
+- Authenticated limits return a generic `429` response with a bounded
+  `Retry-After` value; internal limiter details and event identities are not
+  exposed.
+- Production configuration can override the authenticated defaults with
+  `ROPAY_AUTH_RATE_LIMIT`, `ROPAY_AUTH_REPLAY_LIMIT`,
+  `ROPAY_AUTH_RATE_WINDOW_MS`, and `ROPAY_AUTH_RATE_MAX_BUCKETS`.
+
+### Authenticated Limiter TDD Evidence
+
+- The pre-auth regression failed 1 of 8 middleware tests because a second IP
+  using the same attacker-selected provider reference was incorrectly blocked.
+  It passed after removing provider-reference storage from the middleware.
+- The new authenticated-limiter test initially failed with
+  `ERR_MODULE_NOT_FOUND`, then passed 3 of 3 after the bounded implementation.
+- The adapter regression initially failed because a distinct authenticated
+  event was not rate-limited. It now proves five invalid signatures plus a
+  signed header/payload mismatch leave authenticated bucket count at zero,
+  callback/status exact retries are idempotent, and distinct/excessive
+  authenticated requests receive typed 429 errors.
+- The controller regression initially received `409` instead of the required
+  generic `429`; it passes after typed rate-limit mapping and `Retry-After`
+  handling.
+
+### Authenticated Limiter Final Verification
+
+- Targeted limiter/adapter/controller/middleware selection: exit `0`; 48 tests
+  passed, 0 failed.
+- Focused payment/security suite: exit `0`; 93 tests passed, 0 failed.
+- Full Strapi suite: `node --test` - exit `0`; 209 tests passed, 0 failed.
+- Strapi build: `npm run build` - exit `0`; TypeScript compilation and admin
+  build completed; runtime packaging reported 38 CJS assets and 93 compiled
+  JavaScript files validated.
+- Compiled smoke: exit `0`; the authenticated limiter is packaged and the
+  pre-body guard remains registered before `strapi::body`.
+- Independent security review: APPROVED; its focused selection passed 48 tests
+  with no remaining Critical or Important findings.
+- Build-generated `dist` and `.strapi-updater.json` changes were restored.
+
+The authenticated limiter is intentionally process-local. Multi-instance
+deployments still require a shared ingress limit or shared rate store, and
+client-IP correctness still depends on a narrowly configured trusted-proxy
+topology. Docker and live PostgreSQL were not run.

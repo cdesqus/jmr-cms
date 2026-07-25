@@ -403,6 +403,15 @@ async function handleRoPayCallback(adapter, request, options = {}) {
         now: clock(),
         toleranceSeconds: options.toleranceSeconds,
       });
+  if (options.authenticatedLimiter) {
+    const rateLimit = options.authenticatedLimiter.check(verified);
+    if (!rateLimit.allowed) {
+      const error = new Error("RoPay request rate limit exceeded.");
+      error.statusCode = 429;
+      error.retryAfter = rateLimit.retryAfter;
+      throw error;
+    }
+  }
   const uuid = options.randomUUID ?? nodeRandomUUID;
   return adapter.transaction(async (tx) => {
     const payment = await tx.lockPaymentByReference(verified.paymentReference);

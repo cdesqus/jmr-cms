@@ -16,6 +16,9 @@ const {
   verifyRoPayCallback,
   verifyRoPayStatus,
 } = require("./ropay-adapter.cjs");
+const {
+  createRoPayAuthenticatedLimiter,
+} = require("./ropay-authenticated-limiter.cjs");
 const { withPaymentWriteAccess } = require(
   "../../payment/content-types/payment/payment-write-guard.cjs",
 );
@@ -222,6 +225,12 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
   });
   const operations = (beneficiary: any = {}) =>
     createPaymentTransactions(adapter, { env: process.env, beneficiary });
+  const ropayAuthenticatedLimiter = createRoPayAuthenticatedLimiter({
+    limit: process.env.ROPAY_AUTH_RATE_LIMIT,
+    replayLimit: process.env.ROPAY_AUTH_REPLAY_LIMIT,
+    windowMs: process.env.ROPAY_AUTH_RATE_WINDOW_MS,
+    maxBuckets: process.env.ROPAY_AUTH_RATE_MAX_BUCKETS,
+  });
 
   return {
     async prepareBankTransfer(input: any) {
@@ -263,6 +272,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         handleRoPayCallback(adapter, input, {
           env: process.env,
           now: () => new Date(),
+          authenticatedLimiter: ropayAuthenticatedLimiter,
         }));
     },
     verifyRoPayStatus(input: any) {
@@ -276,6 +286,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
           env: process.env,
           now: () => new Date(),
           verification: "status",
+          authenticatedLimiter: ropayAuthenticatedLimiter,
         }));
     },
     readRoPayStatus(input: any) {

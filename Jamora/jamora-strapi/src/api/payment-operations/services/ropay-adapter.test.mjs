@@ -3,12 +3,14 @@ import { createHmac } from "node:crypto";
 import test from "node:test";
 
 import paymentTransactionModule from "./payment-transaction.cjs";
+import limiterModule from "./ropay-authenticated-limiter.cjs";
 import ropayModule from "./ropay-adapter.cjs";
 
 const {
   assertAuthoritativePaymentSubjectBinding,
   createMemoryPaymentAdapter,
 } = paymentTransactionModule;
+const { createRoPayAuthenticatedLimiter } = limiterModule;
 const {
   canonicalRoPayPayload,
   createRoPayIntent,
@@ -472,6 +474,76 @@ test("a valid callback settles once and an exact provider event replay is idempo
   assert.equal(replay.idempotent, true);
   assert.equal(settlements, 1);
   assert.equal(adapter.events.filter((event) => event.providerEventId === "event-1").length, 1);
+});
+
+test("only authenticated provider events consume bounded reference and retry capacity", async () => {
+  const adapter = createMemoryPaymentAdapter({
+    payments: [payment()],
+    settleSubject: async () => undefined,
+  });
+  const authenticatedLimiter = createRoPayAuthenticatedLimiter({
+    limit: 1,
+    replayLimit: 3,
+    maxBuckets: 2,
+    now: () => 0,
+  });
+  const options = {
+    env: enabled,
+    now: () => now,
+    authenticatedLimiter,
+  };
+  const invalid = {
+    ...signedRequest(),
+    signature: `sha256=${"0".repeat(64)}`,
+  };
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await assert.rejects(
+      () => handleRoPayCallback(adapter, invalid, options),
+      /signature verification failed/i,
+    );
+  }
+  await assert.rejects(
+    () => handleRoPayCallback(adapter, {
+      ...signedRequest(),
+      providerReference: "RPI-ATTACKER",
+    }, options),
+    /signature verification failed/i,
+  );
+  assert.equal(authenticatedLimiter.bucketCount(), 0);
+
+  const first = await handleRoPayCallback(adapter, signedRequest(), options);
+  const statusReplay = await handleRoPayCallback(
+    adapter,
+    signedRequest(payload(), "status"),
+    { ...options, verification: "status" },
+  );
+  assert.equal(first.idempotent, false);
+  assert.equal(statusReplay.idempotent, true);
+
+  await assert.rejects(
+    () => handleRoPayCallback(
+      adapter,
+      signedRequest(payload({
+        providerEventId: "event-2",
+        occurredAt: "2026-07-25T12:00:01.000Z",
+      })),
+      options,
+    ),
+    (error) => error.statusCode === 429 && error.retryAfter === 60,
+  );
+
+  const callbackReplay = await handleRoPayCallback(
+    adapter,
+    signedRequest(),
+    options,
+  );
+  assert.equal(callbackReplay.idempotent, true);
+  await assert.rejects(
+    () => handleRoPayCallback(adapter, signedRequest(), options),
+    (error) => error.statusCode === 429 && error.retryAfter === 60,
+  );
+  assert.equal(adapter.events.length, 1);
 });
 
 test("the same immutable provider event replays across callback and status transports", async () => {

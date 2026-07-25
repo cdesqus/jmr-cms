@@ -12,6 +12,12 @@ function context(body = {}, headers = {}, params = {}) {
     request: { body, method: "POST" },
     params,
     get(name) { return normalized[name.toLowerCase()] ?? ""; },
+    set(name, value) {
+      this.responseHeaders = {
+        ...(this.responseHeaders ?? {}),
+        [name]: value,
+      };
+    },
     status: 200,
     body: undefined,
   };
@@ -460,6 +466,40 @@ test("provider callback and server status routes forward signed envelopes and re
       status: "paid",
       idempotent: true,
     });
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.ropay === undefined) delete process.env.ROPAY_ENABLED;
+    else process.env.ROPAY_ENABLED = previous.ropay;
+  }
+});
+
+test("authenticated provider rate limits return a generic 429 with retry metadata", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    ropay: process.env.ROPAY_ENABLED,
+  };
+  process.env.PAYMENTS_ENABLED = "true";
+  process.env.ROPAY_ENABLED = "true";
+  installStrapi({
+    async handleRoPayCallback() {
+      const error = new Error("RoPay request rate limit exceeded.");
+      error.statusCode = 429;
+      error.retryAfter = 17;
+      throw error;
+    },
+  });
+  try {
+    const ctx = context({}, {
+      "x-ropay-signature": "sha256=signed",
+      "x-ropay-timestamp": "2026-07-25T12:00:00.000Z",
+      "x-ropay-provider-reference": "RPI-1",
+    });
+    await controller.handleRoPayCallback(ctx);
+
+    assert.equal(ctx.status, 429);
+    assert.deepEqual(ctx.body, { error: "Request could not be completed." });
+    assert.deepEqual(ctx.responseHeaders, { "Retry-After": "17" });
   } finally {
     if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
     else process.env.PAYMENTS_ENABLED = previous.payments;

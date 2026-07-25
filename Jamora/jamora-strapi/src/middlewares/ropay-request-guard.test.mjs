@@ -144,24 +144,19 @@ test("non-provider paths pass through without provider headers or body access", 
   assert.equal(request.bodyReads(), 0);
 });
 
-test("rate limiter independently bounds callback IP and provider-reference dimensions", () => {
-  const byIp = createRoPayRequestLimiter({
-    limit: 2,
+test("pre-auth rate limiting uses only operation and IP identity", () => {
+  const limiter = createRoPayRequestLimiter({
+    limit: 1,
     windowMs: 60_000,
     now: () => 0,
   });
-  assert.equal(byIp.check("callback", "192.0.2.1", "RPI-1").allowed, true);
-  assert.equal(byIp.check("callback", "192.0.2.1", "RPI-2").allowed, true);
-  assert.equal(byIp.check("callback", "192.0.2.1", "RPI-3").allowed, false);
-
-  const byReference = createRoPayRequestLimiter({
-    limit: 2,
-    windowMs: 60_000,
-    now: () => 0,
-  });
-  assert.equal(byReference.check("status", "192.0.2.1", "RPI-1").allowed, true);
-  assert.equal(byReference.check("status", "192.0.2.2", "RPI-1").allowed, true);
-  assert.equal(byReference.check("status", "192.0.2.3", "RPI-1").allowed, false);
+  assert.equal(limiter.check("callback", "192.0.2.1", "RPI-1").allowed, true);
+  assert.equal(limiter.check("callback", "192.0.2.2", "RPI-1").allowed, true);
+  assert.equal(limiter.bucketCount(), 2);
+  assert.equal(
+    limiter.check("callback", "192.0.2.1", "ATTACKER-SELECTED").allowed,
+    false,
+  );
 });
 
 test("rate-limited requests return generic 429 without body parsing and buckets stay bounded", async () => {

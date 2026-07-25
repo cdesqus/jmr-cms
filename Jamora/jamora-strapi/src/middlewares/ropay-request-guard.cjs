@@ -60,12 +60,8 @@ function createRoPayRequestLimiter(options = {}) {
   }
 
   return {
-    check(operation, ip, providerReference) {
-      const ipResult = consume(`${operation}:ip:${opaqueKey(ip)}`);
-      if (!ipResult.allowed) return ipResult;
-      return consume(
-        `${operation}:provider:${opaqueKey(providerReference)}`,
-      );
+    check(operation, ip) {
+      return consume(`${operation}:ip:${opaqueKey(ip)}`);
     },
     bucketCount: () => buckets.size,
   };
@@ -115,7 +111,6 @@ function createRoPayRequestGuard(options = {}) {
     const result = limiter.check(
       operation,
       ctx.ip ?? ctx.request?.ip,
-      providerReference,
     );
     if (!result.allowed) {
       ctx.set("Retry-After", String(result.retryAfter));
