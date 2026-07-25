@@ -18,6 +18,7 @@ export function MembershipRedemption({
   coveredMinor,
   creditsRequired,
   shippingMinor,
+  shippingLabel,
   eligibleItems,
   onChange,
 }: {
@@ -26,6 +27,7 @@ export function MembershipRedemption({
   coveredMinor: number;
   creditsRequired: number;
   shippingMinor: number;
+  shippingLabel?: string;
   eligibleItems: { name: string; qty: number; creditCost: number }[];
   onChange: (selected: boolean) => void;
 }) {
@@ -55,7 +57,10 @@ export function MembershipRedemption({
           <div className="flex justify-between"><dt>Credits required</dt><dd>{creditsRequired}</dd></div>
           <div className="flex justify-between"><dt>Remaining after checkout</dt><dd>{membership.ledgerBalance - creditsRequired}</dd></div>
           <div className="flex justify-between"><dt>Covered merchandise</dt><dd>{formatEUR(coveredMinor)}</dd></div>
-          <div className="flex justify-between font-semibold"><dt>Shipping due</dt><dd>{formatEUR(shippingMinor)}</dd></div>
+          <div className="flex justify-between gap-3 font-semibold">
+            <dt>Shipping due</dt>
+            <dd className="text-right">{shippingLabel ?? formatEUR(shippingMinor)}</dd>
+          </div>
         </dl>
         </>
       ) : null}

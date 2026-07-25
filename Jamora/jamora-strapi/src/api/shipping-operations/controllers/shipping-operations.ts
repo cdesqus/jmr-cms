@@ -3,6 +3,7 @@ import {
   assessRomanianAddress,
 } from "../services/address-domain.cjs";
 import { suggestRomanianAddresses } from "../services/address-adapter.cjs";
+import { createHash } from "node:crypto";
 
 const MAX_BODY_BYTES = 4_096;
 const RATE_WINDOW_MS = 60_000;
@@ -11,6 +12,10 @@ const rateWindows = new Map<string, { startedAt: number; count: number }>();
 
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function withTransaction(trx: any, value: any) {
+  return trx ? { ...value, transacting: trx } : value;
 }
 
 function fail(ctx: any, status: number, message: string) {
@@ -59,9 +64,16 @@ function requestBody(ctx: any) {
   return body;
 }
 
-function withinRateLimit(ctx: any) {
+function identityRateKey(identity: any) {
+  const value = identity.customerDocumentId
+    ? `customer:${identity.customerDocumentId}`
+    : `guest:${identity.guestCheckoutCapability}`;
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function withinRateLimit(ctx: any, identity: any) {
   const now = Date.now();
-  const key = text(ctx.ip) || "unknown";
+  const key = identityRateKey(identity);
   const existing = rateWindows.get(key);
   const window = !existing || now - existing.startedAt >= RATE_WINDOW_MS
     ? { startedAt: now, count: 0 }
@@ -74,6 +86,31 @@ function withinRateLimit(ctx: any) {
     }
   }
   return window.count <= RATE_LIMIT || fail(ctx, 429, "Too many requests.");
+}
+
+async function lockLiveGuestReservation(capability: string) {
+  return strapi.db.transaction(async ({ trx }: { trx: any }) => {
+    const query = strapi.db.query("api::stock-reservation.stock-reservation");
+    const candidate = await query.findOne(withTransaction(trx, {
+      where: { token: capability },
+    }));
+    if (!candidate?.documentId) return null;
+    await strapi.db.connection("stock_reservations")
+      .where({ document_id: candidate.documentId })
+      .transacting(trx)
+      .forUpdate()
+      .first();
+    const reservation = await query.findOne(withTransaction(trx, {
+      where: { documentId: candidate.documentId },
+    }));
+    const expiresAt = new Date(reservation?.expiresAt);
+    return reservation?.token === capability &&
+      reservation?.status === "reserved" &&
+      Number.isFinite(expiresAt.getTime()) &&
+      expiresAt > new Date()
+      ? reservation
+      : null;
+  });
 }
 
 async function checkoutIdentity(ctx: any, body: Record<string, unknown>) {
@@ -111,6 +148,14 @@ async function checkoutIdentity(ctx: any, body: Record<string, unknown>) {
   );
   if (!guestCheckoutCapability) {
     fail(ctx, 401, "Verified customer session or guest checkout capability required.");
+    return null;
+  }
+  if (body.subjectType === "membership_checkout") {
+    fail(ctx, 401, "Verified customer session required for membership checkout.");
+    return null;
+  }
+  if (!(await lockLiveGuestReservation(guestCheckoutCapability))) {
+    fail(ctx, 401, "Invalid or expired guest checkout capability.");
     return null;
   }
   return { guestCheckoutCapability };
@@ -177,12 +222,12 @@ function safeQuote(quote: any) {
 }
 
 function guarded(ctx: any) {
-  if (!enabled(ctx) || !isJsonRequest(ctx) || !withinRateLimit(ctx)) return null;
+  if (!enabled(ctx) || !isJsonRequest(ctx)) return null;
   return requestBody(ctx);
 }
 
 function shippingGuarded(ctx: any) {
-  if (!shippingEnabled(ctx) || !isJsonRequest(ctx) || !withinRateLimit(ctx)) return null;
+  if (!shippingEnabled(ctx) || !isJsonRequest(ctx)) return null;
   return requestBody(ctx);
 }
 
@@ -204,7 +249,8 @@ async function run(ctx: any, action: () => Promise<unknown>) {
 export default {
   async suggestAddress(ctx: any) {
     const body = guarded(ctx);
-    if (!body || !(await checkoutIdentity(ctx, body))) return;
+    const identity = body ? await checkoutIdentity(ctx, body) : null;
+    if (!body || !identity || !withinRateLimit(ctx, identity)) return;
     const query = text(body.query);
     if (!query) return fail(ctx, 400, "Invalid address query.");
     try {
@@ -217,7 +263,8 @@ export default {
 
   async assessAddress(ctx: any) {
     const body = guarded(ctx);
-    if (!body || !(await checkoutIdentity(ctx, body))) return;
+    const identity = body ? await checkoutIdentity(ctx, body) : null;
+    if (!body || !identity || !withinRateLimit(ctx, identity)) return;
     if (!body.address || Array.isArray(body.address) || typeof body.address !== "object") {
       return fail(ctx, 400, "Structured address required.");
     }
@@ -228,7 +275,8 @@ export default {
     const body = shippingGuarded(ctx);
     const identity = body ? await checkoutIdentity(ctx, body) : null;
     if (!body || !identity ||
-        !hasRequiredMembershipCustomer(ctx, body, identity)) return;
+        !hasRequiredMembershipCustomer(ctx, body, identity) ||
+        !withinRateLimit(ctx, identity)) return;
     await run(ctx, async () => ({
       quotes: (await (
         strapi.service("api::shipping-operations.shipping-quote") as any
@@ -246,7 +294,8 @@ export default {
     const body = shippingGuarded(ctx);
     const identity = body ? await checkoutIdentity(ctx, body) : null;
     if (!body || !identity ||
-        !hasRequiredMembershipCustomer(ctx, body, identity)) return;
+        !hasRequiredMembershipCustomer(ctx, body, identity) ||
+        !withinRateLimit(ctx, identity)) return;
     await run(ctx, async () => {
       const result = await (
         strapi.service("api::shipping-operations.shipping-quote") as any

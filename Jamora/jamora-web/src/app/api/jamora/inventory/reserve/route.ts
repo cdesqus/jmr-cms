@@ -3,6 +3,8 @@ import { getCurrentCustomer } from "@/lib/customer-api";
 import { membershipCustomerFetch } from "@/lib/membership-customer-api";
 import { opaqueCheckoutReference } from "@/lib/commerce/membership-checkout.cjs";
 import { membershipCheckoutMode } from "@/lib/membership-surface-policy.cjs";
+import { setGuestShippingCapabilityProof } from "@/lib/shipping-capability";
+import { shippingOperationEnabled } from "@/lib/shipping-customer-policy.cjs";
 
 const STRAPI_URL = process.env.STRAPI_URL ?? process.env.NEXT_PUBLIC_STRAPI_URL ?? "http://localhost:9014";
 
@@ -16,6 +18,7 @@ type ReserveBody = {
   membershipCheckout?: {
     membershipDocumentId?: string;
     idempotencyKey?: string;
+    shippingSelection?: unknown;
   };
 };
 
@@ -36,6 +39,16 @@ export async function POST(request: Request) {
       cache: "no-store",
     });
     const json = await response.json().catch(() => ({ error: "Inventory service unavailable." }));
+    const shippingAssistanceEnabled =
+      shippingOperationEnabled("address/suggest", process.env) ||
+      shippingOperationEnabled("shipping/quotes", process.env);
+    if (
+      shippingAssistanceEnabled &&
+      response.ok &&
+      typeof json.reservationToken === "string"
+    ) {
+      await setGuestShippingCapabilityProof(json.reservationToken);
+    }
     return NextResponse.json(json, { status: response.status });
   }
   if (checkoutMode === "membership-disabled") {
@@ -74,6 +87,7 @@ export async function POST(request: Request) {
       checkoutReference,
       idempotencyKey,
       items: body.items?.map((item) => ({ slug: item.slug, qty: item.qty })),
+      shippingSelection: membershipCheckout.shippingSelection,
       customerName: body.customerName,
       shippingAddressText: body.shippingAddressText,
       shippingAddress: body.shippingAddress,

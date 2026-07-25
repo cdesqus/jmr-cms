@@ -12,3 +12,7 @@ export type StructuredAddress = Readonly<{
 }>;
 export function normaliseRomanianAddress(input?: Partial<StructuredAddress>): StructuredAddress;
 export function validateRomanianAddress(address: StructuredAddress): string[];
+export function applyRomanianAddressSuggestion(
+  address: StructuredAddress,
+  suggestion: Partial<StructuredAddress>,
+): StructuredAddress;

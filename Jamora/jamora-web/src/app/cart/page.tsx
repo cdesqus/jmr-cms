@@ -9,9 +9,7 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function CartPage() {
-  const customer = process.env.MEMBERSHIP_ENABLED === "true"
-    ? await getCurrentCustomer()
-    : null;
+  const customer = await getCurrentCustomer();
   const memberships = customer
     ? await getCustomerMemberships(customer).catch(() => [])
     : [];
@@ -25,8 +23,11 @@ export default async function CartPage() {
       <h1 className="font-display text-4xl text-ink">Your cart</h1>
       <CartView
         structuredCheckoutEnabled={process.env.STRUCTURED_CHECKOUT_ENABLED === "true"}
+        addressAssistEnabled={process.env.ADDRESS_ASSIST_ENABLED === "true"}
+        shippingEnabled={process.env.SHIPPING_ENABLED === "true"}
         paymentsEnabled={process.env.PAYMENTS_ENABLED === "true"}
         membership={activeMembership}
+        signedCustomer={customer ?? undefined}
       />
     </div>
   );

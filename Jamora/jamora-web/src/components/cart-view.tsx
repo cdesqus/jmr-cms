@@ -12,15 +12,16 @@ import {
 import { formatEUR } from "@/lib/products";
 import { useCart } from "@/components/cart-context";
 import { ProductVisual } from "@/components/product-visual";
-import { StructuredAddressForm } from "@/components/structured-address-form";
+import {
+  CheckoutWizard,
+  type CheckoutWizardSubmission,
+} from "@/components/checkout-wizard";
 import {
   MembershipRedemption,
   type RedemptionMembership,
 } from "@/components/membership-redemption";
 import {
   normaliseRomanianAddress,
-  validateRomanianAddress,
-  type StructuredAddress,
 } from "@/lib/commerce/address.cjs";
 import {
   formatRomanianAddress,
@@ -28,17 +29,18 @@ import {
   guestShippingCents,
 } from "@/lib/commerce/checkout.cjs";
 import { membershipCartProjection } from "@/lib/commerce/membership-checkout.cjs";
-import { PaymentMethodSelector } from "@/components/payment-method-selector";
 import { PaymentInstructions } from "@/components/payment-instructions";
-import type {
-  CustomerPaymentSnapshot,
-  PaymentMethod,
-} from "@/lib/payment-customer-policy.cjs";
+import type { CustomerPaymentSnapshot } from "@/lib/payment-customer-policy.cjs";
 import {
   checkoutAttempt,
   paymentPreparationRequest,
   pendingCheckoutOrderState,
 } from "@/lib/payment-customer-view.cjs";
+import {
+  authoritativeShippingCheckoutFields,
+  membershipShippingReservationFields,
+  type ShippingQuote,
+} from "@/lib/checkout-wizard-policy.cjs";
 
 interface AppliedCoupon {
   code: string;
@@ -58,33 +60,36 @@ interface CheckoutAttempt {
   preparedOrderDocumentId?: string;
 }
 
-const EMPTY_ADDRESS = normaliseRomanianAddress();
 export function CartView({
   structuredCheckoutEnabled = false,
+  addressAssistEnabled = false,
+  shippingEnabled = false,
   paymentsEnabled = false,
   membership,
+  signedCustomer,
 }: {
   structuredCheckoutEnabled?: boolean;
+  addressAssistEnabled?: boolean;
+  shippingEnabled?: boolean;
   paymentsEnabled?: boolean;
   membership?: RedemptionMembership;
+  signedCustomer?: {
+    documentId: string;
+    name: string;
+    email: string;
+  };
 }) {
   const router = useRouter();
   const { items, subtotalCents, setQty, remove, clear } = useCart();
-  const [customer, setCustomer] = useState({
-    name: "",
-    email: "",
-    address: "",
-  });
   const [error, setError] = useState("");
-  const [shippingAddress, setShippingAddress] = useState<StructuredAddress>(EMPTY_ADDRESS);
-  const [addressErrors, setAddressErrors] = useState<string[]>([]);
+  const [checkoutEmail, setCheckoutEmail] = useState(signedCustomer?.email ?? "");
   const [couponCode, setCouponCode] = useState("");
   const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
   const [couponMessage, setCouponMessage] = useState("");
   const [checkingCoupon, setCheckingCoupon] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
   const [membershipMode, setMembershipMode] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("bank_transfer");
+  const [selectedShippingQuote, setSelectedShippingQuote] = useState<ShippingQuote>();
   const [payment, setPayment] = useState<CustomerPaymentSnapshot>();
   const [paymentCapability, setPaymentCapability] = useState("");
   const checkoutAttemptRef = useRef<CheckoutAttempt | null>(null);
@@ -142,18 +147,13 @@ export function CartView({
         shippingMinor: shipping,
         discountMinor: discountCents,
       });
-  const canCheckout = customer.name.trim() && customer.email.trim()
-    && (structuredCheckoutEnabled
-      ? validateRomanianAddress(normaliseRomanianAddress(shippingAddress)).length === 0
-      : customer.address.trim());
-
-  async function validateCoupon(code: string) {
+  async function validateCoupon(code: string, email = checkoutEmail) {
     const response = await fetch("/api/jamora/promotions/validate", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         code,
-        email: customer.email.trim(),
+        email: email.trim(),
         subtotalCents,
         items: items.map((item) => ({
           slug: item.product.slug,
@@ -195,22 +195,17 @@ export function CartView({
     }
   }
 
-  async function handleCheckout() {
-    if (!canCheckout) {
-      if (structuredCheckoutEnabled) {
-        setAddressErrors(validateRomanianAddress(normaliseRomanianAddress(shippingAddress)));
-      }
-      setError("Please add your name, email, and shipping address.");
-      return;
-    }
-
+  async function handleCheckout(details: CheckoutWizardSubmission) {
     setCheckingOut(true);
     setError("");
     let reservedCheckoutReference: string | undefined;
     try {
+      if (shippingEnabled && !details.selectedQuote) {
+        throw new Error("A server delivery quote is required.");
+      }
       let checkoutCoupon = activeMembershipMode ? null : activeCoupon;
       if (activeCoupon) {
-        const refreshed = await validateCoupon(activeCoupon.code);
+        const refreshed = await validateCoupon(activeCoupon.code, details.contact.email);
         checkoutCoupon = {
           code: refreshed.promotion.code,
           name: refreshed.promotion.name,
@@ -219,17 +214,17 @@ export function CartView({
         };
       }
 
-      const normalizedShippingAddress = structuredCheckoutEnabled
-        ? normaliseRomanianAddress(shippingAddress)
-        : undefined;
+      const normalizedShippingAddress = normaliseRomanianAddress(details.address);
+      const shippingFields = details.selectedQuote
+        ? authoritativeShippingCheckoutFields(details.selectedQuote)
+        : {};
       const attemptSignature = JSON.stringify({
         cart: cartSignature,
         membership: activeMembershipMode ? membership?.documentId : null,
-        customer: {
-          name: customer.name.trim(),
-          email: customer.email.trim(),
-          address: normalizedShippingAddress ?? customer.address.trim(),
-        },
+        customer: details.contact,
+        address: normalizedShippingAddress,
+        quote: details.selectedQuote?.quoteId ?? null,
+        paymentMethod: details.paymentMethod,
         promotion: checkoutCoupon
           ? [checkoutCoupon.code, checkoutCoupon.discountCents]
           : null,
@@ -242,23 +237,32 @@ export function CartView({
       const attempt = checkoutAttemptRef.current;
       const membershipAttemptKey = attempt.key;
       let reservation = attempt.reservation;
+      if (!reservation && !activeMembershipMode && details.reservationCapability) {
+        reservation = { reservationToken: details.reservationCapability };
+        attempt.reservation = reservation;
+      }
       if (!reservation) {
+        const membershipReservation = activeMembershipMode && details.selectedQuote
+          ? membershipShippingReservationFields({
+              membershipDocumentId: membership.documentId,
+              idempotencyKey: membershipAttemptKey,
+            }, details.selectedQuote)
+          : undefined;
         const reservationResponse = await fetch("/api/jamora/inventory/reserve", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            email: customer.email.trim(),
-            customerName: customer.name.trim(),
-            shippingAddressText: normalizedShippingAddress
-              ? formatRomanianAddress(normalizedShippingAddress)
-              : customer.address.trim(),
+            email: details.contact.email,
+            customerName: details.contact.name,
+            shippingAddressText: formatRomanianAddress(normalizedShippingAddress),
             shippingAddress: normalizedShippingAddress,
             ...(activeMembershipMode ? {
-              membershipCheckout: {
+              membershipCheckout: membershipReservation ?? {
                 membershipDocumentId: membership.documentId,
                 idempotencyKey: membershipAttemptKey,
               },
             } : {}),
+            ...shippingFields,
             items: items.map((item) => ({
               productId: item.product.id,
               sku: item.product.sku,
@@ -291,22 +295,23 @@ export function CartView({
         order = createMockOrder({
           items,
           subtotalCents: activeMembershipMode ? 0 : subtotalCents,
-          shippingCents: activeMembershipMode ? membershipShipping : shipping,
+          shippingCents: shippingEnabled
+            ? 0
+            : activeMembershipMode ? membershipShipping : shipping,
           discountCents: activeMembershipMode ? 0 : checkoutCoupon?.discountCents,
           promotionCode: checkoutCoupon?.code,
           reservationToken: reservation.reservationToken,
-          anonymousSessionId: structuredCheckoutEnabled
+          anonymousSessionId: structuredCheckoutEnabled || shippingEnabled
             ? getOrCreateAnonymousSessionId(localStorage, () => crypto.randomUUID())
             : undefined,
           shippingAddress: normalizedShippingAddress,
           customer: {
-            name: customer.name.trim(),
-            email: customer.email.trim(),
-            address: normalizedShippingAddress
-              ? formatRomanianAddress(normalizedShippingAddress)
-              : customer.address.trim(),
+            name: details.contact.name,
+            email: details.contact.email,
+            address: formatRomanianAddress(normalizedShippingAddress),
           },
         });
+        Object.assign(order, shippingFields);
         if (activeMembershipMode) {
           Object.assign(order, {
             membershipCheckout: {
@@ -319,7 +324,9 @@ export function CartView({
         }
         attempt.order = order;
       }
-      if (activeMembershipMode && !paymentsEnabled) {
+      const featureOffMembershipFallback =
+        activeMembershipMode && !paymentsEnabled && !shippingEnabled;
+      if (featureOffMembershipFallback) {
         const synced = await syncMockOrderToStrapi(order);
         if (!synced.ok) throw new Error(synced.error);
       } else {
@@ -345,12 +352,12 @@ export function CartView({
           }
           attempt.preparedOrderDocumentId = preparedOrder.order.documentId;
         }
-        const request = paymentPreparationRequest(paymentMethod, {
-          idempotencyKey: `payment:${order.id}:${paymentMethod}`,
+        const request = paymentPreparationRequest(details.paymentMethod, {
+          idempotencyKey: `payment:${order.id}:${details.paymentMethod}`,
           subjectType: "order",
           subjectId: attempt.preparedOrderDocumentId,
           purpose: "order",
-          currency: activeMembershipMode ? "EUR" : "RON",
+          currency: shippingEnabled ? "RON" : activeMembershipMode ? "EUR" : "RON",
           ...(activeMembershipMode
             ? { checkoutReference: reservation.checkoutReference }
             : { guestCheckoutCapability: reservation.reservationToken }),
@@ -370,7 +377,7 @@ export function CartView({
       saveMockOrder(order);
       checkoutAttemptRef.current = null;
       clear();
-      if (activeMembershipMode && !paymentsEnabled) {
+      if (featureOffMembershipFallback) {
         router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
       }
     } catch (caught) {
@@ -470,7 +477,12 @@ export function CartView({
           <div className="flex justify-between">
             <dt className="text-bark">Shipping (EU)</dt>
             <dd className="text-ink">
-              {cartSummary.shippingMinor === 0 ? "Free" : formatEUR(cartSummary.shippingMinor)}
+              {shippingEnabled
+                ? selectedShippingQuote
+                  ? new Intl.NumberFormat("en", { style: "currency", currency: "RON" })
+                      .format(selectedShippingQuote.amountMinor / 100)
+                  : "Select server quote"
+                : cartSummary.shippingMinor === 0 ? "Free" : formatEUR(cartSummary.shippingMinor)}
             </dd>
           </div>
           {!activeMembershipMode && discountCents > 0 ? (
@@ -481,11 +493,13 @@ export function CartView({
           ) : null}
           <div className="flex justify-between border-t border-clay/60 pt-2 font-semibold">
             <dt className="text-ink">Total</dt>
-            <dd className="text-ink">{formatEUR(cartSummary.totalMinor)}</dd>
+            <dd className="text-right text-ink">
+              {shippingEnabled ? "Server-confirmed at payment" : formatEUR(cartSummary.totalMinor)}
+            </dd>
           </div>
         </dl>
 
-        {!activeMembershipMode && remainingForFree > 0 && (
+        {!shippingEnabled && !activeMembershipMode && remainingForFree > 0 && (
           <p className="mt-3 rounded-lg bg-cream px-3 py-2 text-xs text-bark">
             Add {formatEUR(remainingForFree)} more for free EU shipping.
           </p>
@@ -529,6 +543,7 @@ export function CartView({
             coveredMinor={membershipCoveredMinor}
             creditsRequired={membershipCreditsRequired}
             shippingMinor={membershipShipping}
+            shippingLabel={shippingEnabled ? "Selected in delivery (RON)" : undefined}
             eligibleItems={eligibleMembershipItems.map((item) => ({
               name: item.product.name,
               qty: item.qty,
@@ -538,78 +553,35 @@ export function CartView({
           />
         ) : null}
 
-        {!activeMembershipMode || paymentsEnabled ? (
-          <PaymentMethodSelector
-            value={paymentMethod}
-            onChange={setPaymentMethod}
-            currency={activeMembershipMode ? "EUR" : "RON"}
-            disabled={checkingOut}
-          />
-        ) : null}
-
-        <div className="mt-5 space-y-3 border-t border-clay/60 pt-5">
-          <label className="block text-xs font-semibold uppercase text-stone">
-            Full name
-            <input
-              value={customer.name}
-              onChange={(e) => setCustomer((c) => ({ ...c, name: e.target.value }))}
-              className="mt-1 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
-              autoComplete="name"
-            />
-          </label>
-          <label className="block text-xs font-semibold uppercase text-stone">
-            Email
-            <input
-              value={customer.email}
-              onChange={(e) => setCustomer((c) => ({ ...c, email: e.target.value }))}
-              className="mt-1 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
-              type="email"
-              autoComplete="email"
-            />
-          </label>
-          {structuredCheckoutEnabled ? (
-            <StructuredAddressForm
-              value={shippingAddress}
-              onChange={(value) => {
-                setShippingAddress(value);
-                setAddressErrors([]);
-              }}
-              errors={addressErrors}
-            />
-          ) : (
-            <label className="block text-xs font-semibold uppercase text-stone">
-              Shipping address
-              <textarea
-                value={customer.address}
-                onChange={(e) =>
-                  setCustomer((c) => ({ ...c, address: e.target.value }))
-                }
-                className="mt-1 min-h-20 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta"
-                autoComplete="shipping street-address"
-              />
-            </label>
-          )}
-        </div>
-
-        {error && <p className="mt-3 text-sm text-terracotta-deep">{error}</p>}
-
-        <button
-          type="button"
-          onClick={handleCheckout}
-          disabled={checkingOut}
-          className="mt-5 w-full rounded-full bg-terracotta px-6 py-3 text-sm font-semibold text-cream hover:bg-terracotta-deep disabled:opacity-60"
-        >
-          {checkingOut
-            ? "Preparing payment…"
-            : activeMembershipMode
-              ? "Redeem membership credits"
-              : "Continue to payment"}
-        </button>
-        {!activeMembershipMode ? (
-          <p className="mt-2 text-center text-xs text-stone">
-            Your order remains pending until the server verifies payment.
-          </p>
-        ) : null}
+        <CheckoutWizard
+          key={`${activeMembershipMode ? "member" : signedCustomer ? "customer" : "guest"}:${cartSignature}`}
+          mode={activeMembershipMode ? "member" : signedCustomer ? "customer" : "guest"}
+          initialContact={{
+            name: signedCustomer?.name ?? "",
+            email: signedCustomer?.email ?? "",
+          }}
+          initialAddress={normaliseRomanianAddress({
+            recipient: signedCustomer?.name ?? "",
+          })}
+          authenticated={!!signedCustomer}
+          addressAssistEnabled={addressAssistEnabled}
+          shippingEnabled={shippingEnabled}
+          paymentsEnabled={paymentsEnabled}
+          items={items.map((item) => ({ slug: item.product.slug, qty: item.qty }))}
+          fallbackShippingLabel={
+            (activeMembershipMode ? membershipShipping : shipping) === 0
+              ? "Free delivery"
+              : formatEUR(activeMembershipMode ? membershipShipping : shipping)
+          }
+          checkingOut={checkingOut}
+          checkoutError={error}
+          onQuoteChange={setSelectedShippingQuote}
+          onContactChange={(contact) => setCheckoutEmail(contact.email)}
+          onSubmit={handleCheckout}
+        />
+        <p className="mt-2 text-center text-xs text-stone">
+          The order remains pending until the server verifies payment.
+        </p>
         <p className="mt-3 text-center text-[0.7rem] text-stone">
           Prices include VAT. A compliant VAT invoice is issued with every order.
         </p>

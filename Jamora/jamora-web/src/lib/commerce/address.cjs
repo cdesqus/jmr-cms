@@ -22,4 +22,21 @@ function validateRomanianAddress(address) {
   return errors;
 }
 
-module.exports = { normaliseRomanianAddress, validateRomanianAddress };
+function applyRomanianAddressSuggestion(address, suggestion = {}) {
+  const current = normaliseRomanianAddress(address);
+  return normaliseRomanianAddress({
+    ...current,
+    countryCode: suggestion.countryCode,
+    subdivisionCode: suggestion.subdivisionCode,
+    locality: suggestion.locality,
+    postalCode: suggestion.postalCode,
+    street: suggestion.street,
+    building: suggestion.building,
+  });
+}
+
+module.exports = {
+  applyRomanianAddressSuggestion,
+  normaliseRomanianAddress,
+  validateRomanianAddress,
+};
