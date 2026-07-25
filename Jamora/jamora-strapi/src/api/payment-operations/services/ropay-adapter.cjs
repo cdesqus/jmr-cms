@@ -79,6 +79,9 @@ function canonicalPayload(payload) {
     throw new TypeError("RoPay status must be pending, paid, or failed.");
   }
   const money = normaliseMoney(payload);
+  if (money.currency !== "RON") {
+    throw new TypeError("RoPay currency must be RON.");
+  }
   const occurredAt = exactIso(payload.occurredAt, "occurredAt");
   return {
     providerEventId,
@@ -128,6 +131,12 @@ function verifySignedPayload(request, options, verification) {
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
       throw verificationFailure();
     }
+    if (requiredText(
+      request?.providerReference,
+      "RoPay provider reference",
+    ) !== payload.providerReference) {
+      throw verificationFailure();
+    }
     return payload;
   } catch {
     throw verificationFailure();
@@ -155,6 +164,7 @@ function intentTtlSeconds(env) {
 function replayIdentityMatches(payment, input) {
   if (payment.method !== "ropay" ||
       payment.provider !== "ropay_mock" ||
+      payment.currency !== "RON" ||
       payment.subjectType !== input.subjectType ||
       payment.subjectId !== input.subjectId ||
       payment.purpose !== input.purpose) {
@@ -209,12 +219,32 @@ function safeIntent(payment, presentation) {
   };
 }
 
+function safeIntentStatus(payment) {
+  return {
+    method: "ropay",
+    status: payment.status,
+    paymentReference: payment.paymentReference,
+    amountMinor: payment.amountMinor,
+    currency: payment.currency,
+    expiresAt: payment.expiresAt,
+  };
+}
+
 async function createRoPayIntent(adapter, input, options = {}) {
   const env = options.env ?? process.env;
   assertRoPayEnabled(env);
+  if (Object.prototype.hasOwnProperty.call(input ?? {}, "currency") &&
+      (typeof input.currency !== "string" ||
+       input.currency.trim().toUpperCase() !== "RON")) {
+    throw new TypeError("RoPay currency must be RON.");
+  }
+  const authoritativeInput = { ...input, currency: "RON" };
   const uuid = options.randomUUID ?? nodeRandomUUID;
-  const idempotencyKey = requiredText(input?.idempotencyKey, "idempotencyKey");
-  const createdAt = new Date(input?.now ?? Date.now());
+  const idempotencyKey = requiredText(
+    authoritativeInput.idempotencyKey,
+    "idempotencyKey",
+  );
+  const createdAt = new Date(authoritativeInput.now ?? Date.now());
   if (!Number.isFinite(createdAt.getTime())) throw new TypeError("now is invalid.");
   let payment;
   try {
@@ -222,15 +252,18 @@ async function createRoPayIntent(adapter, input, options = {}) {
       const replay = await tx.findPaymentByIdempotency(idempotencyKey);
       if (replay) {
         await tx.listEvents(replay.documentId);
-        if (!replayIdentityMatches(replay, input)) {
+        if (!replayIdentityMatches(replay, authoritativeInput)) {
           throw new Error("RoPay intent idempotency conflict.");
         }
         return replay;
       }
       const resolved = tx.resolvePaymentSubject
-        ? await tx.resolvePaymentSubject(input, createdAt)
-        : input;
+        ? await tx.resolvePaymentSubject(authoritativeInput, createdAt)
+        : authoritativeInput;
       const money = normaliseMoney(resolved);
+      if (money.currency !== "RON") {
+        throw new TypeError("RoPay currency must be RON.");
+      }
       const subjectType = requiredText(resolved.subjectType, "subjectType");
       const purpose = requiredText(resolved.purpose, "purpose");
       if (!["order", "membership"].includes(subjectType) ||
@@ -252,10 +285,14 @@ async function createRoPayIntent(adapter, input, options = {}) {
       if (subjectExpiry && !Number.isFinite(subjectExpiry.getTime())) {
         throw new TypeError("subject expiry is invalid.");
       }
-      const expiresAt = new Date(Math.min(
+      const expiresAtDate = new Date(Math.min(
         requestedExpiry.getTime(),
         subjectExpiry?.getTime() ?? requestedExpiry.getTime(),
-      )).toISOString();
+      ));
+      if (expiresAtDate <= createdAt) {
+        throw new Error("RoPay subject expired.");
+      }
+      const expiresAt = expiresAtDate.toISOString();
       const entropy = uuid();
       const providerEntropy = uuid();
       const sessionToken = uuid().replace(/-/g, "");
@@ -316,13 +353,19 @@ async function createRoPayIntent(adapter, input, options = {}) {
       const candidate = await tx.findPaymentByIdempotency(idempotencyKey);
       if (!candidate) return null;
       await tx.listEvents(candidate.documentId);
-      if (!replayIdentityMatches(candidate, input)) {
+      if (!replayIdentityMatches(candidate, authoritativeInput)) {
         throw new Error("RoPay intent idempotency conflict.");
       }
       return candidate;
     });
     if (!replay) throw error;
     payment = replay;
+  }
+  if (payment.status !== "pending_provider") {
+    return safeIntentStatus(payment);
+  }
+  if (new Date(payment.expiresAt) <= createdAt) {
+    throw new Error("RoPay intent expired.");
   }
   const createPresentation =
     options.createProviderPresentation ?? providerPresentation;
@@ -368,7 +411,6 @@ async function handleRoPayCallback(adapter, request, options = {}) {
     const transition = targetStatus(verified.status);
     const eventPayload = {
       kind: "ropay_provider_event",
-      verification,
       providerEvent: verified,
     };
     if (payment.method !== "ropay" ||
@@ -413,6 +455,24 @@ async function handleRoPayCallback(adapter, request, options = {}) {
     if (latestRoPayEvent &&
         verified.occurredAt <= latestRoPayEvent.occurredAt) {
       throw new Error("RoPay provider event is out of order.");
+    }
+    if (transition === "paid" &&
+        ["paid", "refunded"].includes(payment.status)) {
+      if (!payment.settlementKey ||
+          payment.receivedAmountMinor !== verified.amountMinor ||
+          payment.receivedCurrency !== verified.currency) {
+        throw new Error("RoPay paid state observation conflicts with settlement.");
+      }
+      await tx.createEvent({
+        eventId: uuid(),
+        paymentDocumentId: payment.documentId,
+        transition: "paid",
+        actor: "ropay",
+        payload: eventPayload,
+        providerEventId: verified.providerEventId,
+        occurredAt: verified.occurredAt,
+      });
+      return { ...payment, idempotent: true };
     }
     if (payment.expiresAt &&
         new Date(verified.occurredAt) >= new Date(payment.expiresAt)) {

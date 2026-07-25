@@ -352,6 +352,52 @@ test("trusted RoPay preparation binds identity and returns only the safe provide
   }
 });
 
+test("terminal RoPay preparation replay does not add empty QR or deep-link fields", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    ropay: process.env.ROPAY_ENABLED,
+    storefront: process.env.JAMORA_STOREFRONT_API_SECRET,
+  };
+  process.env.PAYMENTS_ENABLED = "true";
+  process.env.ROPAY_ENABLED = "true";
+  process.env.JAMORA_STOREFRONT_API_SECRET = "storefront-secret";
+  installStrapi({
+    async createRoPayIntent() {
+      return {
+        method: "ropay",
+        status: "paid",
+        paymentReference: "JMR-ROPAY-1",
+        amountMinor: 10_000,
+        currency: "RON",
+        expiresAt: "2026-07-25T12:10:00.000Z",
+      };
+    },
+  }, { documentId: "customer-1", sessionVersion: 4 });
+  try {
+    const ctx = context({
+      subjectType: "order",
+      subjectId: "order-1",
+      purpose: "order",
+    }, {
+      "x-jamora-storefront-secret": "storefront-secret",
+      "x-jamora-customer-document-id": "customer-1",
+      "x-jamora-customer-session-version": "4",
+    });
+    await controller.prepareRoPay(ctx);
+    assert.equal(ctx.status, 200);
+    assert.equal(ctx.body.status, "paid");
+    assert.equal(Object.hasOwn(ctx.body, "qrUrl"), false);
+    assert.equal(Object.hasOwn(ctx.body, "deepLink"), false);
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.ropay === undefined) delete process.env.ROPAY_ENABLED;
+    else process.env.ROPAY_ENABLED = previous.ropay;
+    if (previous.storefront === undefined) delete process.env.JAMORA_STOREFRONT_API_SECRET;
+    else process.env.JAMORA_STOREFRONT_API_SECRET = previous.storefront;
+  }
+});
+
 test("provider callback and server status routes forward signed envelopes and return safe acknowledgements", async () => {
   const previous = {
     payments: process.env.PAYMENTS_ENABLED,
@@ -385,6 +431,7 @@ test("provider callback and server status routes forward signed envelopes and re
     const headers = {
       "x-ropay-signature": "sha256=signed",
       "x-ropay-timestamp": "2026-07-25T12:00:00.000Z",
+      "x-ropay-provider-reference": "RPI-1",
     };
     const callback = context(body, headers);
     await controller.handleRoPayCallback(callback);
@@ -392,6 +439,7 @@ test("provider callback and server status routes forward signed envelopes and re
       payload: body,
       signature: "sha256=signed",
       timestamp: "2026-07-25T12:00:00.000Z",
+      providerReference: "RPI-1",
     });
     assert.deepEqual(callback.body, {
       accepted: true,
@@ -405,6 +453,7 @@ test("provider callback and server status routes forward signed envelopes and re
       payload: body,
       signature: "sha256=signed",
       timestamp: "2026-07-25T12:00:00.000Z",
+      providerReference: "RPI-1",
     });
     assert.deepEqual(status.body, {
       accepted: true,

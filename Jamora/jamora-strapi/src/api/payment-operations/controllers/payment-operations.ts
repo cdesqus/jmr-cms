@@ -125,8 +125,10 @@ function safeRoPay(payment: any) {
     amountMinor: payment.amountMinor,
     currency: payment.currency,
     expiresAt: payment.expiresAt,
-    qrUrl: payment.qrUrl,
-    deepLink: payment.deepLink,
+    ...(typeof payment.qrUrl === "string" ? { qrUrl: payment.qrUrl } : {}),
+    ...(typeof payment.deepLink === "string"
+      ? { deepLink: payment.deepLink }
+      : {}),
   };
 }
 
@@ -146,6 +148,7 @@ function providerEnvelope(ctx: any) {
     payload: requestBody(ctx),
     signature: text(ctx.get("x-ropay-signature")),
     timestamp: text(ctx.get("x-ropay-timestamp")),
+    providerReference: text(ctx.get("x-ropay-provider-reference")),
   };
 }
 

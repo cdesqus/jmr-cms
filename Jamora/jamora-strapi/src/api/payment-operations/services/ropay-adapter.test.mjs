@@ -93,6 +93,30 @@ function signedRequest(body = payload(), kind = "callback", timestamp = now.toIS
     payload: body,
     timestamp,
     signature: `sha256=${createHmac("sha256", secret).update(message).digest("hex")}`,
+    providerReference: body.providerReference,
+  };
+}
+
+function signedUnrestrictedRequest(
+  body,
+  kind = "callback",
+  timestamp = now.toISOString(),
+) {
+  const canonical = JSON.stringify({
+    providerEventId: body.providerEventId,
+    providerReference: body.providerReference,
+    paymentReference: body.paymentReference,
+    status: body.status,
+    amountMinor: body.amountMinor,
+    currency: body.currency,
+    occurredAt: body.occurredAt,
+  });
+  const message = `ropay-${kind}\n${timestamp}\n${canonical}`;
+  return {
+    payload: body,
+    timestamp,
+    signature: `sha256=${createHmac("sha256", secret).update(message).digest("hex")}`,
+    providerReference: body.providerReference,
   };
 }
 
@@ -129,6 +153,39 @@ test("status verification uses a separate signed server-to-server domain", () =>
   assert.deepEqual(verifyRoPayStatus(statusRequest, { secret, now }), payload());
   assert.throws(
     () => verifyRoPayStatus(signedRequest(), { secret, now }),
+    /verification failed/i,
+  );
+});
+
+test("signed provider reference must match the pre-body rate-limit reference", () => {
+  for (const [request, verify] of [
+    [signedRequest(), verifyRoPayCallback],
+    [signedRequest(payload(), "status"), verifyRoPayStatus],
+  ]) {
+    assert.throws(
+      () => verify(
+        { ...request, providerReference: "RPI-OTHER" },
+        { secret, now },
+      ),
+      /verification failed/i,
+    );
+  }
+});
+
+test("signed callback and status payloads reject non-RON currency", () => {
+  const eur = payload({ currency: "EUR" });
+  assert.throws(
+    () => verifyRoPayCallback(
+      signedUnrestrictedRequest(eur),
+      { secret, now },
+    ),
+    /verification failed/i,
+  );
+  assert.throws(
+    () => verifyRoPayStatus(
+      signedUnrestrictedRequest(eur, "status"),
+      { secret, now },
+    ),
     /verification failed/i,
   );
 });
@@ -197,6 +254,110 @@ test("persists an immutable intent before creating a short-lived safe QR and dee
   assert.ok(persisted.paymentReference);
 });
 
+test("forces RON into authoritative subject resolution when request currency is omitted", async () => {
+  let resolvedInput;
+  const adapter = createMemoryPaymentAdapter({
+    resolvePaymentSubject: async (input) => {
+      resolvedInput = input;
+      return subject();
+    },
+  });
+  const input = {
+    ...subject(),
+    idempotencyKey: "intent-ron",
+    now,
+  };
+  delete input.currency;
+
+  const result = await createRoPayIntent(adapter, input, {
+    env: enabled,
+    randomUUID: () => "00000000-0000-4000-8000-000000000001",
+  });
+
+  assert.equal(resolvedInput.currency, "RON");
+  assert.equal(result.currency, "RON");
+});
+
+test("rejects an explicit EUR intent before authoritative subject resolution", async () => {
+  let resolverCalls = 0;
+  const adapter = createMemoryPaymentAdapter({
+    resolvePaymentSubject: async () => {
+      resolverCalls += 1;
+      return subject();
+    },
+  });
+  await assert.rejects(
+    () => createRoPayIntent(adapter, {
+      ...subject(),
+      currency: "EUR",
+      idempotencyKey: "intent-eur-request",
+      now,
+    }, { env: enabled }),
+    /currency.*RON/i,
+  );
+  assert.equal(resolverCalls, 0);
+  assert.equal(adapter.payments.size, 0);
+});
+
+test("rejects an authoritative subject that cannot settle in RON", async () => {
+  const adapter = createMemoryPaymentAdapter({
+    resolvePaymentSubject: async () => ({
+      ...subject(),
+      currency: "EUR",
+      priceSnapshot: {
+        charge: { amountMinor: 10_000, currency: "EUR" },
+      },
+    }),
+  });
+  await assert.rejects(
+    () => createRoPayIntent(adapter, {
+      ...subject(),
+      idempotencyKey: "intent-eur-subject",
+      now,
+    }, { env: enabled }),
+    /currency.*RON/i,
+  );
+  assert.equal(adapter.payments.size, 0);
+});
+
+test("rejects replay of a previously persisted non-RON RoPay intent", async () => {
+  const adapter = createMemoryPaymentAdapter({
+    payments: [payment({
+      currency: "EUR",
+      priceSnapshot: {
+        charge: { amountMinor: 10_000, currency: "EUR" },
+        ropay: payment().priceSnapshot.ropay,
+      },
+    })],
+  });
+  await assert.rejects(
+    () => createRoPayIntent(adapter, {
+      ...subject(),
+      idempotencyKey: "intent-1",
+      now,
+    }, { env: enabled }),
+    /idempotency conflict|currency.*RON/i,
+  );
+});
+
+test("rejects an already-expired authoritative subject before persisting an intent", async () => {
+  const adapter = createMemoryPaymentAdapter({
+    resolvePaymentSubject: async () => ({
+      ...subject(),
+      subjectExpiresAt: "2026-07-25T11:59:59.000Z",
+    }),
+  });
+  await assert.rejects(
+    () => createRoPayIntent(adapter, {
+      ...subject(),
+      idempotencyKey: "intent-expired-subject",
+      now,
+    }, { env: enabled }),
+    /subject.*expired/i,
+  );
+  assert.equal(adapter.payments.size, 0);
+});
+
 test("intent replay returns the persisted provider presentation and conflicts on changed identity", async () => {
   const adapter = createMemoryPaymentAdapter({
     resolvePaymentSubject: async () => subject(),
@@ -211,6 +372,8 @@ test("intent replay returns the persisted provider presentation and conflicts on
     randomUUID: () => "00000000-0000-4000-8000-000000000099",
   });
   assert.deepEqual(replay, first);
+  assert.ok(replay.qrUrl);
+  assert.ok(replay.deepLink);
   assert.equal(adapter.payments.size, 1);
   await assert.rejects(
     () => createRoPayIntent(adapter, {
@@ -224,6 +387,46 @@ test("intent replay returns the persisted provider presentation and conflicts on
       amountMinor: 9_999,
     }, { env: enabled });
   assert.equal(replayWithForgedMoney.amountMinor, 10_000);
+});
+
+test("terminal intent replay returns status only without reusable provider presentation", async () => {
+  for (const status of ["paid", "failed", "expired"]) {
+    const adapter = createMemoryPaymentAdapter({
+      payments: [payment({ status })],
+    });
+    const result = await createRoPayIntent(adapter, {
+      ...subject(),
+      idempotencyKey: "intent-1",
+      now,
+    }, { env: enabled });
+
+    assert.equal(result.status, status);
+    assert.equal(Object.hasOwn(result, "qrUrl"), false);
+    assert.equal(Object.hasOwn(result, "deepLink"), false);
+  }
+});
+
+test("time-expired pending intent replay rejects instead of returning stale QR data", async () => {
+  const adapter = createMemoryPaymentAdapter({
+    payments: [payment({
+      expiresAt: "2026-07-25T11:59:59.000Z",
+      priceSnapshot: {
+        ...payment().priceSnapshot,
+        ropay: {
+          sessionToken: "public-session-token",
+          displayExpiresAt: "2026-07-25T11:59:59.000Z",
+        },
+      },
+    })],
+  });
+  await assert.rejects(
+    () => createRoPayIntent(adapter, {
+      ...subject(),
+      idempotencyKey: "intent-1",
+      now,
+    }, { env: enabled }),
+    /intent expired/i,
+  );
 });
 
 test("dual exact gates reject RoPay without disabling the manual transaction foundation", async () => {
@@ -271,6 +474,80 @@ test("a valid callback settles once and an exact provider event replay is idempo
   assert.equal(adapter.events.filter((event) => event.providerEventId === "event-1").length, 1);
 });
 
+test("the same immutable provider event replays across callback and status transports", async () => {
+  let settlements = 0;
+  const adapter = createMemoryPaymentAdapter({
+    payments: [payment()],
+    settleSubject: async () => { settlements += 1; },
+  });
+  const options = { env: enabled, now: () => now };
+
+  const callback = await handleRoPayCallback(
+    adapter,
+    signedRequest(payload(), "callback"),
+    options,
+  );
+  const statusReplay = await handleRoPayCallback(
+    adapter,
+    signedRequest(payload(), "status"),
+    { ...options, verification: "status" },
+  );
+
+  assert.equal(callback.idempotent, false);
+  assert.equal(statusReplay.idempotent, true);
+  assert.equal(statusReplay.status, "paid");
+  assert.equal(settlements, 1);
+  assert.equal(adapter.events.length, 1);
+  assert.deepEqual(adapter.events[0].payload, {
+    kind: "ropay_provider_event",
+    providerEvent: payload(),
+  });
+});
+
+test("cross-channel provider event replay conflicts when immutable semantics change", async () => {
+  const adapter = createMemoryPaymentAdapter({
+    payments: [payment()],
+    settleSubject: async () => undefined,
+  });
+  const options = { env: enabled, now: () => now };
+  await handleRoPayCallback(adapter, signedRequest(), options);
+  await assert.rejects(
+    () => handleRoPayCallback(
+      adapter,
+      signedRequest(payload({ status: "failed" }), "status"),
+      { ...options, verification: "status" },
+    ),
+    /idempotency conflict/i,
+  );
+});
+
+test("a distinct later paid status is recorded as observation without paid-to-paid mutation", async () => {
+  let settlements = 0;
+  const adapter = createMemoryPaymentAdapter({
+    payments: [payment()],
+    settleSubject: async () => { settlements += 1; },
+  });
+  const options = { env: enabled, now: () => now };
+  await handleRoPayCallback(adapter, signedRequest(), options);
+
+  const observation = payload({
+    providerEventId: "event-2",
+    occurredAt: "2026-07-25T12:00:01.000Z",
+  });
+  const result = await handleRoPayCallback(
+    adapter,
+    signedRequest(observation, "status"),
+    { ...options, verification: "status" },
+  );
+
+  assert.equal(result.status, "paid");
+  assert.equal(result.idempotent, true);
+  assert.equal(settlements, 1);
+  assert.equal(adapter.events.length, 2);
+  assert.equal(adapter.events[1].providerEventId, "event-2");
+  assert.deepEqual(adapter.events[1].payload.providerEvent, observation);
+});
+
 test("a replayed provider event with changed signed semantics conflicts", async () => {
   const adapter = createMemoryPaymentAdapter({
     payments: [payment()],
@@ -301,7 +578,6 @@ test("a paid event replay requires coherent persisted settlement state", async (
       occurredAt: providerEvent.occurredAt,
       payload: {
         kind: "ropay_provider_event",
-        verification: "callback",
         providerEvent,
       },
     }],
@@ -319,7 +595,7 @@ test("invalid signature and immutable amount, currency, payment, or provider ref
   for (const request of [
     { ...signedRequest(), signature: `sha256=${"f".repeat(64)}` },
     signedRequest(payload({ amountMinor: 9_999 })),
-    signedRequest(payload({ currency: "EUR" })),
+    signedUnrestrictedRequest(payload({ currency: "EUR" })),
     signedRequest(payload({ paymentReference: "JMR-OTHER" })),
     signedRequest(payload({ providerReference: "RPI-OTHER" })),
   ]) {
@@ -350,7 +626,6 @@ test("out-of-order provider events and failure after paid cannot regress payment
     occurredAt: "2026-07-25T12:00:01.000Z",
     payload: {
       kind: "ropay_provider_event",
-      verification: "callback",
       providerEvent: payload({
         providerEventId: "event-newer",
         status: "pending",
