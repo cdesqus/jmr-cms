@@ -13,9 +13,9 @@ function env(values = {}) {
 
 test("Strapi trusts forwarded client IP only with exact TRUST_PROXY=true", () => {
   for (const value of [undefined, "false", "TRUE", "1"]) {
-    assert.equal(serverConfig({ env: env({ TRUST_PROXY: value }) }).proxy, false);
+    assert.equal(serverConfig({ env: env({ TRUST_PROXY: value }) }).proxy.koa, false);
   }
-  assert.equal(serverConfig({ env: env({ TRUST_PROXY: "true" }) }).proxy, true);
+  assert.equal(serverConfig({ env: env({ TRUST_PROXY: "true" }) }).proxy.koa, true);
 });
 
 test("Koa derives ctx.ip from the client header only for the opt-in proxy configuration", () => {
@@ -26,7 +26,7 @@ test("Koa derives ctx.ip from the client header only for the opt-in proxy config
   const response = {};
   for (const [trustProxy, expected] of [["false", "10.0.0.8"], ["true", "198.51.100.8"]]) {
     const app = new Koa();
-    app.proxy = serverConfig({ env: env({ TRUST_PROXY: trustProxy }) }).proxy;
+    app.proxy = serverConfig({ env: env({ TRUST_PROXY: trustProxy }) }).proxy.koa;
     assert.equal(app.createContext(request, response).ip, expected);
   }
 });
