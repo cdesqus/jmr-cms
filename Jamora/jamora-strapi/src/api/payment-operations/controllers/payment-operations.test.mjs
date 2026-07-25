@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import controller from "./payment-operations.ts";
+import routes from "../routes/payment-operations.ts";
 
 function context(body = {}, headers = {}, params = {}) {
   const normalized = Object.fromEntries(
@@ -220,4 +221,278 @@ test("receipt and mismatch resolution require owner credentials and server-deriv
     if (previous.admin === undefined) delete process.env.JAMORA_ADMIN_API_SECRET;
     else process.env.JAMORA_ADMIN_API_SECRET = previous.admin;
   }
+});
+
+test("RoPay preparation requires both exact feature gates while manual transfer remains available", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    ropay: process.env.ROPAY_ENABLED,
+    storefront: process.env.JAMORA_STOREFRONT_API_SECRET,
+  };
+  process.env.PAYMENTS_ENABLED = "true";
+  process.env.JAMORA_STOREFRONT_API_SECRET = "storefront-secret";
+  let manualCalls = 0;
+  installStrapi({
+    async prepareBankTransfer() {
+      manualCalls += 1;
+      return {
+        method: "bank_transfer",
+        status: "awaiting_payment",
+        paymentReference: "JMR-MANUAL",
+        amountMinor: 10_000,
+        currency: "RON",
+        expiresAt: "2026-07-26T00:00:00.000Z",
+        priceSnapshot: { bankTransfer: { name: "Jamora", iban: "RO49AAAA1B31007593840000" } },
+      };
+    },
+    async createRoPayIntent() {
+      assert.fail("disabled RoPay service must not run");
+    },
+  }, { documentId: "customer-1", sessionVersion: 4 });
+  try {
+    for (const value of ["false", "TRUE", "1", ""]) {
+      process.env.ROPAY_ENABLED = value;
+      const ropay = context({
+        subjectType: "order",
+        subjectId: "order-1",
+        purpose: "order",
+      }, {
+        "x-jamora-storefront-secret": "storefront-secret",
+        "x-jamora-customer-document-id": "customer-1",
+        "x-jamora-customer-session-version": "4",
+      });
+      await controller.prepareRoPay(ropay);
+      assert.equal(ropay.status, 404);
+    }
+
+    const manual = context({
+      subjectType: "order",
+      subjectId: "order-1",
+      purpose: "order",
+    }, {
+      "x-jamora-storefront-secret": "storefront-secret",
+      "x-jamora-customer-document-id": "customer-1",
+      "x-jamora-customer-session-version": "4",
+    });
+    await controller.prepareBankTransfer(manual);
+    assert.equal(manual.status, 200);
+    assert.equal(manual.body.method, "bank_transfer");
+    assert.equal(manualCalls, 1);
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.ropay === undefined) delete process.env.ROPAY_ENABLED;
+    else process.env.ROPAY_ENABLED = previous.ropay;
+    if (previous.storefront === undefined) delete process.env.JAMORA_STOREFRONT_API_SECRET;
+    else process.env.JAMORA_STOREFRONT_API_SECRET = previous.storefront;
+  }
+});
+
+test("trusted RoPay preparation binds identity and returns only the safe provider DTO", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    ropay: process.env.ROPAY_ENABLED,
+    storefront: process.env.JAMORA_STOREFRONT_API_SECRET,
+  };
+  process.env.PAYMENTS_ENABLED = "true";
+  process.env.ROPAY_ENABLED = "true";
+  process.env.JAMORA_STOREFRONT_API_SECRET = "storefront-secret";
+  let received;
+  installStrapi({
+    async createRoPayIntent(input) {
+      received = input;
+      return {
+        method: "ropay",
+        status: "pending_provider",
+        paymentReference: "JMR-ROPAY-1",
+        amountMinor: 10_000,
+        currency: "RON",
+        expiresAt: "2026-07-25T12:10:00.000Z",
+        qrUrl: "https://mock.ropay.invalid/qr/token",
+        deepLink: "ropay://pay/token",
+        providerReference: "internal-provider-reference",
+        signature: "never-expose",
+        settlementKey: "never-expose",
+      };
+    },
+  }, { documentId: "customer-1", sessionVersion: 4 });
+  try {
+    const ctx = context({
+      subjectType: "order",
+      subjectId: "order-1",
+      purpose: "order",
+      customerDocumentId: "forged",
+      ownerDocumentId: "forged",
+    }, {
+      "x-jamora-storefront-secret": "storefront-secret",
+      "x-jamora-customer-document-id": "customer-1",
+      "x-jamora-customer-session-version": "4",
+    });
+    await controller.prepareRoPay(ctx);
+    assert.equal(ctx.status, 200);
+    assert.deepEqual(ctx.body, {
+      method: "ropay",
+      status: "pending_provider",
+      paymentReference: "JMR-ROPAY-1",
+      amountMinor: 10_000,
+      currency: "RON",
+      expiresAt: "2026-07-25T12:10:00.000Z",
+      qrUrl: "https://mock.ropay.invalid/qr/token",
+      deepLink: "ropay://pay/token",
+    });
+    assert.equal(received.customerDocumentId, "customer-1");
+    assert.equal(received.ownerDocumentId, "customer-1");
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.ropay === undefined) delete process.env.ROPAY_ENABLED;
+    else process.env.ROPAY_ENABLED = previous.ropay;
+    if (previous.storefront === undefined) delete process.env.JAMORA_STOREFRONT_API_SECRET;
+    else process.env.JAMORA_STOREFRONT_API_SECRET = previous.storefront;
+  }
+});
+
+test("provider callback and server status routes forward signed envelopes and return safe acknowledgements", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    ropay: process.env.ROPAY_ENABLED,
+  };
+  process.env.PAYMENTS_ENABLED = "true";
+  process.env.ROPAY_ENABLED = "true";
+  let callbackInput;
+  let statusInput;
+  installStrapi({
+    async handleRoPayCallback(input) {
+      callbackInput = input;
+      return {
+        documentId: "payment-1",
+        status: "paid",
+        idempotent: false,
+        settlementKey: "never-expose",
+      };
+    },
+    async verifyRoPayStatus(input) {
+      statusInput = input;
+      return {
+        documentId: "payment-1",
+        status: "paid",
+        idempotent: true,
+      };
+    },
+  });
+  try {
+    const body = { providerEventId: "event-1" };
+    const headers = {
+      "x-ropay-signature": "sha256=signed",
+      "x-ropay-timestamp": "2026-07-25T12:00:00.000Z",
+    };
+    const callback = context(body, headers);
+    await controller.handleRoPayCallback(callback);
+    assert.deepEqual(callbackInput, {
+      payload: body,
+      signature: "sha256=signed",
+      timestamp: "2026-07-25T12:00:00.000Z",
+    });
+    assert.deepEqual(callback.body, {
+      accepted: true,
+      status: "paid",
+      idempotent: false,
+    });
+
+    const status = context(body, headers);
+    await controller.verifyRoPayStatus(status);
+    assert.deepEqual(statusInput, {
+      payload: body,
+      signature: "sha256=signed",
+      timestamp: "2026-07-25T12:00:00.000Z",
+    });
+    assert.deepEqual(status.body, {
+      accepted: true,
+      status: "paid",
+      idempotent: true,
+    });
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.ropay === undefined) delete process.env.ROPAY_ENABLED;
+    else process.env.ROPAY_ENABLED = previous.ropay;
+  }
+});
+
+test("browser return is authenticated, read-only, and exposes status only", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    ropay: process.env.ROPAY_ENABLED,
+    storefront: process.env.JAMORA_STOREFRONT_API_SECRET,
+  };
+  process.env.PAYMENTS_ENABLED = "true";
+  process.env.ROPAY_ENABLED = "true";
+  process.env.JAMORA_STOREFRONT_API_SECRET = "storefront-secret";
+  let readInput;
+  installStrapi({
+    async readRoPayStatus(input) {
+      readInput = input;
+      return {
+        method: "ropay",
+        status: "pending_provider",
+        paymentReference: "JMR-ROPAY-1",
+        amountMinor: 10_000,
+        currency: "RON",
+        expiresAt: "2026-07-25T12:10:00.000Z",
+        settlementKey: "never-expose",
+      };
+    },
+    async handleRoPayCallback() {
+      assert.fail("browser return must not call settlement");
+    },
+    async verifyRoPayStatus() {
+      assert.fail("browser return must not call server status verification");
+    },
+  }, { documentId: "customer-1", sessionVersion: 4 });
+  try {
+    const ctx = context({}, {
+      "x-jamora-storefront-secret": "storefront-secret",
+      "x-jamora-customer-document-id": "customer-1",
+      "x-jamora-customer-session-version": "4",
+    }, { reference: "JMR-ROPAY-1" });
+    ctx.request.method = "GET";
+    await controller.readRoPayReturn(ctx);
+    assert.deepEqual(readInput, {
+      paymentReference: "JMR-ROPAY-1",
+      customerDocumentId: "customer-1",
+      guestCheckoutCapability: undefined,
+    });
+    assert.deepEqual(ctx.body, {
+      method: "ropay",
+      status: "pending_provider",
+      paymentReference: "JMR-ROPAY-1",
+      amountMinor: 10_000,
+      currency: "RON",
+      expiresAt: "2026-07-25T12:10:00.000Z",
+    });
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.ropay === undefined) delete process.env.ROPAY_ENABLED;
+    else process.env.ROPAY_ENABLED = previous.ropay;
+    if (previous.storefront === undefined) delete process.env.JAMORA_STOREFRONT_API_SECRET;
+    else process.env.JAMORA_STOREFRONT_API_SECRET = previous.storefront;
+  }
+});
+
+test("routes separate provider mutation from browser read-only return", () => {
+  const byHandler = Object.fromEntries(
+    routes.routes.map((route) => [route.handler, route]),
+  );
+  assert.deepEqual(
+    [byHandler["payment-operations.prepareRoPay"].method,
+      byHandler["payment-operations.handleRoPayCallback"].method,
+      byHandler["payment-operations.verifyRoPayStatus"].method,
+      byHandler["payment-operations.readRoPayReturn"].method],
+    ["POST", "POST", "POST", "GET"],
+  );
+  assert.match(
+    byHandler["payment-operations.readRoPayReturn"].path,
+    /:reference$/,
+  );
 });

@@ -444,6 +444,7 @@ function same(left, right) {
 function comparableSnapshot(snapshot) {
   const copy = clone(snapshot ?? {});
   delete copy.bankTransfer;
+  delete copy.ropay;
   return copy;
 }
 
@@ -1007,6 +1008,10 @@ function createMemoryPaymentAdapter(options = {}) {
       .sort((left, right) => left.expiresAt.localeCompare(right.expiresAt))
       .slice(0, limit)
       .map(clone),
+    findPaymentByReference: async (reference) =>
+      clone([...adapter.payments.values()].find(
+        (payment) => payment.paymentReference === reference,
+      )),
     async transaction(work) {
       const prior = adapter.queue;
       let release;
@@ -1034,6 +1039,10 @@ function memoryTransaction(adapter, options) {
   return {
     trx: undefined,
     findPaymentByIdempotency: async (key) => clone(findByIdempotency(key)),
+    lockPaymentByReference: async (reference) =>
+      clone([...adapter.payments.values()].find(
+        (payment) => payment.paymentReference === reference,
+      )),
     lockPayment: async (documentId) => clone(adapter.payments.get(documentId)),
     listEvents: async (paymentDocumentId) =>
       clone(adapter.events.filter((event) => event.paymentDocumentId === paymentDocumentId)),
@@ -1088,9 +1097,21 @@ function createStrapiPaymentAdapter(strapi, options = {}) {
       orderBy: { expiresAt: "asc" },
       limit,
     }),
+    findPaymentByReference: (reference) =>
+      paymentQuery().findOne({ where: { paymentReference: reference } }),
     transaction: (work) => strapi.db.transaction(async ({ trx }) => work({
       trx,
       findPaymentByIdempotency: (key) => findPaymentByIdempotency(key, trx),
+      async lockPaymentByReference(reference) {
+        await strapi.db.connection("payments")
+          .where({ payment_reference: reference })
+          .transacting(trx)
+          .forUpdate()
+          .first();
+        return paymentQuery().findOne(withTransaction(trx, {
+          where: { paymentReference: reference },
+        }));
+      },
       async lockPayment(documentId) {
         await strapi.db.connection("payments")
           .where({ document_id: documentId })

@@ -9,6 +9,13 @@ import {
   deriveAuthoritativePaymentSubject,
   lockAuthoritativeOrderSubject,
 } from "./payment-transaction.cjs";
+const {
+  createRoPayIntent,
+  handleRoPayCallback,
+  readRoPayStatus,
+  verifyRoPayCallback,
+  verifyRoPayStatus,
+} = require("./ropay-adapter.cjs");
 const { withPaymentWriteAccess } = require(
   "../../payment/content-types/payment/payment-write-guard.cjs",
 );
@@ -23,6 +30,11 @@ const uid = {
 export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
   function assertPaymentsEnabled() {
     if (process.env.PAYMENTS_ENABLED !== "true") throw new Error("Not found.");
+  }
+
+  function assertRoPayEnabled() {
+    assertPaymentsEnabled();
+    if (process.env.ROPAY_ENABLED !== "true") throw new Error("Not found.");
   }
 
   const withTransaction = (trx: any, value: any) => ({ ...value, transacting: trx });
@@ -232,6 +244,43 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
     settlePayment(input: any) {
       assertPaymentsEnabled();
       return withPaymentWriteAccess(() => operations().settlePayment(input));
+    },
+    createRoPayIntent(input: any) {
+      assertRoPayEnabled();
+      return withPaymentWriteAccess(() =>
+        createRoPayIntent(adapter, input, { env: process.env }));
+    },
+    verifyRoPayCallback(input: any) {
+      assertRoPayEnabled();
+      return verifyRoPayCallback(input, {
+        secret: process.env.ROPAY_CALLBACK_SECRET,
+        now: new Date(),
+      });
+    },
+    handleRoPayCallback(input: any) {
+      assertRoPayEnabled();
+      return withPaymentWriteAccess(() =>
+        handleRoPayCallback(adapter, input, {
+          env: process.env,
+          now: () => new Date(),
+        }));
+    },
+    verifyRoPayStatus(input: any) {
+      assertRoPayEnabled();
+      verifyRoPayStatus(input, {
+        secret: process.env.ROPAY_CALLBACK_SECRET,
+        now: new Date(),
+      });
+      return withPaymentWriteAccess(() =>
+        handleRoPayCallback(adapter, input, {
+          env: process.env,
+          now: () => new Date(),
+          verification: "status",
+        }));
+    },
+    readRoPayStatus(input: any) {
+      assertRoPayEnabled();
+      return readRoPayStatus(adapter, input, { env: process.env });
     },
   } as any;
 });

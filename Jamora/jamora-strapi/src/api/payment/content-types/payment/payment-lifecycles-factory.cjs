@@ -30,6 +30,11 @@ function same(left, right) {
 }
 
 function rejectImmutablePatch(data, existing) {
+  if (Object.prototype.hasOwnProperty.call(data, "providerReference") &&
+      (!existing || existing.providerReference) &&
+      (!existing || !same(data.providerReference, existing.providerReference))) {
+    throw new Error("Payment providerReference is immutable once assigned.");
+  }
   for (const field of IMMUTABLE_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(data, field) &&
         (!existing || !same(data[field], existing[field]))) {

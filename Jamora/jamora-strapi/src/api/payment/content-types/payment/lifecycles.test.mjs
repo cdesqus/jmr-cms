@@ -103,6 +103,30 @@ test("payment identity, target, expected money, expiry, and snapshots are immuta
   }
 });
 
+test("a persisted provider reference cannot be replaced after intent creation", async () => {
+  const lifecycles = lifecycleFor({
+    ...expectedMoney,
+    providerReference: "RPI-ORIGINAL",
+  });
+  await assert.rejects(
+    () => lifecycles.beforeUpdate({
+      params: {
+        data: { providerReference: "RPI-FORGED" },
+        where: { id: 1 },
+      },
+    }),
+    /providerReference.*immutable/i,
+  );
+  await assert.doesNotReject(
+    () => lifecycleFor(expectedMoney).beforeUpdate({
+      params: {
+        data: { providerReference: "RPI-FIRST" },
+        where: { id: 1 },
+      },
+    }),
+  );
+});
+
 test("direct update and delete lifecycle mutations are denied outside payment operations", async () => {
   const lifecycles = rawLifecycleFor();
   await assert.rejects(

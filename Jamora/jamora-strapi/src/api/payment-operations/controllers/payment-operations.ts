@@ -17,6 +17,13 @@ function enabled(ctx: any) {
     : fail(ctx, 404, "Not found.");
 }
 
+function ropayEnabled(ctx: any) {
+  if (!enabled(ctx)) return false;
+  return process.env.ROPAY_ENABLED === "true"
+    ? true
+    : fail(ctx, 404, "Not found.");
+}
+
 function nonNegativeInteger(value: unknown) {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -87,7 +94,8 @@ async function run(ctx: any, action: () => Promise<unknown>) {
     ctx.body = await action();
   } catch (caught) {
     const error = caught instanceof Error ? caught : new Error("Payment operation failed.");
-    if (/not found/i.test(error.message)) ctx.status = 404;
+    if (/signature verification failed/i.test(error.message)) ctx.status = 401;
+    else if (/not found/i.test(error.message)) ctx.status = 404;
     else if (caught instanceof TypeError || /\brequired\b|\binvalid\b|safe integer/i.test(error.message)) {
       ctx.status = 400;
     } else {
@@ -109,6 +117,60 @@ function safeTransfer(payment: any) {
   };
 }
 
+function safeRoPay(payment: any) {
+  return {
+    method: payment.method,
+    status: payment.status,
+    paymentReference: payment.paymentReference,
+    amountMinor: payment.amountMinor,
+    currency: payment.currency,
+    expiresAt: payment.expiresAt,
+    qrUrl: payment.qrUrl,
+    deepLink: payment.deepLink,
+  };
+}
+
+function safeRoPayStatus(payment: any) {
+  return {
+    method: payment.method,
+    status: payment.status,
+    paymentReference: payment.paymentReference,
+    amountMinor: payment.amountMinor,
+    currency: payment.currency,
+    expiresAt: payment.expiresAt,
+  };
+}
+
+function providerEnvelope(ctx: any) {
+  return {
+    payload: requestBody(ctx),
+    signature: text(ctx.get("x-ropay-signature")),
+    timestamp: text(ctx.get("x-ropay-timestamp")),
+  };
+}
+
+async function statusIdentity(ctx: any) {
+  if (!trustedStorefront(ctx)) return null;
+  const documentId = text(ctx.get("x-jamora-customer-document-id"));
+  const rawVersion = ctx.get("x-jamora-customer-session-version");
+  if (documentId || rawVersion !== "") {
+    const sessionVersion = nonNegativeInteger(rawVersion);
+    if (!documentId || sessionVersion === null) {
+      return fail(ctx, 400, "Validated customer session fields are required.");
+    }
+    const customer = await (
+      strapi.service("api::customer-auth.customer-auth") as any
+    ).findActiveSessionCustomer(documentId, sessionVersion);
+    if (!customer) return fail(ctx, 401, "Invalid session.");
+    return { customer };
+  }
+  const guestCheckoutCapability = text(ctx.get("x-jamora-checkout-capability"));
+  if (!guestCheckoutCapability) {
+    return fail(ctx, 401, "Verified customer session or guest checkout capability required.");
+  }
+  return { guestCheckoutCapability };
+}
+
 export default {
   async prepareBankTransfer(ctx: any) {
     const identity = await preparationIdentity(ctx);
@@ -121,6 +183,59 @@ export default {
         ownerDocumentId: identity.customer?.documentId,
         guestCheckoutCapability: identity.guestCheckoutCapability,
         now: new Date(),
+      }),
+    ));
+  },
+
+  async prepareRoPay(ctx: any) {
+    if (!ropayEnabled(ctx)) return;
+    const identity = await preparationIdentity(ctx);
+    if (!identity) return;
+    const input = requestBody(ctx);
+    await run(ctx, async () => safeRoPay(
+      await paymentService().createRoPayIntent({
+        ...input,
+        customerDocumentId: identity.customer?.documentId,
+        ownerDocumentId: identity.customer?.documentId,
+        guestCheckoutCapability: identity.guestCheckoutCapability,
+        now: new Date(),
+      }),
+    ));
+  },
+
+  async handleRoPayCallback(ctx: any) {
+    if (!ropayEnabled(ctx)) return;
+    await run(ctx, async () => {
+      const result = await paymentService().handleRoPayCallback(providerEnvelope(ctx));
+      return {
+        accepted: true,
+        status: result.status,
+        idempotent: Boolean(result.idempotent),
+      };
+    });
+  },
+
+  async verifyRoPayStatus(ctx: any) {
+    if (!ropayEnabled(ctx)) return;
+    await run(ctx, async () => {
+      const result = await paymentService().verifyRoPayStatus(providerEnvelope(ctx));
+      return {
+        accepted: true,
+        status: result.status,
+        idempotent: Boolean(result.idempotent),
+      };
+    });
+  },
+
+  async readRoPayReturn(ctx: any) {
+    if (!ropayEnabled(ctx)) return;
+    const identity = await statusIdentity(ctx);
+    if (!identity) return;
+    await run(ctx, async () => safeRoPayStatus(
+      await paymentService().readRoPayStatus({
+        paymentReference: text(ctx.params?.reference),
+        customerDocumentId: identity.customer?.documentId,
+        guestCheckoutCapability: identity.guestCheckoutCapability,
       }),
     ));
   },
