@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertReservationAllocationBinding,
+  assertReservationProductBinding,
   nextPromotionUsage,
   settleOrdinaryOrder,
 } from "./order-payment-settlement.cjs";
@@ -15,6 +16,12 @@ const payment = {
 
 function setup(overrides = {}) {
   const calls = [];
+  const allocations = [{
+    productDocumentId: "product-1",
+    slug: "beras-kencur",
+    qty: 2,
+    batchDocumentId: "batch-1",
+  }];
   const order = {
     documentId: "order-1",
     orderNumber: "JMR-2026-1",
@@ -22,15 +29,17 @@ function setup(overrides = {}) {
     paymentDocumentId: null,
     reservationToken: "reservation-1",
     promotionCode: "WELCOME10",
-    items: [{ slug: "beras-kencur", qty: 2 }],
+    items: [{ productId: "product-1", slug: "beras-kencur", qty: 2 }],
     statusHistory: [],
     ...overrides.order,
   };
   const adapter = {
     lockOrder: async () => structuredClone(order),
     assertBinding: () => calls.push("binding"),
-    consumeReservation: async (token, orderNumber, items) =>
-      calls.push(["reservation", token, orderNumber, items]),
+    consumeReservation: async (token, orderNumber, items) => {
+      calls.push(["reservation", token, orderNumber, items]);
+      return allocations;
+    },
     decrementProductStock: async (items, reference) =>
       calls.push(["stock", items, reference]),
     incrementPromotionUse: async (code) =>
@@ -57,9 +66,14 @@ test("verified ordinary settlement consumes inventory and promotion once before 
       "reservation",
       "reservation-1",
       "JMR-2026-1",
-      [{ slug: "beras-kencur", qty: 2 }],
+      [{ productId: "product-1", slug: "beras-kencur", qty: 2 }],
     ],
-    ["stock", [{ slug: "beras-kencur", qty: 2 }], "JMR-2026-1"],
+    ["stock", [{
+      productDocumentId: "product-1",
+      slug: "beras-kencur",
+      qty: 2,
+      batchDocumentId: "batch-1",
+    }], "JMR-2026-1"],
     ["promotion", "WELCOME10"],
   ]);
   assert.equal(calls[4][0], "order");
@@ -91,6 +105,27 @@ test("reservation allocations must cover exactly the order products and quantiti
   ], [
     { slug: "sku-a", qty: 2 },
   ]), /does not match/i);
+});
+
+test("reservation product identity cannot drift between order, allocation, and batch", () => {
+  assert.doesNotThrow(() => assertReservationProductBinding([{
+    productDocumentId: "product-1",
+    slug: "sku-a",
+    qty: 1,
+  }], [{
+    productId: "product-1",
+    slug: "sku-a",
+    qty: 1,
+  }]));
+  assert.throws(() => assertReservationProductBinding([{
+    productDocumentId: "product-drifted",
+    slug: "sku-a",
+    qty: 1,
+  }], [{
+    productId: "product-1",
+    slug: "sku-a",
+    qty: 1,
+  }]), /product binding/i);
 });
 
 test("locked promotion usage enforces its cap without double-counting paid replay", async () => {
@@ -126,7 +161,11 @@ test("locked promotion usage enforces its cap without double-counting paid repla
   const adapter = {
     lockOrder: async (documentId) => structuredClone(orders.get(documentId)),
     assertBinding: () => undefined,
-    consumeReservation: async () => undefined,
+    consumeReservation: async () => [{
+      productDocumentId: "product-1",
+      slug: "tea",
+      qty: 1,
+    }],
     decrementProductStock: async () => undefined,
     incrementPromotionUse: async () => {
       const previous = releaseLock;

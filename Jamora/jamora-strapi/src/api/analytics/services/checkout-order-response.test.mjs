@@ -52,7 +52,13 @@ test("safe checkout order returns authoritative RON totals and shipping fields o
       shippingAddress: address,
       shippingAddressText: "Calea Victoriei 10",
       estimatedDelivery: quote.estimate,
-      quote,
+      quote: {
+        ...quote,
+        estimate: {
+          ...quote.estimate,
+          providerSecret: "remove",
+        },
+      },
       providerPayload: { secret: true },
     },
     priceSnapshot: {
@@ -69,7 +75,24 @@ test("safe checkout order returns authoritative RON totals and shipping fields o
       rate: "4.975",
       source: "demo-config",
       capturedAt: "2026-07-25T08:00:00.000Z",
-      shipping: quote,
+      items: [{
+        productDocumentId: "product-1",
+        slug: "jamu-energy",
+        sku: "JAMU-1",
+        name: "Jamu Energy",
+        qty: 1,
+        unitPriceMinor: 16_160,
+        lineTotalMinor: 16_160,
+        currency: "RON",
+        providerSecret: "remove",
+      }],
+      shipping: {
+        ...quote,
+        estimate: {
+          ...quote.estimate,
+          providerSecret: "remove",
+        },
+      },
       breakdown: {
         subtotalMinor: 16_160,
         shippingMinor: 2_490,
@@ -106,8 +129,8 @@ test("safe checkout order returns authoritative RON totals and shipping fields o
       sku: "JAMU-1",
       name: "Jamu Energy",
       qty: 1,
-      unitPriceCents: 3_200,
-      lineTotalCents: 3_200,
+      unitPriceCents: 16_160,
+      lineTotalCents: 16_160,
     }],
     subtotalCents: 16_160,
     shippingCents: 2_490,
@@ -131,6 +154,16 @@ test("safe checkout order returns authoritative RON totals and shipping fields o
         quotedAt: quote.quotedAt,
         expiresAt: quote.expiresAt,
       },
+      items: [{
+        productDocumentId: "product-1",
+        slug: "jamu-energy",
+        sku: "JAMU-1",
+        name: "Jamu Energy",
+        qty: 1,
+        unitPriceMinor: 16_160,
+        lineTotalMinor: 16_160,
+        currency: "RON",
+      }],
       breakdown: {
         subtotalMinor: 16_160,
         shippingMinor: 2_490,

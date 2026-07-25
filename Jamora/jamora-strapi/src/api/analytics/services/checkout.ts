@@ -247,19 +247,47 @@ function applyAuthoritativeRonShipping(
   }
   const parsed = decimalRate(options.rate);
   const merchandiseEurMinor = pricing.subtotalCents - pricing.discountCents;
+  const chargeItems = pricing.items.map((item: any) => {
+    const qty = item?.qty;
+    const unitPriceEurMinor = item?.unitPriceCents;
+    if (!Number.isSafeInteger(qty) || qty <= 0 ||
+        !Number.isSafeInteger(unitPriceEurMinor) ||
+        unitPriceEurMinor < 0) {
+      throw new TypeError("Authoritative checkout item pricing is invalid");
+    }
+    const unitPriceMinor = Number(
+      (BigInt(unitPriceEurMinor) * parsed.numerator +
+        parsed.denominator / BigInt(2)) / parsed.denominator,
+    );
+    const lineTotalMinor = unitPriceMinor * qty;
+    if (!Number.isSafeInteger(unitPriceMinor) ||
+        !Number.isSafeInteger(lineTotalMinor)) {
+      throw new RangeError("Authoritative checkout item pricing exceeds safe integer range");
+    }
+    return {
+      productDocumentId: item.productId,
+      slug: item.slug,
+      sku: item.sku,
+      name: item.name,
+      qty,
+      unitPriceMinor,
+      lineTotalMinor,
+      currency: "RON",
+    };
+  });
   const shippingEurMinor = Number(
     (BigInt(shipping.amountMinor) * parsed.denominator + parsed.numerator / BigInt(2)) /
       parsed.numerator,
   );
-  const merchandiseRonMinor = Number(
-    (BigInt(merchandiseEurMinor) * parsed.numerator + parsed.denominator / BigInt(2)) /
-      parsed.denominator,
+  const subtotalRonMinor = chargeItems.reduce(
+    (sum: number, item: any) => sum + item.lineTotalMinor,
+    0,
   );
   const discountRonMinor = Number(
     (BigInt(pricing.discountCents) * parsed.numerator + parsed.denominator / BigInt(2)) /
       parsed.denominator,
   );
-  const subtotalRonMinor = merchandiseRonMinor + discountRonMinor;
+  const merchandiseRonMinor = subtotalRonMinor - discountRonMinor;
   const totalCents = merchandiseEurMinor + shippingEurMinor;
   const chargeMinor = merchandiseRonMinor + shipping.amountMinor;
   if (![
@@ -284,6 +312,7 @@ function applyAuthoritativeRonShipping(
       rate: parsed.rate,
       source: "demo-config",
       capturedAt: options.capturedAt ?? new Date().toISOString(),
+      items: chargeItems,
       shipping: structuredClone(shipping),
       breakdown: {
         subtotalMinor: subtotalRonMinor,

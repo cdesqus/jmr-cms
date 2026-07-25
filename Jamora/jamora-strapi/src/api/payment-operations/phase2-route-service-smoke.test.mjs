@@ -271,13 +271,20 @@ test("paid payment subjects activate a membership and finalize an ordinary order
     orderNumber: "JMR-2026-1",
     status: "pending",
     reservationToken: "reservation-1",
-    items: [{ slug: "jamu", qty: 1 }],
+    items: [{ productId: "product-jamu", slug: "jamu", qty: 1 }],
     statusHistory: [],
   };
   const ordinaryAdapter = {
     lockOrder: async () => structuredClone(order),
     assertBinding: () => undefined,
-    consumeReservation: async () => calls.push("reservation"),
+    consumeReservation: async () => {
+      calls.push("reservation");
+      return [{
+        productDocumentId: "product-jamu",
+        slug: "jamu",
+        qty: 1,
+      }];
+    },
     decrementProductStock: async () => calls.push("stock"),
     incrementPromotionUse: async () => undefined,
     updateOrder: async (_id, data) => ({ ...order, ...data }),
@@ -346,9 +353,9 @@ test("payment and membership surfaces fail closed unless their feature flags are
 test("controller smoke binds customer, guest, and owner boundaries through verified Phase 2 settlement", async () => {
   await withControllerRuntime(async () => {
     const orders = new Map([
-      ["order-under", { documentId: "order-under", orderNumber: "JMR-UNDER", status: "pending", reservationToken: "reserve-under", items: [{ slug: "jamu", qty: 1 }], statusHistory: [] }],
-      ["order-exact", { documentId: "order-exact", orderNumber: "JMR-EXACT", status: "pending", reservationToken: "reserve-exact", promotionCode: "WELCOME", items: [{ slug: "jamu", qty: 1 }], statusHistory: [] }],
-      ["ropay-order", { documentId: "ropay-order", orderNumber: "JMR-ROPAY", status: "pending", reservationToken: "reserve-ropay", items: [{ slug: "jamu", qty: 1 }], statusHistory: [] }],
+      ["order-under", { documentId: "order-under", orderNumber: "JMR-UNDER", status: "pending", reservationToken: "reserve-under", items: [{ productId: "product-jamu", slug: "jamu", qty: 1 }], statusHistory: [] }],
+      ["order-exact", { documentId: "order-exact", orderNumber: "JMR-EXACT", status: "pending", reservationToken: "reserve-exact", promotionCode: "WELCOME", items: [{ productId: "product-jamu", slug: "jamu", qty: 1 }], statusHistory: [] }],
+      ["ropay-order", { documentId: "ropay-order", orderNumber: "JMR-ROPAY", status: "pending", reservationToken: "reserve-ropay", items: [{ productId: "product-jamu", slug: "jamu", qty: 1 }], statusHistory: [] }],
     ]);
     const inventory = [];
     const membershipAdapter = createMemoryMembershipAdapter({ memberships: [{
@@ -369,7 +376,14 @@ test("controller smoke binds customer, guest, and owner boundaries through verif
       settleOrder: (payment) => settleOrdinaryOrder({
         lockOrder: async (documentId) => structuredClone(orders.get(documentId)),
         assertBinding: () => undefined,
-        consumeReservation: async (token) => inventory.push(`reserve:${token}`),
+        consumeReservation: async (token) => {
+          inventory.push(`reserve:${token}`);
+          return [{
+            productDocumentId: "product-jamu",
+            slug: "jamu",
+            qty: 1,
+          }];
+        },
         decrementProductStock: async (_items, reference) => inventory.push(`stock:${reference}`),
         incrementPromotionUse: async (code) => inventory.push(`promotion:${code}`),
         updateOrder: async (documentId, patch) => {

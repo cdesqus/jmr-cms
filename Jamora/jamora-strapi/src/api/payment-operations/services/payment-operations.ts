@@ -24,6 +24,7 @@ const { projectAdminPayments } = require("./payment-admin-projection.cjs");
 const { authorizePaymentStatus } = require("./payment-status.cjs");
 const {
   assertReservationAllocationBinding,
+  assertReservationProductBinding,
   nextPromotionUsage,
   settleOrdinaryOrder: settleOrdinaryOrderTransaction,
 } = require("./order-payment-settlement.cjs");
@@ -244,6 +245,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         throw new Error("Payment order reservation allocation is invalid.");
       }
       assertReservationAllocationBinding(allocations, orderItems);
+      assertReservationProductBinding(allocations, orderItems);
       allocations.sort((left, right) =>
         String(left?.batchDocumentId ?? "").localeCompare(
           String(right?.batchDocumentId ?? ""),
@@ -275,6 +277,8 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         }));
         if (
           !batch
+          || batch.productDocumentId !== allocation.productDocumentId
+          || batch.slug !== allocation.slug
           || !Number.isSafeInteger(batch.quantity)
           || !Number.isSafeInteger(batch.reservedQuantity)
           || batch.quantity < quantity
@@ -296,39 +300,53 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         where: { documentId: reservation.documentId },
         data: { status: "consumed", orderNumber },
       }));
+      return allocations;
     }
 
-    async function decrementOrderProducts(items: any[], reference: string) {
-      const quantities = new Map<string, number>();
-      for (const item of items) {
-        const slug = typeof item?.slug === "string" ? item.slug.trim() : "";
-        const quantity = Number(item?.qty);
-        if (!slug || !Number.isSafeInteger(quantity) || quantity <= 0) {
+    async function decrementOrderProducts(allocations: any[], reference: string) {
+      const quantities = new Map<string, { slug: string; quantity: number }>();
+      for (const allocation of allocations) {
+        const productDocumentId =
+          typeof allocation?.productDocumentId === "string"
+            ? allocation.productDocumentId.trim()
+            : "";
+        const slug = typeof allocation?.slug === "string"
+          ? allocation.slug.trim()
+          : "";
+        const quantity = Number(allocation?.qty);
+        if (!productDocumentId || !slug ||
+            !Number.isSafeInteger(quantity) || quantity <= 0) {
           throw new Error("Payment order inventory item is invalid.");
         }
-        const total = (quantities.get(slug) ?? 0) + quantity;
+        const current = quantities.get(productDocumentId);
+        if (current && current.slug !== slug) {
+          throw new Error("Payment order inventory product binding is invalid.");
+        }
+        const total = (current?.quantity ?? 0) + quantity;
         if (!Number.isSafeInteger(total)) {
           throw new Error("Payment order inventory quantity is invalid.");
         }
-        quantities.set(slug, total);
+        quantities.set(productDocumentId, { slug, quantity: total });
       }
-      for (const [slug, quantity] of [...quantities].sort(([left], [right]) =>
+      for (const [productDocumentId, binding] of [...quantities].sort(([left], [right]) =>
         left.localeCompare(right))) {
+        const { slug, quantity } = binding;
         const productQuery = query(uid.product);
         const candidate = await productQuery.findOne(withTransaction(trx, {
-          where: { slug },
+          where: { documentId: productDocumentId },
         }));
-        if (!candidate?.documentId) {
+        if (!candidate?.documentId || candidate.slug !== slug) {
           throw new Error(`Payment order product ${slug} is unavailable.`);
         }
         await strapi.db.connection("products")
-          .where({ document_id: candidate.documentId })
+          .where({ document_id: productDocumentId })
           .transacting(trx)
           .forUpdate();
         const product = await productQuery.findOne(withTransaction(trx, {
-          where: { documentId: candidate.documentId },
+          where: { documentId: productDocumentId },
         }));
-        if (!product || !Number.isSafeInteger(product.stock) || product.stock < quantity) {
+        if (!product || product.slug !== slug ||
+            !Number.isSafeInteger(product.stock) || product.stock < quantity) {
           throw new Error(`Payment order product ${slug} has insufficient stock.`);
         }
         const balanceAfter = product.stock - quantity;

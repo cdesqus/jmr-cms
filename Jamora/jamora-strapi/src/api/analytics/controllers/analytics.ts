@@ -646,6 +646,12 @@ async function createStockReservation(
       sort: { expiryDate: "asc" },
       limit: 200,
     });
+    if (batches.some((batch: any) =>
+      batch.status === "active" &&
+      (batch.productDocumentId !== product.documentId ||
+       batch.slug !== product.slug))) {
+      return { error: `Inventory batch binding for ${slug} is invalid.` };
+    }
     const usable = batches.filter((batch: any) => {
       return batch.status === "active" && (!batch.expiryDate || new Date(batch.expiryDate).getTime() >= Date.now());
     });

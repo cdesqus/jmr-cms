@@ -30,9 +30,24 @@ function pick(source, fields) {
   return result;
 }
 
+function safeEstimate(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return {
+    minimumDays: safeInteger(value.minimumDays, "minimum delivery estimate"),
+    maximumDays: safeInteger(value.maximumDays, "maximum delivery estimate"),
+  };
+}
+
 function safeQuote(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  return pick(value, QUOTE_FIELDS);
+  const quote = pick(value, QUOTE_FIELDS.filter((field) => field !== "estimate"));
+  const estimate = safeEstimate(value.estimate);
+  return {
+    ...quote,
+    ...(estimate ? { estimate } : {}),
+  };
 }
 
 function safeMoney(value, label) {
@@ -111,22 +126,66 @@ function safeCheckoutOrder(order) {
     !Array.isArray(order.shippingAddress)
     ? pick(order.shippingAddress, ADDRESS_FIELDS)
     : undefined;
-  const items = (Array.isArray(order.items) ? order.items : []).map((item) => ({
-    productId: text(item?.productId ?? item?.productDocumentId),
-    slug: text(item?.slug),
-    sku: text(item?.sku),
-    name: text(item?.name),
-    qty: safeInteger(item?.qty, "item quantity"),
-    unitPriceCents: safeInteger(
-      item?.unitPriceCents ?? item?.unitPriceMinor ?? 0,
+  const orderItems = Array.isArray(order.items) ? order.items : [];
+  const itemSource = quote ? order.priceSnapshot?.items : orderItems;
+  if (quote && !Array.isArray(itemSource)) {
+    throw new Error("Authoritative RON checkout items are unavailable.");
+  }
+  const items = (Array.isArray(itemSource) ? itemSource : []).map((item) => {
+    if (quote && text(item?.currency).toUpperCase() !== "RON") {
+      throw new Error("Authoritative RON checkout item currency is invalid.");
+    }
+    const qty = safeInteger(item?.qty, "item quantity");
+    const unitPriceCents = safeInteger(
+      quote ? item?.unitPriceMinor : item?.unitPriceCents ?? item?.unitPriceMinor ?? 0,
       "item unit price",
-    ),
-    lineTotalCents: safeInteger(
-      item?.lineTotalCents ??
+    );
+    const lineTotalCents = safeInteger(
+      quote ? item?.lineTotalMinor : item?.lineTotalCents ??
         (item?.unitPriceCents ?? item?.unitPriceMinor ?? 0) * item?.qty,
       "item line total",
-    ),
-  }));
+    );
+    if (quote && unitPriceCents * qty !== lineTotalCents) {
+      throw new Error("Authoritative RON checkout item total is inconsistent.");
+    }
+    return {
+      productId: text(item?.productId ?? item?.productDocumentId),
+      slug: text(item?.slug),
+      sku: text(item?.sku),
+      name: text(item?.name),
+      qty,
+      unitPriceCents,
+      lineTotalCents,
+    };
+  });
+  if (quote) {
+    if (items.length !== orderItems.length) {
+      throw new Error("Authoritative RON checkout item binding is invalid.");
+    }
+    const originalBySlug = new Map(orderItems.map((item) => [
+      text(item?.slug),
+      {
+        productId: text(item?.productId ?? item?.productDocumentId),
+        qty: item?.qty,
+      },
+    ]));
+    for (const item of items) {
+      const original = originalBySlug.get(item.slug);
+      if (!original ||
+          original.productId !== item.productId ||
+          original.qty !== item.qty) {
+        throw new Error("Authoritative RON checkout item binding is invalid.");
+      }
+    }
+    const itemSubtotal = items.reduce(
+      (sum, item) => sum + item.lineTotalCents,
+      0,
+    );
+    if (!Number.isSafeInteger(itemSubtotal) ||
+        itemSubtotal !== breakdown.subtotalMinor) {
+      throw new Error("Authoritative RON checkout item subtotal is inconsistent.");
+    }
+  }
   const safePriceSnapshot = order.priceSnapshot
     ? {
         ...(reference ? { reference } : {}),
@@ -141,6 +200,20 @@ function safeCheckoutOrder(order) {
           ? { capturedAt: text(order.priceSnapshot.capturedAt) }
           : {}),
         ...(quote ? { shipping: quote } : {}),
+        ...(quote
+          ? {
+              items: items.map((item) => ({
+                productDocumentId: item.productId,
+                slug: item.slug,
+                sku: item.sku,
+                name: item.name,
+                qty: item.qty,
+                unitPriceMinor: item.unitPriceCents,
+                lineTotalMinor: item.lineTotalCents,
+                currency: "RON",
+              })),
+            }
+          : {}),
         ...(breakdown ? { breakdown } : {}),
       }
     : undefined;
@@ -167,7 +240,7 @@ function safeCheckoutOrder(order) {
       : {}),
     createdAt: text(order.createdAt) || new Date().toISOString(),
     ...(quote?.estimate
-      ? { shippingEstimate: structuredClone(quote.estimate) }
+      ? { shippingEstimate: quote.estimate }
       : {}),
     ...(safePriceSnapshot ? { priceSnapshot: safePriceSnapshot } : {}),
   };

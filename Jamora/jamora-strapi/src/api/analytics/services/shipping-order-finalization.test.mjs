@@ -204,6 +204,8 @@ test("exact allocation updates fail closed instead of clamping batch or legacy s
   assert.deepEqual(
     exactAllocationUpdate(allocations[0], {
       documentId: "batch-1",
+      productDocumentId: "product-1",
+      slug: "jamu-energy",
       quantity: 7,
       reservedQuantity: 3,
       status: "active",
@@ -219,6 +221,8 @@ test("exact allocation updates fail closed instead of clamping batch or legacy s
   assert.throws(
     () => exactAllocationUpdate(allocations[0], {
       documentId: "batch-1",
+      productDocumentId: "product-1",
+      slug: "jamu-energy",
       quantity: 1,
       reservedQuantity: 3,
     }),
@@ -227,10 +231,22 @@ test("exact allocation updates fail closed instead of clamping batch or legacy s
   assert.throws(
     () => exactAllocationUpdate(allocations[0], {
       documentId: "batch-1",
+      productDocumentId: "product-1",
+      slug: "jamu-energy",
       quantity: 7,
       reservedQuantity: 1,
     }),
     /binding/i,
+  );
+  assert.throws(
+    () => exactAllocationUpdate(allocations[0], {
+      documentId: "batch-1",
+      productDocumentId: "product-drifted",
+      slug: "jamu-energy",
+      quantity: 7,
+      reservedQuantity: 3,
+    }),
+    /product binding/i,
   );
 
   const legacy = {
@@ -241,6 +257,7 @@ test("exact allocation updates fail closed instead of clamping batch or legacy s
   assert.deepEqual(
     exactAllocationUpdate(legacy, {
       documentId: "product-1",
+      slug: "jamu-energy",
       stock: 4,
     }),
     {
@@ -252,6 +269,7 @@ test("exact allocation updates fail closed instead of clamping batch or legacy s
   assert.throws(
     () => exactAllocationUpdate(legacy, {
       documentId: "product-1",
+      slug: "jamu-energy",
       stock: 1,
     }),
     /unavailable/i,

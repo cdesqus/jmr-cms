@@ -262,7 +262,11 @@ test("shipping quote routes require the exact gate and return only safe quote fi
             service: "standard",
             amountMinor: 2090,
             currency: "RON",
-            estimate: { minimumDays: 2, maximumDays: 3 },
+            estimate: {
+              minimumDays: 2,
+              maximumDays: 3,
+              providerSecret: "must-not-leak",
+            },
             quotedAt: "2026-07-25T10:00:00.000Z",
             expiresAt: "2026-07-25T10:15:00.000Z",
             addressDigest: "must-not-leak",

@@ -392,6 +392,16 @@ function createMembershipCheckoutService(adapter, env = process.env) {
                       amountMinor: checkout.totals.shippingMinor,
                       currency: "RON",
                     },
+                    items: checkout.items.map((item) => ({
+                      productDocumentId: item.productDocumentId,
+                      slug: item.slug,
+                      sku: item.sku,
+                      name: item.name,
+                      qty: item.qty,
+                      unitPriceMinor: 0,
+                      lineTotalMinor: 0,
+                      currency: "RON",
+                    })),
                     shipping: structuredClone(
                       checkout.shippingSnapshot.quote,
                     ),
@@ -713,6 +723,30 @@ function strapiTx(strapi, query, withTrx, trx) {
             membershipDocumentId: checkout.membershipDocumentId,
             totals: checkout.totals,
           },
+          ...(shipping.quote ? {
+            charge: {
+              amountMinor: checkout.totals.totalMinor,
+              currency: "RON",
+            },
+            items: checkout.items.map((item) => ({
+              productDocumentId: item.productDocumentId,
+              slug: item.slug,
+              sku: item.sku,
+              name: item.name,
+              qty: item.qty,
+              unitPriceMinor: 0,
+              lineTotalMinor: 0,
+              currency: "RON",
+            })),
+            shipping: structuredClone(shipping.quote),
+            breakdown: {
+              subtotalMinor: 0,
+              shippingMinor: checkout.totals.shippingMinor,
+              discountMinor: 0,
+              totalMinor: checkout.totals.totalMinor,
+              currency: "RON",
+            },
+          } : {}),
         },
       } }));
     },
@@ -846,7 +880,31 @@ function memoryTx(adapter, options) {
           checkoutReference: checkout.checkoutReference,
           membershipDocumentId: checkout.membershipDocumentId,
           totals: structuredClone(checkout.totals),
-        } },
+        },
+        ...(shipping.quote ? {
+          charge: {
+            amountMinor: checkout.totals.totalMinor,
+            currency: "RON",
+          },
+          items: checkout.items.map((item) => ({
+            productDocumentId: item.productDocumentId,
+            slug: item.slug,
+            sku: item.sku,
+            name: item.name,
+            qty: item.qty,
+            unitPriceMinor: 0,
+            lineTotalMinor: 0,
+            currency: "RON",
+          })),
+          shipping: structuredClone(shipping.quote),
+          breakdown: {
+            subtotalMinor: 0,
+            shippingMinor: checkout.totals.shippingMinor,
+            discountMinor: 0,
+            totalMinor: checkout.totals.totalMinor,
+            currency: "RON",
+          },
+        } : {}) },
       };
       adapter.orders.set(documentId, order);
       return order;

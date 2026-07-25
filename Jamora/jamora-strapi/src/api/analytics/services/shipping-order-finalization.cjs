@@ -145,6 +145,10 @@ function exactAllocationUpdate(allocation, row) {
     if (!row || row.documentId !== allocation.batchDocumentId) {
       throw new Error("Stock reservation batch binding is invalid.");
     }
+    if (text(row.productDocumentId) !== text(allocation.productDocumentId) ||
+        text(row.slug) !== text(allocation.slug)) {
+      throw new Error("Stock reservation batch product binding is invalid.");
+    }
     const quantity = Number(row.quantity);
     const reservedQuantity = Number(row.reservedQuantity);
     if (!Number.isSafeInteger(quantity) || quantity < qty) {
@@ -162,7 +166,8 @@ function exactAllocationUpdate(allocation, row) {
       status: nextQuantity === 0 ? "depleted" : row.status,
     };
   }
-  if (!row || row.documentId !== allocation.productDocumentId) {
+  if (!row || row.documentId !== allocation.productDocumentId ||
+      text(row.slug) !== text(allocation.slug)) {
     throw new Error("Stock reservation product binding is invalid.");
   }
   const stock = Number(row.stock);

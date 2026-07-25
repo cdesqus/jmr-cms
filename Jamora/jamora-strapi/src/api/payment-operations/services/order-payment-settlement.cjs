@@ -33,6 +33,26 @@ function assertReservationAllocationBinding(allocations, orderItems) {
   }
 }
 
+function assertReservationProductBinding(allocations, orderItems) {
+  const products = new Map();
+  for (const item of orderItems) {
+    const slug = typeof item?.slug === "string" ? item.slug.trim() : "";
+    const productDocumentId =
+      typeof (item?.productId ?? item?.productDocumentId) === "string"
+        ? (item.productId ?? item.productDocumentId).trim()
+        : "";
+    if (!slug || !productDocumentId) {
+      throw new Error("Payment order reservation product binding is invalid.");
+    }
+    products.set(slug, productDocumentId);
+  }
+  for (const allocation of allocations) {
+    if (products.get(allocation?.slug) !== allocation?.productDocumentId) {
+      throw new Error("Payment order reservation product binding is invalid.");
+    }
+  }
+}
+
 function nextPromotionUsage(promotion) {
   const usageCount = Number(promotion?.usageCount ?? 0);
   const usageLimit = Number(promotion?.usageLimit ?? 0);
@@ -66,12 +86,15 @@ async function settleOrdinaryOrder(adapter, payment) {
     throw new Error("Payment order inventory binding is missing.");
   }
 
-  await adapter.consumeReservation(
+  const allocations = await adapter.consumeReservation(
     order.reservationToken,
     order.orderNumber,
     order.items,
   );
-  await adapter.decrementProductStock(order.items, order.orderNumber);
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    throw new Error("Payment order reservation allocation is invalid.");
+  }
+  await adapter.decrementProductStock(allocations, order.orderNumber);
   if (order.promotionCode) {
     await adapter.incrementPromotionUse(order.promotionCode);
   }
@@ -96,6 +119,7 @@ async function settleOrdinaryOrder(adapter, payment) {
 
 module.exports = {
   assertReservationAllocationBinding,
+  assertReservationProductBinding,
   nextPromotionUsage,
   settleOrdinaryOrder,
 };

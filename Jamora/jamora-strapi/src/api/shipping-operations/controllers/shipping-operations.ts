@@ -226,7 +226,10 @@ function safeQuote(quote: any) {
     service: quote.service,
     amountMinor: quote.amountMinor,
     currency: quote.currency,
-    estimate: quote.estimate,
+    estimate: {
+      minimumDays: quote.estimate?.minimumDays,
+      maximumDays: quote.estimate?.maximumDays,
+    },
     quotedAt: quote.quotedAt,
     expiresAt: quote.expiresAt,
   };
