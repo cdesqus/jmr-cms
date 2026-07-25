@@ -10,4 +10,8 @@ export function phase1MockOrderAllowed(
   env: NodeJS.ProcessEnv,
   pendingPayment: boolean,
 ): boolean;
+export function authoritativeShippingCheckoutAllowed(
+  env: NodeJS.ProcessEnv,
+  pendingPayment: boolean,
+): boolean;
 export function pendingPaymentReservationToken(value: unknown): string;

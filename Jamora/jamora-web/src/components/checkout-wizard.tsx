@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useReducer, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import {
   AddressAssistStep,
   AddressWarnings,
@@ -9,9 +15,12 @@ import { DeliveryStep } from "@/components/delivery-step";
 import { PaymentMethodSelector } from "@/components/payment-method-selector";
 import {
   CHECKOUT_STEPS,
+  canRetainCheckoutQuote,
+  checkoutInputDigest,
   checkoutPaymentCurrency,
   checkoutWizardReducer,
   initialCheckoutWizardState,
+  shouldAssessCheckoutAddress,
   type CheckoutMode,
   type CheckoutStep,
   type ShippingQuote,
@@ -22,7 +31,11 @@ import {
   type StructuredAddress,
 } from "@/lib/commerce/address.cjs";
 import type { PaymentMethod } from "@/lib/payment-customer-policy.cjs";
-import { assessRomanianAddress, quoteShipping } from "@/lib/shipping-api";
+import {
+  assessRomanianAddress,
+  quoteShipping,
+  ShippingHttpError,
+} from "@/lib/shipping-api";
 
 export type CheckoutWizardSubmission = {
   contact: { name: string; email: string };
@@ -86,6 +99,13 @@ export function CheckoutWizard({
   const [quoteError, setQuoteError] = useState("");
   const [loadingQuotes, setLoadingQuotes] = useState(false);
   const [navigationError, setNavigationError] = useState("");
+  const [busyOperation, setBusyOperation] = useState("");
+  const operationRef = useRef<Promise<void> | undefined>(undefined);
+  const capabilityRef = useRef<
+    { token: string; expiresAt: string } | undefined
+  >(undefined);
+  const selectedDigestRef = useRef("");
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const step = state.step as CheckoutStep;
   const contact = state.contact as { name: string; email: string };
   const address = normaliseRomanianAddress(state.address);
@@ -93,15 +113,109 @@ export function CheckoutWizard({
   const selectedQuote = state.selectedQuote as ShippingQuote | undefined;
   const paymentMethod = state.paymentMethod as PaymentMethod;
   const reservationCapability = state.reservationCapability as string | undefined;
+  const reservationCapabilityExpiresAt =
+    state.reservationCapabilityExpiresAt as string | undefined;
   const paymentCurrency = checkoutPaymentCurrency(mode, shippingEnabled);
+  const busy = checkingOut || Boolean(busyOperation);
 
   const setPaymentMethod = useCallback((value: PaymentMethod) => {
     dispatch({ type: "payment", value });
   }, []);
 
-  async function ensureGuestCapability() {
+  useEffect(() => {
+    stepHeadingRef.current?.focus();
+  }, [step]);
+
+  useEffect(() => {
+    if (!selectedQuote) return;
+    const expiries = [new Date(selectedQuote.expiresAt).getTime()];
+    if (!authenticated && reservationCapabilityExpiresAt) {
+      expiries.push(new Date(reservationCapabilityExpiresAt).getTime());
+    }
+    const deadline = Math.min(...expiries);
+    if (!Number.isFinite(deadline)) return;
+    const clearExpired = () => {
+      dispatch({ type: "quote", value: undefined });
+      selectedDigestRef.current = "";
+      setQuotes([]);
+      setQuoteError("Delivery quote expired. Request a new quote.");
+      onQuoteChange(undefined);
+      if (
+        !authenticated &&
+        reservationCapabilityExpiresAt &&
+        new Date(reservationCapabilityExpiresAt).getTime() <= Date.now()
+      ) {
+        capabilityRef.current = undefined;
+        dispatch({ type: "capability", value: undefined });
+      }
+      if (step === "payment" || step === "review") {
+        dispatch({ type: "go", step: "delivery" });
+      }
+    };
+    const delay = deadline - Date.now();
+    if (delay <= 0) {
+      clearExpired();
+      return;
+    }
+    const timer = setTimeout(clearExpired, Math.min(delay, 2_147_000_000));
+    (timer as unknown as { unref?: () => void }).unref?.();
+    return () => clearTimeout(timer);
+  }, [
+    authenticated,
+    onQuoteChange,
+    reservationCapabilityExpiresAt,
+    selectedQuote,
+    step,
+  ]);
+
+  function clearSelectedQuote(clearAvailableQuotes = true) {
+    dispatch({ type: "quote", value: undefined });
+    selectedDigestRef.current = "";
+    if (clearAvailableQuotes) setQuotes([]);
+    onQuoteChange(undefined);
+  }
+
+  function clearGuestAuthority() {
+    capabilityRef.current = undefined;
+    dispatch({ type: "capability", value: undefined });
+    clearSelectedQuote();
+  }
+
+  function runSingleFlight(
+    operation: string,
+    action: () => Promise<void>,
+  ) {
+    if (operationRef.current) return operationRef.current;
+    setBusyOperation(operation);
+    const pending = action()
+      .finally(() => {
+        if (operationRef.current === pending) {
+          operationRef.current = undefined;
+          setBusyOperation("");
+        }
+      });
+    operationRef.current = pending;
+    return pending;
+  }
+
+  async function ensureGuestCapability(force = false) {
     if (authenticated) return undefined;
-    if (reservationCapability) return reservationCapability;
+    const current = capabilityRef.current ??
+      (reservationCapability && reservationCapabilityExpiresAt
+        ? {
+            token: reservationCapability,
+            expiresAt: reservationCapabilityExpiresAt,
+          }
+        : undefined);
+    if (
+      !force &&
+      current &&
+      new Date(current.expiresAt).getTime() > Date.now()
+    ) {
+      capabilityRef.current = current;
+      return current.token;
+    }
+    if (current) clearGuestAuthority();
     const response = await fetch("/api/jamora/inventory/reserve", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -113,35 +227,113 @@ export function CheckoutWizard({
     });
     const result = await response.json().catch(() => ({})) as {
       reservationToken?: string;
+      expiresAt?: string;
       error?: string;
     };
-    if (!response.ok || !result.reservationToken) {
+    const expiresAt = new Date(result.expiresAt ?? "");
+    if (
+      !response.ok ||
+      !result.reservationToken ||
+      !Number.isFinite(expiresAt.getTime()) ||
+      expiresAt.getTime() <= Date.now()
+    ) {
       throw new Error(result.error ?? "Stock could not be reserved.");
     }
-    dispatch({ type: "capability", value: result.reservationToken });
+    const capability = {
+      token: result.reservationToken,
+      expiresAt: expiresAt.toISOString(),
+    };
+    capabilityRef.current = capability;
+    dispatch({ type: "capability", value: capability });
     return result.reservationToken;
   }
 
-  async function loadQuotes(nextAddress = address) {
-    if (!shippingEnabled) return;
-    setLoadingQuotes(true);
-    setQuoteError("");
-    setQuotes([]);
-    dispatch({ type: "quote", value: undefined });
-    onQuoteChange(undefined);
+  function recoverableAuthorityError(error: unknown) {
+    return (
+      error instanceof ShippingHttpError && error.status === 401
+    ) || (
+      error instanceof Error && /expired/i.test(error.message)
+    );
+  }
+
+  async function withGuestAuthority<T>(
+    action: (capability?: string) => Promise<T>,
+  ) {
+    let capability = authenticated ? undefined : await ensureGuestCapability();
     try {
-      const capability = authenticated
-        ? undefined
-        : reservationCapability || await ensureGuestCapability();
-      const next = await quoteShipping({
+      return await action(capability);
+    } catch (error) {
+      if (authenticated || !recoverableAuthorityError(error)) throw error;
+      clearGuestAuthority();
+      capability = await ensureGuestCapability(true);
+      return action(capability);
+    }
+  }
+
+  async function assessAndQuoteShipping(
+    nextAddress = address,
+    retainExisting = true,
+  ) {
+    const run = async (capability?: string) => {
+      const assessment = await assessRomanianAddress(nextAddress, capability);
+      const inputDigest = checkoutInputDigest(assessment.address, items);
+      if (
+        assessment.errors.length ||
+        (retainExisting && canRetainCheckoutQuote({
+          selectedQuote,
+          selectedDigest: selectedDigestRef.current,
+          nextDigest: inputDigest,
+          capabilityExpiresAt: authenticated
+            ? undefined
+            : capabilityRef.current?.expiresAt ??
+              reservationCapabilityExpiresAt,
+        }))
+      ) {
+        return { assessment, inputDigest, quotes: undefined };
+      }
+      const nextQuotes = await quoteShipping({
         subjectType: mode === "member" ? "membership_checkout" : "order",
-        address: nextAddress,
+        address: assessment.address,
         items,
         reservationCapability: capability,
       });
-      setQuotes(next);
+      return { assessment, inputDigest, quotes: nextQuotes };
+    };
+    let capability = authenticated ? undefined : await ensureGuestCapability();
+    try {
+      return await run(capability);
+    } catch (error) {
+      if (authenticated || !recoverableAuthorityError(error)) throw error;
+      clearGuestAuthority();
+      capability = await ensureGuestCapability(true);
+      return run(capability);
+    }
+  }
+
+  async function reassessAndLoadQuotes(nextAddress = address) {
+    setLoadingQuotes(true);
+    setQuoteError("");
+    try {
+      const normalized = normaliseRomanianAddress(nextAddress);
+      const result = await assessAndQuoteShipping(normalized, false);
+      const { assessment } = result;
+      setAddressErrors(assessment.errors);
+      dispatch({ type: "warnings", value: assessment.warnings });
+      dispatch({ type: "address", value: assessment.address });
+      if (assessment.errors.length) {
+        setQuoteError("Complete the required address fields before requesting delivery.");
+        dispatch({ type: "go", step: "address" });
+        return;
+      }
+      clearSelectedQuote();
+      setQuotes(result.quotes ?? []);
     } catch (caught) {
-      setQuoteError(caught instanceof Error ? caught.message : "Delivery quotes are unavailable.");
+      clearSelectedQuote();
+      setQuoteError(
+        caught instanceof Error
+          ? caught.message
+          : "Delivery quotes are unavailable.",
+      );
     } finally {
       setLoadingQuotes(false);
     }
@@ -168,16 +360,70 @@ export function CheckoutWizard({
       const normalized = normaliseRomanianAddress(address);
       let errors = validateRomanianAddress(normalized);
       let warnings: string[] = [];
-      if (!errors.length && addressAssistEnabled) {
+      if (errors.length) {
+        setAddressErrors(errors);
+        dispatch({ type: "warnings", value: [] });
+        setNavigationError("Complete the required address fields before continuing.");
+        return;
+      }
+      if (shippingEnabled) {
+        setLoadingQuotes(true);
+        setQuoteError("");
         try {
-          const assessment = await assessRomanianAddress(
-            normalized,
-            authenticated ? undefined : reservationCapability,
+          const result = await assessAndQuoteShipping(normalized);
+          errors = result.assessment.errors;
+          warnings = result.assessment.warnings;
+          const assessedAddress = result.assessment.address;
+          dispatch({ type: "address", value: assessedAddress });
+          setAddressErrors(errors);
+          dispatch({ type: "warnings", value: warnings });
+          if (errors.length) {
+            setNavigationError("Complete the required address fields before continuing.");
+            return;
+          }
+          if (result.quotes) {
+            setQuotes(result.quotes);
+            if (!result.quotes.some(
+              (candidate) => candidate.quoteId === selectedQuote?.quoteId,
+            )) {
+              clearSelectedQuote(false);
+            } else {
+              selectedDigestRef.current = result.inputDigest;
+            }
+          }
+          dispatch({ type: "next" });
+        } catch (caught) {
+          clearSelectedQuote();
+          setNavigationError(
+            caught instanceof Error
+              ? caught.message
+              : "Address verification is unavailable.",
+          );
+        } finally {
+          setLoadingQuotes(false);
+        }
+        return;
+      }
+      if (shouldAssessCheckoutAddress({
+        addressAssistEnabled,
+        shippingEnabled,
+      })) {
+        try {
+          const assessment = await withGuestAuthority((capability) =>
+            assessRomanianAddress(normalized, capability),
           );
           errors = assessment.errors;
           warnings = assessment.warnings;
           dispatch({ type: "address", value: assessment.address });
-        } catch {
+        } catch (caught) {
+          if (shippingEnabled) {
+            setNavigationError(
+              caught instanceof Error
+                ? caught.message
+                : "Address verification is unavailable.",
+            );
+            return;
+          }
           warnings = ["Address verification is unavailable. Review the manual fields carefully."];
         }
       }
@@ -188,11 +434,19 @@ export function CheckoutWizard({
         return;
       }
       dispatch({ type: "next" });
-      await loadQuotes(normalized);
       return;
     }
     if (step === "delivery") {
-      if (shippingEnabled && !selectedQuote) {
+      if (shippingEnabled && !canRetainCheckoutQuote({
+        selectedQuote,
+        selectedDigest: selectedDigestRef.current,
+        nextDigest: checkoutInputDigest(address, items),
+        capabilityExpiresAt: authenticated
+          ? undefined
+          : capabilityRef.current?.expiresAt ??
+            reservationCapabilityExpiresAt,
+      })) {
+        clearSelectedQuote();
         setNavigationError("Select a delivery quote before continuing.");
         return;
       }
@@ -224,7 +478,26 @@ export function CheckoutWizard({
         </ol>
       </nav>
 
+      <p
+        role="status"
+        aria-label="Checkout step"
+        aria-live="polite"
+        className="sr-only"
+      >
+        {`${step.charAt(0).toUpperCase()}${step.slice(1)} step, ${
+          CHECKOUT_STEPS.indexOf(step) + 1
+        } of ${CHECKOUT_STEPS.length}.`}
+      </p>
+
       <div className="mt-6">
+        <h4
+          key={step}
+          ref={stepHeadingRef}
+          tabIndex={-1}
+          className="mb-4 font-display text-base text-ink"
+        >
+          {step.charAt(0).toUpperCase()}{step.slice(1)}
+        </h4>
         {step === "contact" ? (
           <div className="space-y-3">
             {mode === "member" ? (
@@ -245,6 +518,7 @@ export function CheckoutWizard({
               <input
                 value={contact.name}
                 readOnly={authenticated}
+                disabled={Boolean(busyOperation)}
                 onChange={(event) => {
                   const nextContact = { ...contact, name: event.target.value };
                   dispatch({
@@ -252,7 +526,7 @@ export function CheckoutWizard({
                     value: nextContact,
                   });
                   onContactChange?.(nextContact);
-                  dispatch({ type: "capability", value: "" });
+                  clearGuestAuthority();
                 }}
                 autoComplete="name"
                 className="mt-1 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm normal-case text-ink outline-none focus:border-terracotta read-only:bg-sand/50"
@@ -263,6 +537,7 @@ export function CheckoutWizard({
               <input
                 value={contact.email}
                 readOnly={authenticated}
+                disabled={Boolean(busyOperation)}
                 onChange={(event) => {
                   const nextContact = { ...contact, email: event.target.value };
                   dispatch({
@@ -270,7 +545,7 @@ export function CheckoutWizard({
                     value: nextContact,
                   });
                   onContactChange?.(nextContact);
-                  dispatch({ type: "capability", value: "" });
+                  clearGuestAuthority();
                 }}
                 type="email"
                 autoComplete="email"
@@ -285,14 +560,24 @@ export function CheckoutWizard({
             value={address}
             onChange={(value) => {
               dispatch({ type: "address", value });
-              dispatch({ type: "quote", value: undefined });
-              onQuoteChange(undefined);
+              if (!canRetainCheckoutQuote({
+                selectedQuote,
+                selectedDigest: selectedDigestRef.current,
+                nextDigest: checkoutInputDigest(value, items),
+                capabilityExpiresAt: authenticated
+                  ? undefined
+                  : capabilityRef.current?.expiresAt ??
+                    reservationCapabilityExpiresAt,
+              })) {
+                clearSelectedQuote();
+              }
               setAddressErrors([]);
               dispatch({ type: "warnings", value: [] });
             }}
             errors={addressErrors}
             warnings={addressWarnings}
             enabled={addressAssistEnabled}
+            disabled={busy}
             reservationCapability={authenticated ? undefined : reservationCapability}
           />
         ) : null}
@@ -306,28 +591,32 @@ export function CheckoutWizard({
               selected={selectedQuote}
               loading={loadingQuotes}
               error={quoteError}
+              disabled={busy}
               fallbackShippingLabel={fallbackShippingLabel}
               onSelect={(quote) => {
                 dispatch({ type: "quote", value: quote });
+                selectedDigestRef.current = checkoutInputDigest(address, items);
                 onQuoteChange(quote);
                 setNavigationError("");
               }}
-              onRetry={() => void loadQuotes()}
+              onRetry={() => {
+                void runSingleFlight("quotes", () => reassessAndLoadQuotes());
+              }}
             />
           </div>
         ) : null}
 
         {step === "payment" ? (
-          mode !== "member" || paymentsEnabled || shippingEnabled ? (
+          paymentsEnabled ? (
             <PaymentMethodSelector
               value={paymentMethod}
               onChange={setPaymentMethod}
               currency={paymentCurrency}
-              disabled={checkingOut}
+              disabled={busy}
             />
           ) : (
             <p className="rounded-lg bg-sand/50 p-3 text-sm text-bark">
-              Payment is not required for this feature-off membership fallback.
+              Payment uses the legacy synchronous checkout while online payment is off.
             </p>
           )
         ) : null}
@@ -363,13 +652,13 @@ export function CheckoutWizard({
               <div>
                 <dt className="font-semibold text-bark">Payment</dt>
                 <dd className="text-ink">
-                  {mode === "member" && !paymentsEnabled && !shippingEnabled
-                    ? "Feature-off membership fallback"
+                  {!paymentsEnabled
+                    ? "Legacy synchronous checkout"
                     : paymentMethod === "ropay" ? "RoPay" : "Manual bank transfer"}
                 </dd>
               </div>
             </dl>
-            {shippingEnabled ? (
+            {shippingEnabled && paymentsEnabled ? (
               <p className="mt-4 rounded-lg bg-sand/50 p-3 text-xs text-bark">
                 The browser does not calculate the final price. The server revalidates the selected quote,
                 creates the pending subject, and returns authoritative payment instructions.
@@ -388,9 +677,9 @@ export function CheckoutWizard({
             type="button"
             onClick={() => {
               setNavigationError("");
-              dispatch({ type: "back" });
+              if (!operationRef.current) dispatch({ type: "back" });
             }}
-            disabled={checkingOut}
+            disabled={busy}
             className="rounded-full border border-clay px-5 py-2.5 text-sm font-semibold text-bark disabled:opacity-60"
           >
             Back
@@ -399,8 +688,17 @@ export function CheckoutWizard({
         {step !== "review" ? (
           <button
             type="button"
-            onClick={() => void next()}
-            disabled={checkingOut || loadingQuotes}
+            onClick={() => {
+              void runSingleFlight(
+                step === "contact"
+                  ? "reservation"
+                  : step === "address"
+                    ? "assessment"
+                    : "navigation",
+                next,
+              );
+            }}
+            disabled={busy || loadingQuotes}
             className="ml-auto rounded-full bg-terracotta px-6 py-2.5 text-sm font-semibold text-cream hover:bg-terracotta-deep disabled:opacity-60"
           >
             Continue
@@ -408,20 +706,25 @@ export function CheckoutWizard({
         ) : (
           <button
             type="button"
-            onClick={() => void onSubmit({
-              contact: {
-                name: contact.name.trim(),
-                email: contact.email.trim(),
-              },
-              address,
-              selectedQuote,
-              paymentMethod,
-              reservationCapability,
-            })}
-            disabled={checkingOut}
+            onClick={() => {
+              void runSingleFlight("checkout", () => onSubmit({
+                contact: {
+                  name: contact.name.trim(),
+                  email: contact.email.trim(),
+                },
+                address,
+                selectedQuote,
+                paymentMethod,
+                reservationCapability: capabilityRef.current?.token ??
+                  reservationCapability,
+              }));
+            }}
+            disabled={busy || (shippingEnabled && !selectedQuote)}
             className="ml-auto rounded-full bg-terracotta px-6 py-2.5 text-sm font-semibold text-cream hover:bg-terracotta-deep disabled:opacity-60"
           >
-            {checkingOut ? "Preparing payment…" : "Place pending order"}
+            {checkingOut
+              ? paymentsEnabled ? "Preparing payment…" : "Placing order…"
+              : paymentsEnabled ? "Place pending order" : "Place order"}
           </button>
         )}
       </div>

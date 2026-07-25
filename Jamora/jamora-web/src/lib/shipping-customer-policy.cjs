@@ -93,8 +93,11 @@ function customerShippingPath(method, path) {
 }
 
 function shippingOperationEnabled(operation, env) {
-  return operation.startsWith("address/")
-    ? env?.ADDRESS_ASSIST_ENABLED === "true"
+  return operation === "address/assess"
+    ? env?.ADDRESS_ASSIST_ENABLED === "true" ||
+      env?.SHIPPING_ENABLED === "true"
+    : operation.startsWith("address/")
+      ? env?.ADDRESS_ASSIST_ENABLED === "true"
     : operation.startsWith("shipping/")
       ? env?.SHIPPING_ENABLED === "true"
       : false;

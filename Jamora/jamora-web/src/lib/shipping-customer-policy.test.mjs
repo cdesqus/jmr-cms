@@ -66,6 +66,14 @@ test("shipping and address BFF features require their exact true flag", () => {
   assert.equal(shippingOperationEnabled("address/suggest", {
     ADDRESS_ASSIST_ENABLED: "TRUE",
   }), false);
+  assert.equal(shippingOperationEnabled("address/suggest", {
+    ADDRESS_ASSIST_ENABLED: "false",
+    SHIPPING_ENABLED: "true",
+  }), false);
+  assert.equal(shippingOperationEnabled("address/assess", {
+    ADDRESS_ASSIST_ENABLED: "false",
+    SHIPPING_ENABLED: "true",
+  }), true);
   assert.equal(shippingOperationEnabled("shipping/quotes", {
     SHIPPING_ENABLED: "true",
   }), true);

@@ -7,6 +7,30 @@ const CHECKOUT_STEPS = Object.freeze([
   "payment",
   "review",
 ]);
+const ADDRESS_DIGEST_FIELDS = Object.freeze([
+  "recipient",
+  "phone",
+  "countryCode",
+  "subdivisionCode",
+  "locality",
+  "postalCode",
+  "street",
+  "building",
+  "unit",
+  "instructions",
+]);
+const ADDRESS_WARNING_MESSAGES = Object.freeze({
+  "postalCode is not recognized": "The postal code could not be verified.",
+  "subdivisionCode is not recognized": "The county could not be verified.",
+  "postalCode does not match subdivisionCode":
+    "The postal code and county do not appear to match.",
+  "locality could not be verified for discounted shipping zone":
+    "The locality could not be verified for this postal zone.",
+  "locality does not match subdivisionCode":
+    "The locality and county do not appear to match.",
+  "locality does not match postalCode":
+    "The locality and postal code do not appear to match.",
+});
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -59,7 +83,19 @@ function checkoutWizardReducer(state, action) {
     case "payment":
       return { ...state, paymentMethod: action.value };
     case "capability":
-      return { ...state, reservationCapability: text(action.value) };
+      return {
+        ...state,
+        reservationCapability: text(
+          typeof action.value === "object"
+            ? action.value?.token
+            : action.value,
+        ),
+        reservationCapabilityExpiresAt: text(
+          typeof action.value === "object"
+            ? action.value?.expiresAt
+            : "",
+        ),
+      };
     default:
       throw new Error("Checkout action is invalid.");
   }
@@ -97,6 +133,75 @@ function checkoutPaymentCurrency(mode, authoritativeShipping) {
     throw new TypeError("Checkout identity mode is invalid.");
   }
   return authoritativeShipping || mode !== "member" ? "RON" : "EUR";
+}
+
+function checkoutCompletionMode(input) {
+  if (!["guest", "customer", "member"].includes(input?.mode)) {
+    throw new TypeError("Checkout identity mode is invalid.");
+  }
+  return input.paymentsEnabled === true ? "payment_pending" : "legacy_sync";
+}
+
+function shouldAssessCheckoutAddress(input) {
+  return input?.addressAssistEnabled === true ||
+    input?.shippingEnabled === true;
+}
+
+function checkoutInputDigest(address, items) {
+  const safeAddress = {};
+  for (const field of ADDRESS_DIGEST_FIELDS) {
+    safeAddress[field] = text(address?.[field]);
+  }
+  const safeItems = (Array.isArray(items) ? items : [])
+    .map((item) => ({ slug: text(item?.slug), qty: item?.qty }))
+    .sort((left, right) =>
+      left.slug.localeCompare(right.slug) || left.qty - right.qty);
+  return JSON.stringify({ address: safeAddress, items: safeItems });
+}
+
+function liveAfter(value, now) {
+  const instant = new Date(value).getTime();
+  return Number.isFinite(instant) && instant > now.getTime();
+}
+
+function canRetainCheckoutQuote(input) {
+  const now = input?.now instanceof Date ? input.now : new Date();
+  return Boolean(
+    input?.selectedQuote &&
+    input.selectedDigest &&
+    input.selectedDigest === input.nextDigest &&
+    liveAfter(input.selectedQuote.expiresAt, now) &&
+    (!input.capabilityExpiresAt ||
+      liveAfter(input.capabilityExpiresAt, now)),
+  );
+}
+
+function createSingleFlight() {
+  let current;
+  return {
+    run(operation) {
+      if (current) return current;
+      let result;
+      try {
+        result = operation();
+      } catch (error) {
+        throw error;
+      }
+      const tracked = Promise.resolve(result).finally(() => {
+        if (current === tracked) current = undefined;
+      });
+      current = tracked;
+      return tracked;
+    },
+    busy() {
+      return Boolean(current);
+    },
+  };
+}
+
+function addressWarningMessage(warning) {
+  const code = text(warning);
+  return ADDRESS_WARNING_MESSAGES[code] ?? code;
 }
 
 function serverShippingSelection(input) {
@@ -159,12 +264,18 @@ function membershipShippingReservationFields(input, quote) {
 
 module.exports = {
   CHECKOUT_STEPS,
+  addressWarningMessage,
   authoritativeShippingCheckoutFields,
+  canRetainCheckoutQuote,
+  checkoutCompletionMode,
   checkoutFeatureMode,
   checkoutIdentity,
+  checkoutInputDigest,
   checkoutPaymentCurrency,
   checkoutWizardReducer,
+  createSingleFlight,
   initialCheckoutWizardState,
   membershipShippingReservationFields,
   serverShippingSelection,
+  shouldAssessCheckoutAddress,
 };

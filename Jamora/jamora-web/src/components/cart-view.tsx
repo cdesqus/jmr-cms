@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createMockOrder,
   saveMockOrder,
@@ -38,6 +38,7 @@ import {
 } from "@/lib/payment-customer-view.cjs";
 import {
   authoritativeShippingCheckoutFields,
+  checkoutCompletionMode,
   membershipShippingReservationFields,
   type ShippingQuote,
 } from "@/lib/checkout-wizard-policy.cjs";
@@ -93,6 +94,20 @@ export function CartView({
   const [payment, setPayment] = useState<CustomerPaymentSnapshot>();
   const [paymentCapability, setPaymentCapability] = useState("");
   const checkoutAttemptRef = useRef<CheckoutAttempt | null>(null);
+  const activeMembershipMode = membershipMode && !!membership;
+  const cartSignature = items
+    .map((item) => `${item.product.slug}:${item.qty}`)
+    .sort()
+    .join("|");
+  const quoteScope = `${activeMembershipMode ? "member" : "ordinary"}:${cartSignature}`;
+  const previousQuoteScopeRef = useRef(quoteScope);
+
+  useEffect(() => {
+    if (previousQuoteScopeRef.current === quoteScope) return;
+    previousQuoteScopeRef.current = quoteScope;
+    setSelectedShippingQuote(undefined);
+    checkoutAttemptRef.current = null;
+  }, [quoteScope]);
 
   if (items.length === 0) {
     if (payment) {
@@ -127,9 +142,7 @@ export function CartView({
     : [];
   const membershipCreditsRequired = eligibleMembershipItems.reduce((total, item) => total + item.qty, 0);
   const membershipCoveredMinor = eligibleMembershipItems.reduce((total, item) => total + item.lineTotalCents, 0);
-  const activeMembershipMode = membershipMode && !!membership;
   const remainingForFree = 5000 - subtotalCents;
-  const cartSignature = items.map((item) => `${item.product.slug}:${item.qty}`).sort().join("|");
   const normalizedCouponCode = couponCode.trim().toUpperCase();
   const activeCoupon = appliedCoupon?.signature === cartSignature && appliedCoupon.code === normalizedCouponCode
     ? appliedCoupon
@@ -290,6 +303,13 @@ export function CartView({
         ? reservation.checkoutReference
         : undefined;
 
+      const completionMode = checkoutCompletionMode({
+        mode: activeMembershipMode
+          ? "member"
+          : signedCustomer ? "customer" : "guest",
+        paymentsEnabled,
+        shippingEnabled,
+      });
       let order = attempt.order;
       if (!order) {
         order = createMockOrder({
@@ -319,16 +339,40 @@ export function CartView({
               idempotencyKey: `${membershipAttemptKey}:finalize`,
             },
           });
-        } else {
+        } else if (completionMode === "payment_pending") {
           Object.assign(order, pendingCheckoutOrderState(order.id, order.createdAt));
         }
         attempt.order = order;
       }
-      const featureOffMembershipFallback =
-        activeMembershipMode && !paymentsEnabled && !shippingEnabled;
-      if (featureOffMembershipFallback) {
-        const synced = await syncMockOrderToStrapi(order);
-        if (!synced.ok) throw new Error(synced.error);
+      if (completionMode === "legacy_sync") {
+        if (activeMembershipMode) {
+          const finalizeResponse = await fetch(
+            "/api/jamora/membership/checkout-finalize",
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                checkoutReference: reservation.checkoutReference,
+                idempotencyKey: `${membershipAttemptKey}:finalize`,
+                customerName: details.contact.name,
+                shippingAddressText: formatRomanianAddress(
+                  normalizedShippingAddress,
+                ),
+                shippingAddress: normalizedShippingAddress,
+                estimatedDelivery: order.estimatedDelivery,
+              }),
+            },
+          );
+          if (!finalizeResponse.ok) {
+            const result = await finalizeResponse.json().catch(() => ({}));
+            throw new Error(
+              result.error ?? "Membership checkout could not be completed.",
+            );
+          }
+        } else {
+          const synced = await syncMockOrderToStrapi(order);
+          if (!synced.ok) throw new Error(synced.error);
+        }
       } else {
         if (!attempt.preparedOrderDocumentId) {
           const orderResponse = await fetch(
@@ -377,7 +421,7 @@ export function CartView({
       saveMockOrder(order);
       checkoutAttemptRef.current = null;
       clear();
-      if (featureOffMembershipFallback) {
+      if (completionMode === "legacy_sync") {
         router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
       }
     } catch (caught) {
@@ -580,7 +624,9 @@ export function CartView({
           onSubmit={handleCheckout}
         />
         <p className="mt-2 text-center text-xs text-stone">
-          The order remains pending until the server verifies payment.
+          {paymentsEnabled
+            ? "The order remains pending until the server verifies payment."
+            : "The order is completed synchronously while online payment is off."}
         </p>
         <p className="mt-3 text-center text-[0.7rem] text-stone">
           Prices include VAT. A compliant VAT invoice is issued with every order.

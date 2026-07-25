@@ -10,6 +10,7 @@ import {
   phase1MockPaidOrderFields,
 } from "../services/payment-order.cjs";
 import {
+  authoritativeShippingCheckoutAllowed,
   pendingCustomerSessionInput,
   pendingPaymentOrderBoundary,
   pendingPaymentReservationToken,
@@ -695,7 +696,11 @@ const controller = {
     }
 
     const structuredCheckoutEnabled = process.env.STRUCTURED_CHECKOUT_ENABLED === "true";
-    const authoritativePricing = pendingPayment || structuredCheckoutEnabled;
+    const shippingEnabled = process.env.SHIPPING_ENABLED === "true";
+    const authoritativeStructuredCheckout =
+      structuredCheckoutEnabled || shippingEnabled;
+    const authoritativePricing =
+      pendingPayment || authoritativeStructuredCheckout;
     let products: any[] = [];
     let pricing;
     if (authoritativePricing) {
@@ -716,7 +721,7 @@ const controller = {
         products,
         discountCents: 0,
         pendingPayment,
-        structuredCheckoutEnabled,
+        structuredCheckoutEnabled: authoritativeStructuredCheckout,
       });
     } catch (error) {
       ctx.status = 400;
@@ -743,7 +748,7 @@ const controller = {
         products,
         discountCents: promotionResult?.discountCents ?? 0,
         pendingPayment,
-        structuredCheckoutEnabled,
+        structuredCheckoutEnabled: authoritativeStructuredCheckout,
       });
     } catch (error) {
       ctx.status = 400;
@@ -751,7 +756,6 @@ const controller = {
       return;
     }
     let addressResult;
-    const shippingEnabled = process.env.SHIPPING_ENABLED === "true";
     if (structuredCheckoutEnabled || shippingEnabled) {
       try {
         addressResult = normalizeShippingAddressPayload(
@@ -775,9 +779,9 @@ const controller = {
     let shippingSnapshot;
     let priceSnapshot;
     if (shippingEnabled) {
-      if (!pendingPayment) {
+      if (!authoritativeShippingCheckoutAllowed(process.env, pendingPayment)) {
         ctx.status = 409;
-        ctx.body = { error: "Authoritative shipping requires pending payment checkout." };
+        ctx.body = { error: "Authoritative shipping checkout is unavailable." };
         return;
       }
       try {
@@ -839,7 +843,7 @@ const controller = {
       reservedAllocations = Array.isArray(reservations[0].allocations)
         ? reservations[0].allocations
         : [];
-      if (pendingPayment) {
+      if (pendingPayment || shippingEnabled) {
         try {
           assertReservationAllocationBinding(reservedAllocations, items);
         } catch {

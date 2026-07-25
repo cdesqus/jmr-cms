@@ -6,6 +6,7 @@ export type StructuredAddressFormProps = {
   value: StructuredAddress;
   onChange(value: StructuredAddress): void;
   errors: string[];
+  disabled?: boolean;
 };
 
 const fields: {
@@ -28,12 +29,13 @@ export function StructuredAddressForm({
   value,
   onChange,
   errors,
+  disabled = false,
 }: StructuredAddressFormProps) {
   const update = (key: keyof StructuredAddress, nextValue: string) =>
     onChange({ ...value, [key]: nextValue });
 
   return (
-    <fieldset className="space-y-3">
+    <fieldset disabled={disabled} className="space-y-3">
       <legend className="text-xs font-semibold uppercase text-stone">Shipping address</legend>
       <label className="block text-xs font-semibold uppercase text-stone">
         Country

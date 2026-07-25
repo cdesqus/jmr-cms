@@ -36,6 +36,13 @@ function shippingEnabled(ctx: any) {
     : fail(ctx, 404, "Not found.");
 }
 
+function assessmentEnabled(ctx: any) {
+  return process.env.ADDRESS_ASSIST_ENABLED === "true" ||
+    process.env.SHIPPING_ENABLED === "true"
+    ? true
+    : fail(ctx, 404, "Not found.");
+}
+
 function isJsonRequest(ctx: any) {
   if (ctx.request?.is?.("application/json")) return true;
   return fail(ctx, 415, "JSON request required.");
@@ -226,6 +233,11 @@ function guarded(ctx: any) {
   return requestBody(ctx);
 }
 
+function assessmentGuarded(ctx: any) {
+  if (!assessmentEnabled(ctx) || !isJsonRequest(ctx)) return null;
+  return requestBody(ctx);
+}
+
 function shippingGuarded(ctx: any) {
   if (!shippingEnabled(ctx) || !isJsonRequest(ctx)) return null;
   return requestBody(ctx);
@@ -262,7 +274,7 @@ export default {
   },
 
   async assessAddress(ctx: any) {
-    const body = guarded(ctx);
+    const body = assessmentGuarded(ctx);
     const identity = body ? await checkoutIdentity(ctx, body) : null;
     if (!body || !identity || !withinRateLimit(ctx, identity)) return;
     if (!body.address || Array.isArray(body.address) || typeof body.address !== "object") {

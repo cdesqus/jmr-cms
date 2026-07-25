@@ -21,6 +21,7 @@ export type CheckoutWizardState = {
   selectedQuote?: ShippingQuote;
   paymentMethod: "bank_transfer" | "ropay";
   reservationCapability?: string;
+  reservationCapabilityExpiresAt?: string;
 };
 export type CheckoutWizardAction =
   | { type: "next" | "back" }
@@ -29,7 +30,10 @@ export type CheckoutWizardAction =
   | { type: "warnings"; value: string[] }
   | { type: "quote"; value?: ShippingQuote }
   | { type: "payment"; value: "bank_transfer" | "ropay" }
-  | { type: "capability"; value: string };
+  | {
+      type: "capability";
+      value?: string | { token: string; expiresAt: string };
+    };
 export function initialCheckoutWizardState(
   mode?: CheckoutMode,
   initial?: Record<string, unknown>,
@@ -55,6 +59,31 @@ export function checkoutPaymentCurrency(
   mode: CheckoutMode,
   authoritativeShipping: boolean,
 ): "RON" | "EUR";
+export function checkoutCompletionMode(input: {
+  mode: CheckoutMode;
+  paymentsEnabled: boolean;
+  shippingEnabled: boolean;
+}): "legacy_sync" | "payment_pending";
+export function shouldAssessCheckoutAddress(input: {
+  addressAssistEnabled: boolean;
+  shippingEnabled: boolean;
+}): boolean;
+export function checkoutInputDigest(
+  address: Partial<Record<string, string>>,
+  items: { slug: string; qty: number }[],
+): string;
+export function canRetainCheckoutQuote(input: {
+  selectedQuote?: Pick<ShippingQuote, "expiresAt">;
+  selectedDigest?: string;
+  nextDigest: string;
+  capabilityExpiresAt?: string;
+  now?: Date;
+}): boolean;
+export function createSingleFlight<T = unknown>(): {
+  run(operation: () => Promise<T> | T): Promise<T>;
+  busy(): boolean;
+};
+export function addressWarningMessage(warning: string): string;
 export function serverShippingSelection(input: unknown): ShippingQuote;
 export function authoritativeShippingCheckoutFields(
   quote: ShippingQuote,

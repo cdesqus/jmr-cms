@@ -3,7 +3,7 @@ export function membershipCustomerBoundary(
   env: Record<string, string | undefined>,
   customer: unknown,
 ): { status: 401 | 404; error: string } | null;
-export function membershipOperationBody(operation: string, input: unknown): Record<string, string>;
+export function membershipOperationBody(operation: string, input: unknown): Record<string, unknown>;
 export function trustedMembershipHeaders(
   input: HeadersInit | undefined,
   secret: string,

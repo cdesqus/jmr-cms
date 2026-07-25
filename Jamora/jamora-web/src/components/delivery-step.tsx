@@ -15,6 +15,7 @@ export function DeliveryStep({
   selected,
   loading,
   error,
+  disabled = false,
   fallbackShippingLabel,
   onSelect,
   onRetry,
@@ -24,6 +25,7 @@ export function DeliveryStep({
   selected?: ShippingQuote;
   loading: boolean;
   error: string;
+  disabled?: boolean;
   fallbackShippingLabel: string;
   onSelect(quote: ShippingQuote): void;
   onRetry(): void;
@@ -39,7 +41,7 @@ export function DeliveryStep({
     );
   }
   return (
-    <fieldset disabled={loading}>
+    <fieldset disabled={loading || disabled}>
       <legend className="font-semibold text-ink">Choose a server quote</legend>
       <p className="mt-1 text-sm text-stone">
         Prices and estimates below come from the server and are revalidated when the order is prepared.

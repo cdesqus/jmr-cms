@@ -43,6 +43,10 @@ test("allows only the customer membership route and method allowlist", () => {
     customerMembershipPath("POST", ["checkout-order"]),
     "/api/jamora/membership/checkout/order",
   );
+  assert.equal(
+    customerMembershipPath("POST", ["checkout-finalize"]),
+    "/api/jamora/membership/checkout/finalize",
+  );
   assert.throws(() => customerMembershipPath("POST", ["me"]), /not found/i);
   assert.throws(() => customerMembershipPath("GET", ["reserve"]), /not found/i);
   assert.throws(() => customerMembershipPath("GET", ["..", "admin"]), /not found/i);
@@ -80,6 +84,42 @@ test("strips browser identity and validates purchase and renewal bodies", () => 
   }), {
     checkoutReference: "24b83a32-68b1-4db2-a6ad-2a3740053282",
     idempotencyKey: "order-1",
+  });
+  assert.deepEqual(membershipOperationBody("checkout-finalize", {
+    checkoutReference: "24b83a32-68b1-4db2-a6ad-2a3740053282",
+    idempotencyKey: "finalize-1",
+    customerName: " Ana ",
+    shippingAddressText: " safe text ",
+    shippingAddress: {
+      recipient: "Ana",
+      countryCode: "RO",
+      subdivisionCode: "B",
+      locality: "Bucuresti",
+      postalCode: "010101",
+      street: "Calea Victoriei",
+      building: "10",
+      providerId: "secret",
+    },
+    estimatedDelivery: " 2–4 business days ",
+    customerDocumentId: "forged",
+  }), {
+    checkoutReference: "24b83a32-68b1-4db2-a6ad-2a3740053282",
+    idempotencyKey: "finalize-1",
+    customerName: "Ana",
+    shippingAddressText: "safe text",
+    shippingAddress: {
+      recipient: "Ana",
+      phone: "",
+      countryCode: "RO",
+      subdivisionCode: "B",
+      locality: "Bucuresti",
+      postalCode: "010101",
+      street: "Calea Victoriei",
+      building: "10",
+      unit: "",
+      instructions: "",
+    },
+    estimatedDelivery: "2–4 business days",
   });
 });
 

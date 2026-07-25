@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   phase1MockOrderAllowed,
+  authoritativeShippingCheckoutAllowed,
   pendingPaymentReservationToken,
   pendingCustomerSessionInput,
   pendingPaymentOrderBoundary,
@@ -48,6 +49,25 @@ test("Phase 2 cannot invoke the Phase 1 paid-order adapter", () => {
   assert.equal(phase1MockOrderAllowed({ PAYMENTS_ENABLED: "false" }, false), true);
   assert.equal(phase1MockOrderAllowed({ PAYMENTS_ENABLED: "true" }, true), true);
   assert.equal(phase1MockOrderAllowed({ PAYMENTS_ENABLED: "true" }, false), false);
+});
+
+test("authoritative shipping follows the enabled checkout transport", () => {
+  assert.equal(authoritativeShippingCheckoutAllowed({
+    SHIPPING_ENABLED: "true",
+    PAYMENTS_ENABLED: "false",
+  }, false), true);
+  assert.equal(authoritativeShippingCheckoutAllowed({
+    SHIPPING_ENABLED: "true",
+    PAYMENTS_ENABLED: "true",
+  }, true), true);
+  assert.equal(authoritativeShippingCheckoutAllowed({
+    SHIPPING_ENABLED: "true",
+    PAYMENTS_ENABLED: "true",
+  }, false), false);
+  assert.equal(authoritativeShippingCheckoutAllowed({
+    SHIPPING_ENABLED: "false",
+    PAYMENTS_ENABLED: "false",
+  }, false), false);
 });
 
 test("pending payment order requires an opaque stock reservation", () => {

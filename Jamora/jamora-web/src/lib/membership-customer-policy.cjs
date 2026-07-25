@@ -7,6 +7,7 @@ const ROUTES = new Map([
   ["POST:renew", "/api/jamora/membership/renew"],
   ["POST:checkout-release", "/api/jamora/membership/checkout/release"],
   ["POST:checkout-order", "/api/jamora/membership/checkout/order"],
+  ["POST:checkout-finalize", "/api/jamora/membership/checkout/finalize"],
 ]);
 
 function text(value) {
@@ -41,12 +42,38 @@ function membershipOperationBody(operation, input) {
   if (!idempotencyKey || idempotencyKey.length > 200) {
     throw new Error("Invalid request.");
   }
-  if (operation === "checkout-release" || operation === "checkout-order") {
+  if (
+    operation === "checkout-release" ||
+    operation === "checkout-order" ||
+    operation === "checkout-finalize"
+  ) {
     const checkoutReference = text(input.checkoutReference);
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(checkoutReference)) {
       throw new Error("Invalid request.");
     }
-    return { checkoutReference, idempotencyKey };
+    if (operation !== "checkout-finalize") {
+      return { checkoutReference, idempotencyKey };
+    }
+    const source = input.shippingAddress &&
+      typeof input.shippingAddress === "object" &&
+      !Array.isArray(input.shippingAddress)
+      ? input.shippingAddress
+      : {};
+    const shippingAddress = {};
+    for (const field of [
+      "recipient", "phone", "countryCode", "subdivisionCode", "locality",
+      "postalCode", "street", "building", "unit", "instructions",
+    ]) {
+      shippingAddress[field] = text(source[field]);
+    }
+    return {
+      checkoutReference,
+      idempotencyKey,
+      customerName: text(input.customerName),
+      shippingAddressText: text(input.shippingAddressText),
+      shippingAddress,
+      estimatedDelivery: text(input.estimatedDelivery),
+    };
   }
   const planDocumentId = text(input.planDocumentId);
   if (!planDocumentId) throw new Error("Invalid request.");

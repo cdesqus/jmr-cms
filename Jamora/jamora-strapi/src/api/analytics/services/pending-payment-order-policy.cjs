@@ -39,6 +39,11 @@ function phase1MockOrderAllowed(env, pendingPayment) {
   return pendingPayment === true || env.PAYMENTS_ENABLED !== "true";
 }
 
+function authoritativeShippingCheckoutAllowed(env, pendingPayment) {
+  return env.SHIPPING_ENABLED === "true" &&
+    (pendingPayment === true || env.PAYMENTS_ENABLED !== "true");
+}
+
 function pendingPaymentReservationToken(value) {
   const token = typeof value === "string" ? value.trim() : "";
   if (!token || token.length > 500) {
@@ -48,6 +53,7 @@ function pendingPaymentReservationToken(value) {
 }
 
 module.exports = {
+  authoritativeShippingCheckoutAllowed,
   pendingCustomerSessionInput,
   pendingPaymentOrderBoundary,
   pendingPaymentReservationToken,

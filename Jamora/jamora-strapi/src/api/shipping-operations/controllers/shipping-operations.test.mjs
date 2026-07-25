@@ -86,7 +86,10 @@ test("suggestion route requires JSON, a trusted storefront, and a checkout capab
   const originalStrapi = globalThis.strapi;
   globalThis.strapi = { db: reservationDatabase(["guest-capability"]) };
   try {
-    await withEnvironment({ ADDRESS_ASSIST_ENABLED: "true", JAMORA_STOREFRONT_API_SECRET: "secret" }, async () => {
+    await withEnvironment({
+      ADDRESS_ASSIST_ENABLED: "true",
+      JAMORA_STOREFRONT_API_SECRET: "secret",
+    }, async () => {
       const invalidJson = context({ contentType: "text/plain" });
       await controller.suggestAddress(invalidJson);
       assert.equal(invalidJson.status, 415);
@@ -216,7 +219,11 @@ test("assess route returns manual DTO plus separate required errors and warnings
   const originalStrapi = globalThis.strapi;
   globalThis.strapi = { db: reservationDatabase(["guest-capability"]) };
   try {
-    await withEnvironment({ ADDRESS_ASSIST_ENABLED: "true", JAMORA_STOREFRONT_API_SECRET: "secret" }, async () => {
+    await withEnvironment({
+      ADDRESS_ASSIST_ENABLED: "false",
+      SHIPPING_ENABLED: "true",
+      JAMORA_STOREFRONT_API_SECRET: "secret",
+    }, async () => {
       const ctx = context({
         body: { address: {
           recipient: "Ana", countryCode: "RO", subdivisionCode: "CJ", locality: "Bucuresti",

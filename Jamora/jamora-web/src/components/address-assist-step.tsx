@@ -1,23 +1,18 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { StructuredAddressForm } from "@/components/structured-address-form";
 import {
   applyRomanianAddressSuggestion,
   type StructuredAddress,
 } from "@/lib/commerce/address.cjs";
 import {
+  addressWarningMessage,
+} from "@/lib/checkout-wizard-policy.cjs";
+import {
   suggestRomanianAddresses,
   type AddressSuggestion,
 } from "@/lib/shipping-api";
-
-const warningLabels: Record<string, string> = {
-  postalSubdivisionMismatch: "The postal code and county do not appear to match.",
-  postalLocalityMismatch: "The postal code and locality do not appear to match.",
-  unknownPostalCode: "The postal code could not be verified.",
-  unknownSubdivision: "The county could not be verified.",
-  unverifiedLocality: "The locality could not be verified for this postal zone.",
-};
 
 export function AddressWarnings({ warnings }: { warnings: string[] }) {
   if (!warnings.length) return null;
@@ -26,7 +21,7 @@ export function AddressWarnings({ warnings }: { warnings: string[] }) {
       <p className="font-semibold">Please review this address</p>
       <ul className="mt-1 list-disc space-y-1 pl-5">
         {warnings.map((warning) => (
-          <li key={warning}>{warningLabels[warning] ?? warning}</li>
+          <li key={warning}>{addressWarningMessage(warning)}</li>
         ))}
       </ul>
     </div>
@@ -39,6 +34,7 @@ export function AddressAssistStep({
   errors,
   warnings,
   enabled,
+  disabled = false,
   reservationCapability,
 }: {
   value: StructuredAddress;
@@ -46,6 +42,7 @@ export function AddressAssistStep({
   errors: string[];
   warnings: string[];
   enabled: boolean;
+  disabled?: boolean;
   reservationCapability?: string;
 }) {
   const listId = useId();
@@ -54,9 +51,15 @@ export function AddressAssistStep({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [assistError, setAssistError] = useState("");
   const [loading, setLoading] = useState(false);
+  const committedQuery = useRef("");
 
   useEffect(() => {
-    if (!enabled || query.trim().length < 3) return;
+    if (
+      !enabled ||
+      disabled ||
+      query === committedQuery.current ||
+      query.trim().length < 3
+    ) return;
     let active = true;
     const timer = setTimeout(() => {
       setLoading(true);
@@ -81,11 +84,13 @@ export function AddressAssistStep({
       active = false;
       clearTimeout(timer);
     };
-  }, [enabled, query, reservationCapability]);
+  }, [disabled, enabled, query, reservationCapability]);
 
   function choose(suggestion: AddressSuggestion) {
     onChange(applyRomanianAddressSuggestion(value, suggestion));
-    setQuery(`${suggestion.street} ${suggestion.building}, ${suggestion.locality}`);
+    const label = `${suggestion.street} ${suggestion.building}, ${suggestion.locality}`;
+    committedQuery.current = label;
+    setQuery(label);
     setSuggestions([]);
     setActiveIndex(-1);
   }
@@ -107,7 +112,9 @@ export function AddressAssistStep({
               activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined
             }
             value={query}
+            disabled={disabled}
             onChange={(event) => {
+              committedQuery.current = "";
               setQuery(event.target.value);
               setAssistError("");
               if (event.target.value.trim().length < 3) {
@@ -134,7 +141,7 @@ export function AddressAssistStep({
             placeholder="Street, number, locality or postal code"
             className="mt-1 w-full rounded-lg border border-clay bg-cream px-3 py-2 text-sm text-ink outline-none focus:border-terracotta"
           />
-          {suggestions.length ? (
+          {!disabled && suggestions.length ? (
             <ul
               id={listId}
               role="listbox"
@@ -145,22 +152,23 @@ export function AddressAssistStep({
                   id={`${listId}-option-${index}`}
                   key={`${suggestion.postalCode}:${suggestion.street}:${suggestion.building}`}
                   role="option"
+                  tabIndex={-1}
                   aria-selected={index === activeIndex}
+                  aria-disabled={disabled}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    if (!disabled) choose(suggestion);
+                  }}
+                  className={`cursor-pointer rounded-md px-3 py-2 text-left text-sm ${
+                    index === activeIndex ? "bg-sand text-ink" : "text-bark hover:bg-sand/60"
+                  }`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => choose(suggestion)}
-                    className={`w-full rounded-md px-3 py-2 text-left text-sm ${
-                      index === activeIndex ? "bg-sand text-ink" : "text-bark hover:bg-sand/60"
-                    }`}
-                  >
-                    <span className="block font-semibold">
-                      {suggestion.street} {suggestion.building}
-                    </span>
-                    <span className="block text-xs text-stone">
-                      {suggestion.postalCode} {suggestion.locality}, {suggestion.subdivisionCode}
-                    </span>
-                  </button>
+                  <span className="block font-semibold">
+                    {suggestion.street} {suggestion.building}
+                  </span>
+                  <span className="block text-xs text-stone">
+                    {suggestion.postalCode} {suggestion.locality}, {suggestion.subdivisionCode}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -184,7 +192,12 @@ export function AddressAssistStep({
 
       <AddressWarnings warnings={warnings} />
 
-      <StructuredAddressForm value={value} onChange={onChange} errors={errors} />
+      <StructuredAddressForm
+        value={value}
+        onChange={onChange}
+        errors={errors}
+        disabled={disabled}
+      />
     </div>
   );
 }

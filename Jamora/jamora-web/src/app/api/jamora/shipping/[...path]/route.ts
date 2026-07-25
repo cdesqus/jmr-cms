@@ -8,6 +8,10 @@ import {
   trustedShippingHeaders,
 } from "@/lib/shipping-customer-policy.cjs";
 import { guestShippingCapabilityBoundary } from "@/lib/shipping-capability";
+import {
+  BoundedJsonError,
+  readBoundedJsonObject,
+} from "@/lib/bounded-json-request";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
@@ -37,13 +41,16 @@ export async function POST(
 
   let body: Record<string, unknown>;
   try {
-    const raw = await request.text();
-    if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
-      return NextResponse.json({ error: "Request is too large." }, { status: 413 });
-    }
-    body = shippingOperationBody(operation, JSON.parse(raw));
-  } catch {
-    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+    body = shippingOperationBody(
+      operation,
+      await readBoundedJsonObject(request, MAX_BODY_BYTES),
+    );
+  } catch (error) {
+    const status = error instanceof BoundedJsonError ? error.status : 400;
+    return NextResponse.json(
+      { error: status === 413 ? "Request is too large." : "Invalid request." },
+      { status },
+    );
   }
 
   try {

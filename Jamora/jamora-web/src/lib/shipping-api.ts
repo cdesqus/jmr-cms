@@ -17,6 +17,16 @@ export type AddressAssessment = {
 type ShippingItem = { slug: string; qty: number };
 type ShippingSubject = "order" | "membership_checkout";
 
+export class ShippingHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ShippingHttpError";
+    this.status = status;
+  }
+}
+
 async function shippingRequest<T>(
   operation: string,
   body: Record<string, unknown>,
@@ -37,7 +47,10 @@ async function shippingRequest<T>(
     error?: string;
   };
   if (!response.ok) {
-    throw new Error(result.error ?? "Shipping service is unavailable.");
+    throw new ShippingHttpError(
+      response.status,
+      result.error ?? "Shipping service is unavailable.",
+    );
   }
   return result as T;
 }
