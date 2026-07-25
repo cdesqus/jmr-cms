@@ -11,12 +11,22 @@ export type MockOrderStatus =
   | "failed"
   | "refunded";
 
+export type ShipmentTrackingStatus =
+  | "label_created"
+  | "picked_up"
+  | "in_transit"
+  | "out_for_delivery"
+  | "delivered"
+  | "exception"
+  | "returned";
+
 export interface MockOrder {
   id: string;
   orderNumber: string;
   trackingNumber: string;
   carrier: string;
   service?: string;
+  shipmentStatus?: ShipmentTrackingStatus;
   currency: "EUR" | "RON";
   status: MockOrderStatus;
   customer: {

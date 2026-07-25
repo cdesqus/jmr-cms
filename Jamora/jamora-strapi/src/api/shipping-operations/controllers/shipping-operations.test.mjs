@@ -68,12 +68,14 @@ function reservationDatabase(tokens, expiresAt = "2099-07-25T10:00:00.000Z") {
   };
 }
 
-test("shipping operations expose only explicit address, quote, shipment, and private-label routes", () => {
+test("shipping operations expose only explicit address, quote, shipment, tracking, and private-label routes", () => {
   assert.deepEqual(routes.routes.map(({ method, path, handler }) => ({ method, path, handler })), [
     { method: "POST", path: "/jamora/address/suggest", handler: "shipping-operations.suggestAddress" },
     { method: "POST", path: "/jamora/address/assess", handler: "shipping-operations.assessAddress" },
     { method: "POST", path: "/jamora/shipping/quotes", handler: "shipping-operations.quoteShipping" },
     { method: "POST", path: "/jamora/shipping/select", handler: "shipping-operations.selectShippingQuote" },
+    { method: "POST", path: "/jamora/shipping/tracking/webhook", handler: "shipping-operations.trackingWebhook" },
+    { method: "POST", path: "/jamora/admin/shipping/tracking/poll", handler: "shipping-operations.pollTracking" },
     { method: "POST", path: "/jamora/admin/shipping/shipments/:orderDocumentId", handler: "shipping-operations.createShipment" },
     { method: "POST", path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels/capability", handler: "shipping-operations.createLabelCapability" },
     { method: "GET", path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels", handler: "shipping-operations.downloadLabel" },

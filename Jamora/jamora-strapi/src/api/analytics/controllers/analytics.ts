@@ -30,6 +30,9 @@ import {
 import {
   hasStorefrontSecret,
 } from "../../customer-auth/controllers/storefront-secret.cjs";
+import {
+  createPublicOrderTrackingQuery,
+} from "../services/public-order-tracking.cjs";
 
 const DEFAULT_COST_RATIO = 0.42;
 
@@ -1199,58 +1202,29 @@ const controller = {
       return;
     }
 
-    const orders = await strapi.documents("api::order.order").findMany({
-      fields: [
-        "documentId",
-        "orderNumber",
-        "trackingNumber",
-        "carrier",
-        "customerName",
-        "email",
-        "status",
-        "currency",
-        "subtotalCents",
-        "shippingCents",
-        "discountCents",
-        "promotionCode",
-        "totalCents",
-        "invoiceNumber",
-        "items",
-        "statusHistory",
-        "batchAllocations",
-        "fulfilmentChecklist",
-        "packedBy",
-        "packedAt",
-        "itemsSummary",
-        "shippingAddressText",
-        "trackingPreviewUrl",
-        "deliveryLabelUrl",
-        "estimatedDelivery",
-        "createdAt",
-      ],
-      filters: {
-        $or: [
-          { orderNumber: { $eqi: query } },
-          { trackingNumber: { $eqi: query } },
-        ],
-      },
-      limit: 1,
-    });
-
-    const order = orders[0];
+    let order;
+    try {
+      order = await createPublicOrderTrackingQuery({
+        documents: (uid: string) => strapi.documents(uid as any),
+        enrichBatchAllocations,
+      })(query);
+    } catch (caught) {
+      if (caught instanceof TypeError) {
+        ctx.status = 400;
+        ctx.body = { error: "Invalid tracking query." };
+        return;
+      }
+      throw caught;
+    }
     if (!order) {
       ctx.status = 404;
       ctx.body = { error: "Order not found." };
       return;
     }
 
-    const batchAllocations = await enrichBatchAllocations(
-      (order as any).batchAllocations,
-    );
     ctx.body = {
       order: {
         ...order,
-        batchAllocations,
         statusHistory: parseHistory((order as any).statusHistory).filter(
           (event: any) => event?.type === "status",
         ),

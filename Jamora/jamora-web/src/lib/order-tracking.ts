@@ -1,5 +1,10 @@
 import type { MockOrder, MockOrderStatus } from "@/lib/mock-orders";
 import { normalizeOrderTimeline } from "@/lib/order-timeline.cjs";
+import {
+  trackingFields,
+  trackingTimeline,
+  type SafeShipmentProjection,
+} from "@/lib/order-tracking-policy.cjs";
 
 interface StrapiTrackedOrder {
   documentId?: string;
@@ -24,6 +29,7 @@ interface StrapiTrackedOrder {
   shippingAddressText?: string;
   estimatedDelivery?: string;
   createdAt?: string;
+  shipment?: SafeShipmentProjection;
 }
 
 function isStatus(value: unknown): value is MockOrderStatus {
@@ -39,6 +45,7 @@ function isStatus(value: unknown): value is MockOrderStatus {
 }
 
 function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
+  const tracking = trackingFields(order);
   const shippingAddress = order.shippingAddress ?? {};
   const address =
     typeof order.shippingAddressText === "string"
@@ -63,8 +70,10 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
   return {
     id: String(order.documentId ?? order.id ?? order.orderNumber),
     orderNumber: order.orderNumber ?? "JMR-UNKNOWN",
-    trackingNumber: order.trackingNumber ?? "",
-    carrier: order.carrier ?? "Jamora EU Fulfilment",
+    trackingNumber: tracking.trackingNumber,
+    carrier: tracking.carrier,
+    service: tracking.service,
+    shipmentStatus: tracking.shipmentStatus,
     status: isStatus(String(order.status).toLowerCase())
       ? (String(order.status).toLowerCase() as MockOrderStatus)
       : "pending",
@@ -86,7 +95,10 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
     createdAt: order.createdAt ?? new Date().toISOString(),
     estimatedDelivery: order.estimatedDelivery ?? new Date().toISOString(),
     emailConfirmationSent: true,
-    statusHistory: normalizeOrderTimeline(order.statusHistory, order.createdAt),
+    statusHistory: trackingTimeline({
+      statusHistory: normalizeOrderTimeline(order.statusHistory, order.createdAt),
+      shipment: order.shipment,
+    }),
   };
 }
 

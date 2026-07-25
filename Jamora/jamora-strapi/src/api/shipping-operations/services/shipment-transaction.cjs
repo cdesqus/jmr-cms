@@ -687,6 +687,7 @@ function mockPdf(label) {
 function createMockShippingProvider() {
   return {
     carrier: "jamora-mock",
+    provider: "jamora-mock",
     async createShipment(order) {
       const basis = JSON.stringify({
         order: order.documentId,
@@ -705,6 +706,32 @@ function createMockShippingProvider() {
       };
     },
     async cancelShipment() {},
+    async pollTracking(shipment) {
+      const awb = providerIdentifier(shipment?.awb);
+      const status = text(shipment?.status).toLowerCase();
+      const occurredAt = iso(
+        shipment?.updatedAt ?? shipment?.lastTrackingEventAt ??
+          shipment?.createdAt,
+      );
+      if (!awb || ![
+        "label_created",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered",
+        "exception",
+        "returned",
+      ].includes(status)) {
+        throw new Error("Mock tracking shipment is invalid.");
+      }
+      return {
+        providerEventId: `poll:${awb}:${status}:${occurredAt}`,
+        provider: "jamora-mock",
+        awb,
+        status,
+        occurredAt,
+      };
+    },
     async downloadLabel({ awb, labelReference, format }) {
       const selectedFormat = assertFormat(format);
       const safeAwb = text(awb).replace(/[^A-Za-z0-9_-]/g, "");

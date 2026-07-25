@@ -1,5 +1,11 @@
 import { products } from "./seed/products";
 import { runMembershipStartupSweeps } from "./membership-bootstrap.cjs";
+import { createMockShippingProvider } from "./api/shipping-operations/services/shipment-transaction.cjs";
+import {
+  createStrapiTrackingAdapter,
+  createTrackingDomain,
+  runShippingTrackingStartupPoll,
+} from "./api/shipping-operations/services/tracking-domain.cjs";
 
 export default {
   async bootstrap({ strapi }) {
@@ -15,6 +21,13 @@ export default {
         strapi.log,
       );
     }
+    await runShippingTrackingStartupPoll(
+      createTrackingDomain({
+        adapter: createStrapiTrackingAdapter(strapi),
+        provider: createMockShippingProvider(),
+      }),
+      strapi.log,
+    );
   },
 };
 

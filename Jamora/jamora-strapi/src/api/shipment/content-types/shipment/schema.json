@@ -59,6 +59,21 @@
       "default": "label_created",
       "required": true
     },
+    "trackingProgressStatus": {
+      "type": "enumeration",
+      "enum": [
+        "label_created",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered"
+      ],
+      "default": "label_created",
+      "required": true
+    },
+    "lastTrackingEventAt": {
+      "type": "datetime"
+    },
     "createdByActor": {
       "type": "string",
       "required": true

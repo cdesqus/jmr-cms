@@ -900,3 +900,24 @@ test("mock provider returns opaque references and private in-process PDF/ZPL byt
   assert.equal(zpl.contentType, "application/vnd.zebra-zpl");
   assert.match(zpl.body.toString("utf8"), /^\^XA/);
 });
+
+test("mock provider exposes deterministic secret-free tracking polling", async () => {
+  const provider = createMockShippingProvider();
+  const candidate = {
+    awb: "JMR000000000000000001",
+    status: "in_transit",
+    updatedAt: "2026-07-25T12:05:00.000Z",
+    labelReference: "private-label",
+  };
+
+  assert.deepEqual(
+    await provider.pollTracking(candidate),
+    {
+      providerEventId: "poll:JMR000000000000000001:in_transit:2026-07-25T12:05:00.000Z",
+      provider: "jamora-mock",
+      awb: "JMR000000000000000001",
+      status: "in_transit",
+      occurredAt: "2026-07-25T12:05:00.000Z",
+    },
+  );
+});

@@ -10,11 +10,27 @@ import {
   createShipmentTransactions,
   createStrapiShipmentAdapter,
 } from "../services/shipment-transaction.cjs";
+import {
+  createStrapiTrackingAdapter,
+  createTrackingDomain,
+  pollLimit,
+} from "../services/tracking-domain.cjs";
+import {
+  createAuthenticatedTrackingLimiter,
+  verifyTrackingWebhook,
+} from "../../../middlewares/shipping-webhook-guard.cjs";
 
 const MAX_BODY_BYTES = 4_096;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT = 30;
 const rateWindows = new Map<string, { startedAt: number; count: number }>();
+const defaultAuthenticatedTrackingLimiter =
+  createAuthenticatedTrackingLimiter({
+    providerLimit: process.env.SHIPPING_WEBHOOK_PROVIDER_RATE_LIMIT,
+    eventLimit: process.env.SHIPPING_WEBHOOK_EVENT_RATE_LIMIT,
+    windowMs: process.env.SHIPPING_WEBHOOK_RATE_WINDOW_MS,
+    maxBuckets: process.env.SHIPPING_WEBHOOK_RATE_MAX_BUCKETS,
+  });
 
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -304,6 +320,13 @@ function defaultShipmentTransactions() {
   });
 }
 
+function defaultTrackingDomain() {
+  return createTrackingDomain({
+    adapter: createStrapiTrackingAdapter(strapi),
+    provider: createMockShippingProvider(),
+  });
+}
+
 function safeCapability(value: any) {
   return {
     capability: text(value?.capability),
@@ -419,11 +442,91 @@ const publicController = {
 
 export function createShippingOperationsController({
   shipmentTransactions = defaultShipmentTransactions,
+  trackingDomain = defaultTrackingDomain,
+  verifyWebhook = verifyTrackingWebhook,
+  authenticatedTrackingLimiter = defaultAuthenticatedTrackingLimiter,
 }: {
   shipmentTransactions?: () => any;
+  trackingDomain?: () => any;
+  verifyWebhook?: (input: any) => any;
+  authenticatedTrackingLimiter?: {
+    check: (event: any) => { allowed: boolean; retryAfter?: number };
+  };
 } = {}) {
   return {
     ...publicController,
+
+    async trackingWebhook(ctx: any) {
+      if (!shippingEnabled(ctx)) return;
+      const body = requestBody(ctx);
+      if (!body) return;
+      let verified;
+      try {
+        verified = verifyWebhook({
+          payload: body,
+          providerHeader: text(ctx.get("x-jamora-shipping-provider")),
+          timestamp: text(ctx.get("x-jamora-shipping-timestamp")),
+          signature: text(ctx.get("x-jamora-shipping-signature")),
+          secret: process.env.SHIPPING_TRACKING_WEBHOOK_SECRET,
+          now: new Date(),
+        });
+      } catch {
+        return fail(ctx, 401, "Request could not be completed.");
+      }
+      const limited = authenticatedTrackingLimiter.check(verified);
+      if (!limited.allowed) {
+        if (limited.retryAfter) ctx.set("Retry-After", String(limited.retryAfter));
+        return fail(ctx, 429, "Request could not be completed.");
+      }
+      try {
+        const result = await trackingDomain().applyTrackingEvent({
+          event: verified,
+          source: "webhook",
+          receivedAt: new Date(),
+        });
+        ctx.body = {
+          accepted: true,
+          idempotent: result.idempotent === true,
+          applied: result.applied === true,
+          outcome: result.outcome,
+          status: result.shipment?.status,
+        };
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "";
+        if (/shipment not found/i.test(message)) {
+          return fail(ctx, 404, "Request could not be completed.");
+        }
+        if (/provider event replay conflict/i.test(message)) {
+          return fail(ctx, 409, "Request could not be completed.");
+        }
+        if (caught instanceof TypeError || /\binvalid\b/i.test(message)) {
+          return fail(ctx, 400, "Request could not be completed.");
+        }
+        return fail(ctx, 502, "Request could not be completed.");
+      }
+    },
+
+    async pollTracking(ctx: any) {
+      const identity = shipmentAdmin(ctx);
+      if (!identity || !isJsonRequest(ctx)) return;
+      if (identity.role !== "owner") {
+        return fail(ctx, 403, "Owner credentials required.");
+      }
+      const body = requestBody(ctx);
+      if (!body) return;
+      let limit;
+      try {
+        limit = pollLimit(body.limit);
+      } catch (caught) {
+        return fail(
+          ctx,
+          400,
+          caught instanceof Error ? caught.message : "Invalid request.",
+        );
+      }
+      await runShipment(ctx, async () =>
+        trackingDomain().pollOpenShipments({ limit }));
+    },
 
     async createShipment(ctx: any) {
       const identity = shipmentAdmin(ctx);

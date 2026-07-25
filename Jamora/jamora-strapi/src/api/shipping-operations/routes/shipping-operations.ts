@@ -26,6 +26,18 @@ export default {
     },
     {
       method: "POST",
+      path: "/jamora/shipping/tracking/webhook",
+      handler: "shipping-operations.trackingWebhook",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
+      path: "/jamora/admin/shipping/tracking/poll",
+      handler: "shipping-operations.pollTracking",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
       path: "/jamora/admin/shipping/shipments/:orderDocumentId",
       handler: "shipping-operations.createShipment",
       config: { auth: false },
