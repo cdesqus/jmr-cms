@@ -4,7 +4,10 @@ import type {
   PaymentStatus,
 } from "./payment-customer-policy.cjs";
 
-export function acceptedPaymentMethods(input: unknown): PaymentMethod[];
+export function acceptedPaymentMethods(
+  input: unknown,
+  currency: "RON" | "EUR",
+): PaymentMethod[];
 export function checkoutAttempt<T extends { signature: string; key: string }>(
   current: T | null,
   signature: string,

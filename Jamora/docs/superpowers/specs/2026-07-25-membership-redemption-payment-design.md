@@ -46,6 +46,14 @@ selector and payment instruction/status surface as ordinary checkout. The
 client never calls finalize. It displays provider instructions and polls until
 a terminal status.
 
+Phase 1 membership redemption shipping is authoritatively quoted in EUR, while
+RoPay accepts RON only. The methods BFF and selector therefore expose manual
+transfer only for the EUR redemption subject, and reject an attempted EUR
+RoPay preparation before provider intent work. Ordinary RON subjects continue
+to expose RoPay when enabled. Phase 3 may add a server-owned RON shipping quote
+and immutable checkout conversion snapshot; no FX conversion is derived in the
+browser.
+
 The client treats the server-provided `expiresAt` as authoritative. At that
 instant, any still-expirable snapshot becomes locally `expired`, action links
 are removed, and polling stops even if no later server response arrives.
@@ -64,4 +72,3 @@ expiry event. Concurrent or repeated sweeps are idempotent.
 - settlement failure rolls back all nested membership and payment mutations;
 - pending-provider expiry is row-locked and event-idempotent;
 - payment UI locally transitions to expired and stops polling at `expiresAt`.
-

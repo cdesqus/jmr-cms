@@ -8,9 +8,9 @@ const TERMINAL = new Set([
   "refunded",
 ]);
 
-function acceptedPaymentMethods(input) {
+function acceptedPaymentMethods(input, currency) {
   const methods = Array.isArray(input?.methods) ? input.methods : [];
-  return methods.includes("ropay")
+  return methods.includes("ropay") && currency === "RON"
     ? ["bank_transfer", "ropay"]
     : ["bank_transfer"];
 }

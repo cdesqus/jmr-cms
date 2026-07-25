@@ -24,7 +24,10 @@ export interface CustomerPaymentSnapshot {
   deepLink?: string;
 }
 
-export function availablePaymentMethods(env: NodeJS.ProcessEnv): PaymentMethod[];
+export function availablePaymentMethods(
+  env: NodeJS.ProcessEnv,
+  currency: string | null | undefined,
+): PaymentMethod[];
 export function customerPaymentPath(
   method: string,
   path: string[],
@@ -32,7 +35,10 @@ export function customerPaymentPath(
 ): string;
 export function isPaymentsEnabled(env: NodeJS.ProcessEnv): boolean;
 export function isRoPayEnabled(env: NodeJS.ProcessEnv): boolean;
-export function paymentPreparationBody(input: unknown): {
+export function paymentPreparationBody(
+  input: unknown,
+  method?: PaymentMethod,
+): {
   idempotencyKey: string;
   subjectType: "order" | "membership";
   subjectId: string;

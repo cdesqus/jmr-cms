@@ -14,11 +14,15 @@ import {
 } from "./payment-customer-view.cjs";
 
 test("manual transfer remains selected and RoPay appears only in the server allowlist", () => {
-  assert.deepEqual(acceptedPaymentMethods(undefined), ["bank_transfer"]);
-  assert.deepEqual(acceptedPaymentMethods({ methods: [] }), ["bank_transfer"]);
+  assert.deepEqual(acceptedPaymentMethods(undefined, "RON"), ["bank_transfer"]);
+  assert.deepEqual(acceptedPaymentMethods({ methods: [] }, "RON"), ["bank_transfer"]);
   assert.deepEqual(
-    acceptedPaymentMethods({ methods: ["ropay", "bank_transfer", "fake"] }),
+    acceptedPaymentMethods({ methods: ["ropay", "bank_transfer", "fake"] }, "RON"),
     ["bank_transfer", "ropay"],
+  );
+  assert.deepEqual(
+    acceptedPaymentMethods({ methods: ["ropay", "bank_transfer"] }, "EUR"),
+    ["bank_transfer"],
   );
 });
 

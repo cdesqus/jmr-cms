@@ -7,20 +7,22 @@ import { acceptedPaymentMethods } from "@/lib/payment-customer-view.cjs";
 export function PaymentMethodSelector({
   value,
   onChange,
+  currency,
   disabled = false,
 }: {
   value: PaymentMethod;
   onChange: (method: PaymentMethod) => void;
+  currency: "RON" | "EUR";
   disabled?: boolean;
 }) {
   const [methods, setMethods] = useState<PaymentMethod[]>(["bank_transfer"]);
 
   useEffect(() => {
     let active = true;
-    void fetch("/api/jamora/payments/methods", { cache: "no-store" })
+    void fetch(`/api/jamora/payments/methods?currency=${currency}`, { cache: "no-store" })
       .then(async (response) => (
         response.ok
-          ? acceptedPaymentMethods(await response.json())
+          ? acceptedPaymentMethods(await response.json(), currency)
           : (["bank_transfer"] as PaymentMethod[])
       ))
       .catch(() => ["bank_transfer"] as PaymentMethod[])
@@ -32,7 +34,7 @@ export function PaymentMethodSelector({
     return () => {
       active = false;
     };
-  }, [onChange, value]);
+  }, [currency, onChange, value]);
 
   return (
     <fieldset className="mt-5 border-t border-clay/60 pt-5" disabled={disabled}>

@@ -89,6 +89,7 @@ export function MembershipPlanPicker({ plans }: { plans: CustomerMembershipPlan[
       <PaymentMethodSelector
         value={paymentMethod}
         onChange={setPaymentMethod}
+        currency="RON"
         disabled={busy !== null || Boolean(payment)}
       />
       <div className="mt-6 grid gap-6 lg:grid-cols-3">

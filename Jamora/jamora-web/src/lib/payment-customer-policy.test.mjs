@@ -17,15 +17,19 @@ const customer = { documentId: "customer-1", sessionVersion: 7 };
 test("storefront payments use exact feature gates and keep manual transfer as the fallback", () => {
   for (const value of [undefined, "", "TRUE", "1", "false"]) {
     assert.equal(isPaymentsEnabled({ PAYMENTS_ENABLED: value }), false);
-    assert.deepEqual(availablePaymentMethods({ PAYMENTS_ENABLED: value }), []);
+    assert.deepEqual(availablePaymentMethods({ PAYMENTS_ENABLED: value }, "RON"), []);
   }
   assert.deepEqual(
-    availablePaymentMethods({ PAYMENTS_ENABLED: "true", ROPAY_ENABLED: "false" }),
+    availablePaymentMethods({ PAYMENTS_ENABLED: "true", ROPAY_ENABLED: "false" }, "RON"),
     ["bank_transfer"],
   );
   assert.deepEqual(
-    availablePaymentMethods({ PAYMENTS_ENABLED: "true", ROPAY_ENABLED: "true" }),
+    availablePaymentMethods({ PAYMENTS_ENABLED: "true", ROPAY_ENABLED: "true" }, "RON"),
     ["bank_transfer", "ropay"],
+  );
+  assert.deepEqual(
+    availablePaymentMethods({ PAYMENTS_ENABLED: "true", ROPAY_ENABLED: "true" }, "EUR"),
+    ["bank_transfer"],
   );
   assert.equal(
     isRoPayEnabled({ PAYMENTS_ENABLED: "true", ROPAY_ENABLED: "TRUE" }),
@@ -125,6 +129,32 @@ test("payment preparation accepts only exact purpose-bound subject fields", () =
     purpose: "membership_purchase",
     currency: "RON",
   }), /subject and purpose/i);
+});
+
+test("RoPay BFF accepts ordinary RON but rejects EUR membership checkout before intent forwarding", () => {
+  assert.equal(paymentPreparationBody({
+    idempotencyKey: "pay:order-ron",
+    subjectType: "order",
+    subjectId: "order-ron",
+    purpose: "order",
+    currency: "RON",
+  }, "ropay").currency, "RON");
+  assert.throws(() => paymentPreparationBody({
+    idempotencyKey: "pay:membership-eur",
+    subjectType: "order",
+    subjectId: "membership-order-eur",
+    purpose: "order",
+    currency: "EUR",
+    checkoutReference: "checkout-eur",
+  }, "ropay"), /RON/i);
+  assert.equal(paymentPreparationBody({
+    idempotencyKey: "pay:membership-eur-manual",
+    subjectType: "order",
+    subjectId: "membership-order-eur",
+    purpose: "order",
+    currency: "EUR",
+    checkoutReference: "checkout-eur",
+  }, "bank_transfer").currency, "EUR");
 });
 
 test("browser DTO strips provider secrets, signatures, metadata, and unrestricted URLs", () => {

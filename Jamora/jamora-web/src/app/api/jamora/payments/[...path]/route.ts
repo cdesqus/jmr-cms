@@ -34,7 +34,12 @@ async function forward(
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
   if (target === "local:methods") {
-    return NextResponse.json({ methods: availablePaymentMethods(process.env) });
+    return NextResponse.json({
+      methods: availablePaymentMethods(
+        process.env,
+        new URL(request.url).searchParams.get("currency"),
+      ),
+    });
   }
 
   let body: string | undefined;
@@ -46,7 +51,12 @@ async function forward(
         typeof input?.guestCheckoutCapability === "string"
           ? input.guestCheckoutCapability.trim()
           : undefined;
-      body = JSON.stringify(paymentPreparationBody(input));
+      body = JSON.stringify(paymentPreparationBody(
+        input,
+        target === "/api/jamora/payments/ropay/intent"
+          ? "ropay"
+          : "bank_transfer",
+      ));
     } catch {
       return NextResponse.json({ error: "Invalid request." }, { status: 400 });
     }

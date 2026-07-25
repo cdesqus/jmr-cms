@@ -159,6 +159,7 @@ export function MembershipDashboard({ memberships }: { memberships: CustomerMemb
       <PaymentMethodSelector
         value={paymentMethod}
         onChange={setPaymentMethod}
+        currency="RON"
         disabled={busy || Boolean(payment)}
       />
       <button

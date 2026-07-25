@@ -26,9 +26,9 @@ function isRoPayEnabled(env) {
   return isPaymentsEnabled(env) && env.ROPAY_ENABLED === "true";
 }
 
-function availablePaymentMethods(env) {
+function availablePaymentMethods(env, currency) {
   if (!isPaymentsEnabled(env)) return [];
-  return isRoPayEnabled(env)
+  return isRoPayEnabled(env) && text(currency).toUpperCase() === "RON"
     ? ["bank_transfer", "ropay"]
     : ["bank_transfer"];
 }
@@ -96,7 +96,7 @@ function trustedPaymentHeaders(inputHeaders, secret, customer, guestCapability) 
   return headers;
 }
 
-function paymentPreparationBody(input) {
+function paymentPreparationBody(input, method) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("Invalid request.");
   }
@@ -120,6 +120,9 @@ function paymentPreparationBody(input) {
     throw new Error("Payment subject and purpose do not match.");
   }
   if (!["RON", "EUR"].includes(currency)) throw new Error("Invalid request.");
+  if (method === "ropay" && currency !== "RON") {
+    throw new Error("RoPay currency must be RON.");
+  }
   const checkoutReference = text(input.checkoutReference);
   return {
     idempotencyKey,

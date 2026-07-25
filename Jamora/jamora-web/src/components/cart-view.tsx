@@ -542,6 +542,7 @@ export function CartView({
           <PaymentMethodSelector
             value={paymentMethod}
             onChange={setPaymentMethod}
+            currency={activeMembershipMode ? "EUR" : "RON"}
             disabled={checkingOut}
           />
         ) : null}
