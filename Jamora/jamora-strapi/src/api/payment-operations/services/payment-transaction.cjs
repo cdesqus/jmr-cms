@@ -191,6 +191,29 @@ function assertOrderPaymentBinding(order, payment) {
   }
 }
 
+async function lockMembershipCheckoutOrder(adapters, binding) {
+  const checkoutReference = requiredText(binding.checkoutReference, "checkoutReference");
+  const orderDocumentId = requiredText(binding.orderDocumentId, "orderDocumentId");
+  const checkout = await adapters.lockCheckout(checkoutReference);
+  if (!checkout ||
+      checkout.checkoutReference !== checkoutReference ||
+      (binding.customerDocumentId &&
+       checkout.customerDocumentId !== binding.customerDocumentId) ||
+      (checkout.orderDocumentId &&
+       checkout.orderDocumentId !== orderDocumentId)) {
+    throw new Error("Membership checkout binding is invalid.");
+  }
+  const order = await adapters.lockOrder(orderDocumentId);
+  if (!order ||
+      order.documentId !== orderDocumentId ||
+      order.checkoutReference !== checkoutReference ||
+      (binding.customerDocumentId &&
+       order.customerDocumentId !== binding.customerDocumentId)) {
+    throw new Error("Membership checkout order binding is invalid.");
+  }
+  return { checkout, order };
+}
+
 function createPaymentSubjectSettlement(adapters) {
   return async function settleSubject(payment, context) {
     if (payment.purpose === "membership_purchase" ||
@@ -207,14 +230,27 @@ function createPaymentSubjectSettlement(adapters) {
         await adapters.settleOrder(payment, context);
       }
       const snapshot = payment.priceSnapshot?.membershipCheckout ?? {};
-      return adapters.finalizeMembershipCheckout({
+      const result = await adapters.finalizeMembershipCheckout({
         customerDocumentId: payment.customerDocumentId,
         checkoutReference: snapshot.checkoutReference || payment.subjectId,
         idempotencyKey: context.settlementKey,
         orderDocumentId: payment.orderDocumentId,
+        paymentDocumentId: payment.documentId,
         orderMetadata: snapshot.orderMetadata ?? payment.priceSnapshot?.orderMetadata ?? {},
         now: new Date(payment.paidAt),
       });
+      if (!result?.checkout ||
+          result.checkout.status !== "paid" ||
+          result.checkout.checkoutReference !== (snapshot.checkoutReference || payment.subjectId) ||
+          result.checkout.orderDocumentId !== payment.orderDocumentId ||
+          result.checkout.settlementKey !== context.settlementKey ||
+          !result.order ||
+          result.order.status !== "paid" ||
+          result.order.documentId !== payment.orderDocumentId ||
+          result.order.paymentDocumentId !== payment.documentId) {
+        throw new Error("Membership checkout settlement binding is invalid.");
+      }
+      return result;
     }
     return adapters.settleOrder(payment, context);
   };
@@ -233,6 +269,38 @@ function clone(value) {
 
 function same(left, right) {
   return isDeepStrictEqual(left ?? null, right ?? null);
+}
+
+function has(input, field) {
+  return Object.prototype.hasOwnProperty.call(input, field);
+}
+
+function optionalTextIdentity(input, field) {
+  if (!has(input, field)) return { provided: false };
+  if (typeof input[field] !== "string") {
+    throw new TypeError(`${field} must be a string.`);
+  }
+  return { provided: true, value: input[field].trim() };
+}
+
+function instantIdentity(input, fields, fallback) {
+  const supplied = fields.find((field) => has(input, field));
+  const occurredAt = iso(supplied ? input[supplied] : fallback, fields[0]);
+  return {
+    occurredAt,
+    identity: supplied
+      ? { provided: true, field: supplied, value: occurredAt }
+      : { provided: false },
+  };
+}
+
+function assertEventReplay(replay, expected) {
+  if (replay.paymentDocumentId !== expected.paymentDocumentId ||
+      replay.transition !== expected.transition ||
+      replay.actor !== expected.actor ||
+      !same(replay.payload, expected.payload)) {
+    throw new Error("Payment event idempotency conflict.");
+  }
 }
 
 function prepareExpected(input, beneficiary) {
@@ -347,6 +415,7 @@ function createPaymentTransactions(adapter, options = {}) {
       transition: "paid",
       actor: eventData.actor,
       ...(eventData.reason ? { reason: eventData.reason } : {}),
+      ...(eventData.payload ? { payload: clone(eventData.payload) } : {}),
       ...(eventData.providerEventId ? { providerEventId: eventData.providerEventId } : {}),
       occurredAt: eventData.occurredAt,
     });
@@ -364,41 +433,58 @@ function createPaymentTransactions(adapter, options = {}) {
       input.providerEventId ?? input.idempotencyKey,
       "providerEventId",
     );
-    const occurredAtProvided = input.occurredAt !== undefined || input.receivedAt !== undefined;
-    const occurredAt = iso(input.occurredAt ?? input.receivedAt ?? new Date(), "occurredAt");
-    const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+    const { occurredAt, identity: occurredAtIdentity } = instantIdentity(
+      input,
+      ["occurredAt", "receivedAt"],
+      new Date(),
+    );
+    const reasonIdentity = optionalTextIdentity(input, "reason");
+    const reason = reasonIdentity.value ?? "";
+    const providerReferenceIdentity = optionalTextIdentity(input, "providerReference");
     return transactionForPayment(input.paymentDocumentId, providerEventId, async (tx, payment, events, replay) => {
+      if (MISMATCH_STATUSES.has(payment.status)) {
+        throw new Error("Owner resolution is required for a payment mismatch.");
+      }
+      if (payment.expiresAt &&
+          instant(occurredAt, "occurredAt") >= instant(payment.expiresAt, "expiresAt")) {
+        throw new Error("Payment expired before settlement.");
+      }
+      if (!has(input, "receivedAmountMinor") || !has(input, "receivedCurrency")) {
+        throw new Error("Settlement received money is required.");
+      }
       const received = normaliseMoney({
-        amountMinor: input.receivedAmountMinor ?? payment.amountMinor,
-        currency: input.receivedCurrency ?? payment.currency,
+        amountMinor: input.receivedAmountMinor,
+        currency: input.receivedCurrency,
       });
       if (received.amountMinor !== payment.amountMinor ||
           received.currency !== payment.currency) {
         throw new Error("Settlement money mismatch.");
       }
-      const providerReference = typeof input.providerReference === "string"
-        ? input.providerReference.trim()
-        : "";
-      if (payment.providerReference &&
-          providerReference &&
-          payment.providerReference !== providerReference) {
-        throw new Error("Settlement provider reference mismatch.");
+      if ((payment.receivedAmountMinor !== undefined ||
+           payment.receivedCurrency !== undefined) &&
+          (payment.receivedAmountMinor !== received.amountMinor ||
+           payment.receivedCurrency !== received.currency)) {
+        throw new Error("Settlement conflicts with recorded receipt money.");
       }
+      const providerReference = providerReferenceIdentity.value ?? "";
+      const payload = {
+        kind: "provider_settlement",
+        received,
+        occurredAt: occurredAtIdentity,
+        providerReference: providerReferenceIdentity,
+        reason: reasonIdentity,
+      };
       if (replay) {
-        if (replay.paymentDocumentId !== payment.documentId ||
-            replay.transition !== "paid" ||
-            replay.actor !== actor ||
-            (replay.reason ?? "") !== reason ||
-            (occurredAtProvided && replay.occurredAt !== occurredAt) ||
-            (payment.receivedAmountMinor ?? payment.amountMinor) !== received.amountMinor ||
-            (payment.receivedCurrency ?? payment.currency) !== received.currency) {
-          throw new Error("Payment event idempotency conflict.");
-        }
+        assertEventReplay(replay, {
+          paymentDocumentId: payment.documentId,
+          transition: "paid",
+          actor,
+          payload,
+        });
         return { ...payment, idempotent: true };
       }
-      if (payment.expiresAt &&
-          instant(occurredAt, "occurredAt") >= instant(payment.expiresAt, "expiresAt")) {
-        throw new Error("Payment expired before settlement.");
+      if (payment.providerReference && payment.providerReference !== providerReference) {
+        throw new Error("Settlement provider reference mismatch.");
       }
       if (payment.status === "paid" && payment.settlementKey) {
         return { ...payment, idempotent: true };
@@ -411,10 +497,15 @@ function createPaymentTransactions(adapter, options = {}) {
         providerEventId,
         occurredAt,
         reason,
+        payload,
         paymentPatch: {
-          receivedAmountMinor: received.amountMinor,
-          receivedCurrency: received.currency,
-          receivedAt: occurredAt,
+          ...(payment.receivedAmountMinor === undefined
+            ? {
+                receivedAmountMinor: received.amountMinor,
+                receivedCurrency: received.currency,
+                receivedAt: occurredAt,
+              }
+            : {}),
           ...(providerReference ? { providerReference } : {}),
         },
       });
@@ -500,20 +591,30 @@ function createPaymentTransactions(adapter, options = {}) {
         input.providerEventId ?? input.idempotencyKey,
         "providerEventId",
       );
-      const occurredAt = iso(input.receivedAt ?? new Date(), "receivedAt");
-      const receivedAtProvided = input.receivedAt !== undefined;
-      const reason = typeof input.bankReference === "string" && input.bankReference.trim()
-        ? `Bank reference: ${input.bankReference.trim()}`
+      const { occurredAt, identity: receivedAtIdentity } = instantIdentity(
+        input,
+        ["receivedAt"],
+        new Date(),
+      );
+      const bankReferenceIdentity = optionalTextIdentity(input, "bankReference");
+      const reason = bankReferenceIdentity.value
+        ? `Bank reference: ${bankReferenceIdentity.value}`
         : "";
+      const payload = {
+        kind: "bank_receipt",
+        received,
+        receivedAt: receivedAtIdentity,
+        bankReference: bankReferenceIdentity,
+      };
       return transactionForPayment(input.paymentDocumentId, providerEventId, async (tx, payment, events, replay) => {
+        const classification = classifyReceipt(payment, received);
         if (replay) {
-          if (payment.receivedAmountMinor !== received.amountMinor ||
-              payment.receivedCurrency !== received.currency ||
-              replay.actor !== actor ||
-              (replay.reason ?? "") !== reason ||
-              (receivedAtProvided && replay.occurredAt !== occurredAt)) {
-            throw new Error("Payment event idempotency conflict.");
-          }
+          assertEventReplay(replay, {
+            paymentDocumentId: payment.documentId,
+            transition: classification.status,
+            actor,
+            payload,
+          });
           return { ...payment, idempotent: true };
         }
         if (payment.method !== "bank_transfer") throw new Error("Payment is not a bank transfer.");
@@ -530,7 +631,6 @@ function createPaymentTransactions(adapter, options = {}) {
         if (payment.expiresAt && instant(occurredAt, "receivedAt") >= instant(payment.expiresAt, "expiresAt")) {
           throw new Error("Payment expired before the receipt was received.");
         }
-        const classification = classifyReceipt(payment, received);
         if (!canTransition(payment.status, classification.status)) {
           throw new Error(`Payment cannot transition from ${payment.status} to ${classification.status}.`);
         }
@@ -545,6 +645,7 @@ function createPaymentTransactions(adapter, options = {}) {
             providerEventId,
             occurredAt,
             reason,
+            payload,
             paymentPatch,
           });
         }
@@ -558,6 +659,7 @@ function createPaymentTransactions(adapter, options = {}) {
           transition: classification.status,
           actor,
           ...(reason ? { reason } : {}),
+          payload,
           providerEventId,
           occurredAt,
         });
@@ -573,21 +675,33 @@ function createPaymentTransactions(adapter, options = {}) {
         input.providerEventId ?? input.idempotencyKey,
         "idempotencyKey",
       );
-      const occurredAtProvided = input.occurredAt !== undefined;
-      const occurredAt = iso(input.occurredAt ?? new Date(), "occurredAt");
+      const { occurredAt, identity: occurredAtIdentity } = instantIdentity(
+        input,
+        ["occurredAt"],
+        new Date(),
+      );
       const resolution = input.resolution ?? "accept";
       if (!["accept", "cancel"].includes(resolution)) {
         throw new TypeError("resolution must be accept or cancel.");
       }
       return transactionForPayment(input.paymentDocumentId, providerEventId, async (tx, payment, events, replay) => {
         const target = resolution === "accept" ? "paid" : "cancelled";
+        const payload = {
+          kind: "mismatch_resolution",
+          resolution: {
+            provided: has(input, "resolution"),
+            value: resolution,
+          },
+          occurredAt: occurredAtIdentity,
+          reason: { provided: true, value: reason },
+        };
         if (replay) {
-          if (replay.transition !== target || replay.actor !== actor || replay.reason !== reason) {
-            throw new Error("Payment event idempotency conflict.");
-          }
-          if (occurredAtProvided && replay.occurredAt !== occurredAt) {
-            throw new Error("Payment event idempotency conflict.");
-          }
+          assertEventReplay(replay, {
+            paymentDocumentId: payment.documentId,
+            transition: target,
+            actor,
+            payload,
+          });
           return { ...payment, idempotent: true };
         }
         if (!MISMATCH_STATUSES.has(payment.status)) {
@@ -605,6 +719,7 @@ function createPaymentTransactions(adapter, options = {}) {
             providerEventId,
             occurredAt,
             reason,
+            payload,
             paymentPatch: {},
           });
         }
@@ -615,6 +730,7 @@ function createPaymentTransactions(adapter, options = {}) {
           transition: "cancelled",
           actor,
           reason,
+          payload,
           providerEventId,
           occurredAt,
         });
@@ -803,6 +919,7 @@ module.exports = {
   createPaymentTransactions,
   createStrapiPaymentAdapter,
   deriveAuthoritativePaymentSubject,
+  lockMembershipCheckoutOrder,
   ttlSeconds,
   validateGuestCheckoutCapability,
 };

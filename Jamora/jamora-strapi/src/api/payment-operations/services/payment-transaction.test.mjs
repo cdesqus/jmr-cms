@@ -9,6 +9,7 @@ import {
   createPaymentTransactions,
   createStrapiPaymentAdapter,
   deriveAuthoritativePaymentSubject,
+  lockMembershipCheckoutOrder,
   validateGuestCheckoutCapability,
 } from "./payment-transaction.cjs";
 
@@ -535,6 +536,129 @@ test("generic settlement cannot settle an expired payment", async () => {
   assert.equal(adapter.payments.get(payment.documentId).status, "awaiting_payment");
 });
 
+test("generic settlement cannot erase a recorded 90/100 mismatch or bypass owner resolution", async () => {
+  const { adapter, service } = operations();
+  const payment = await service.prepareBankTransfer(input({ amountMinor: 100 }));
+  await service.recordBankReceipt({
+    paymentDocumentId: payment.documentId,
+    amountMinor: 90,
+    currency: "RON",
+    receivedAt: now,
+    actor: "owner@example.test",
+    providerEventId: "receipt:90-of-100",
+  });
+
+  await assert.rejects(
+    service.settlePayment({
+      paymentDocumentId: payment.documentId,
+      actor: "provider",
+      providerEventId: "provider:pretend-full-payment",
+      receivedAmountMinor: 100,
+      receivedCurrency: "RON",
+    }),
+    /owner resolution is required/i,
+  );
+  assert.equal(adapter.payments.get(payment.documentId).status, "underpaid");
+  assert.equal(adapter.payments.get(payment.documentId).receivedAmountMinor, 90);
+});
+
+test("provider settlement replay requires exact optional-field presence and values", async () => {
+  const { service } = operations();
+  const payment = await service.prepareBankTransfer(input());
+  const exact = {
+    paymentDocumentId: payment.documentId,
+    actor: "provider",
+    providerEventId: "provider:exact-replay",
+    receivedAmountMinor: 10_000,
+    receivedCurrency: "RON",
+    receivedAt: "2026-07-25T09:00:00.000Z",
+    providerReference: "provider-reference-1",
+    reason: "captured",
+  };
+  await service.settlePayment(exact);
+  assert.equal((await service.settlePayment(exact)).idempotent, true);
+  for (const replay of [
+    (({ providerReference, ...rest }) => rest)(exact),
+    { ...exact, providerReference: "provider-reference-2" },
+    (({ reason, ...rest }) => rest)(exact),
+    (({ receivedAt, ...rest }) => rest)(exact),
+  ]) {
+    await assert.rejects(
+      service.settlePayment(replay),
+      /idempotency conflict/i,
+    );
+  }
+});
+
+test("receipt replay distinguishes an omitted bank reference from an explicitly empty one", async () => {
+  const { service } = operations();
+  const payment = await service.prepareBankTransfer(input());
+  const receipt = {
+    paymentDocumentId: payment.documentId,
+    amountMinor: 10_000,
+    currency: "RON",
+    receivedAt: now,
+    actor: "owner@example.test",
+    providerEventId: "receipt:optional-presence",
+  };
+  await service.recordBankReceipt(receipt);
+  await assert.rejects(
+    service.recordBankReceipt({ ...receipt, bankReference: "" }),
+    /idempotency conflict/i,
+  );
+});
+
+test("receipt replay rejects an event whose persisted transition is not its money classification", async () => {
+  const { adapter, service } = operations();
+  const payment = await service.prepareBankTransfer(input());
+  const receipt = {
+    paymentDocumentId: payment.documentId,
+    amountMinor: 10_000,
+    currency: "RON",
+    receivedAt: now,
+    actor: "owner@example.test",
+    providerEventId: "receipt:transition-binding",
+  };
+  await service.recordBankReceipt(receipt);
+  adapter.events.find(
+    (event) => event.providerEventId === receipt.providerEventId,
+  ).transition = "cancelled";
+
+  await assert.rejects(
+    service.recordBankReceipt(receipt),
+    /idempotency conflict/i,
+  );
+});
+
+test("membership checkout/order locking always acquires checkout before order", async () => {
+  const calls = [];
+  const result = await lockMembershipCheckoutOrder({
+    async lockCheckout(reference) {
+      calls.push(`checkout:${reference}`);
+      return {
+        checkoutReference: reference,
+        customerDocumentId: "customer-1",
+        orderDocumentId: "order-1",
+      };
+    },
+    async lockOrder(documentId) {
+      calls.push(`order:${documentId}`);
+      return {
+        documentId,
+        customerDocumentId: "customer-1",
+        checkoutReference: "checkout-1",
+      };
+    },
+  }, {
+    checkoutReference: "checkout-1",
+    orderDocumentId: "order-1",
+    customerDocumentId: "customer-1",
+  });
+
+  assert.deepEqual(calls, ["checkout:checkout-1", "order:order-1"]);
+  assert.equal(result.order.documentId, "order-1");
+});
+
 test("Strapi adapter enlists row lock and authoritative payment/event reads in one transaction", async () => {
   const calls = [];
   const trx = { marker: "same-transaction" };
@@ -629,7 +753,19 @@ test("membership checkout settlement prepays its bound pending order before Phas
     },
     async finalizeMembershipCheckout(input) {
       calls.push(["finalize", input.orderDocumentId, input.idempotencyKey]);
-      return { order: { documentId: input.orderDocumentId, status: "paid" } };
+      return {
+        checkout: {
+          checkoutReference: input.checkoutReference,
+          orderDocumentId: input.orderDocumentId,
+          settlementKey: input.idempotencyKey,
+          status: "paid",
+        },
+        order: {
+          documentId: input.orderDocumentId,
+          paymentDocumentId: input.paymentDocumentId,
+          status: "paid",
+        },
+      };
     },
   });
 
@@ -648,4 +784,40 @@ test("membership checkout settlement prepays its bound pending order before Phas
     ["settleOrder", "order-1"],
     ["finalize", "order-1", "payment:payment-1:settle"],
   ]);
+});
+
+test("membership checkout settlement rejects a Phase 1 result for another paid order", async () => {
+  const settle = createPaymentSubjectSettlement({
+    async activateMembership() { assert.fail("not an activation"); },
+    async settleOrder() {},
+    async finalizeMembershipCheckout(input) {
+      return {
+        checkout: {
+          checkoutReference: input.checkoutReference,
+          orderDocumentId: "order-2",
+          settlementKey: input.idempotencyKey,
+          status: "paid",
+        },
+        order: {
+          documentId: "order-2",
+          paymentDocumentId: input.paymentDocumentId,
+          status: "paid",
+        },
+      };
+    },
+  });
+
+  await assert.rejects(
+    settle({
+      documentId: "payment-1",
+      purpose: "order",
+      subjectId: "order-1",
+      customerDocumentId: "customer-1",
+      membershipDocumentId: "membership-1",
+      orderDocumentId: "order-1",
+      paidAt: "2026-07-25T10:00:00.000Z",
+      priceSnapshot: { membershipCheckout: { checkoutReference: "checkout-1" } },
+    }, { settlementKey: "payment:payment-1:settle" }),
+    /checkout settlement binding is invalid/i,
+  );
 });

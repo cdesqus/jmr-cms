@@ -1,3 +1,3 @@
-import { factories } from "@strapi/strapi";
+const routes = require("./payment-routes.cjs");
 
-export default factories.createCoreRouter("api::payment.payment");
+export default routes;

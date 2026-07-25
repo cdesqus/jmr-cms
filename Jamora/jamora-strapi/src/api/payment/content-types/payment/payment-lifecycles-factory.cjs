@@ -4,6 +4,7 @@ const {
   validatePaymentMoney,
   validatePaymentMoneyBulkPatch,
 } = require("./payment-money-validation.cjs");
+const { assertPaymentWriteAccess } = require("./payment-write-guard.cjs");
 
 const IMMUTABLE_FIELDS = new Set([
   "paymentNumber",
@@ -48,19 +49,29 @@ async function findPayment(event) {
 function createPaymentLifecycles(findExistingPayment = findPayment) {
   return {
     beforeCreate(event) {
+      assertPaymentWriteAccess();
       validatePaymentMoney(event.params.data);
     },
     beforeCreateMany(event) {
+      assertPaymentWriteAccess();
       for (const payment of event.params.data ?? []) validatePaymentMoney(payment);
     },
     async beforeUpdate(event) {
+      assertPaymentWriteAccess();
       const existing = await findExistingPayment(event);
       rejectImmutablePatch(event.params.data, existing);
       validatePaymentMoney(event.params.data, existing);
     },
     beforeUpdateMany(event) {
+      assertPaymentWriteAccess();
       rejectImmutablePatch(event.params.data);
       validatePaymentMoneyBulkPatch(event.params.data);
+    },
+    beforeDelete() {
+      assertPaymentWriteAccess();
+    },
+    beforeDeleteMany() {
+      assertPaymentWriteAccess();
     },
   };
 }

@@ -21,6 +21,7 @@
       "required": true
     },
     "expiresAt": { "type": "datetime", "required": true },
-    "orderDocumentId": { "type": "string" }
+    "orderDocumentId": { "type": "string" },
+    "settlementKey": { "type": "string" }
   }
 }

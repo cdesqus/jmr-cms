@@ -13,6 +13,7 @@
     "transition": { "type": "string", "required": true },
     "actor": { "type": "string", "required": true },
     "reason": { "type": "text" },
+    "payload": { "type": "json" },
     "providerEventId": { "type": "string", "unique": true },
     "occurredAt": { "type": "datetime", "required": true }
   }

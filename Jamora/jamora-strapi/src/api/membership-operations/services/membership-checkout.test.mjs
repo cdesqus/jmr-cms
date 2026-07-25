@@ -183,6 +183,40 @@ test("ignores forged browser totals and derives paid snapshot from persisted che
   assert.equal(result.order.totalCents, 495);
 });
 
+test("paid checkout replay requires the exact order, payment, and settlement key", async () => {
+  const { adapter, service } = fixture();
+  const checkout = await service.reserve(reserve);
+  adapter.orders.set("order-1", {
+    documentId: "order-1",
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    paymentDocumentId: "payment-1",
+    status: "paid",
+  });
+  const exact = {
+    customerDocumentId: "customer-1",
+    checkoutReference: checkout.checkoutReference,
+    orderDocumentId: "order-1",
+    paymentDocumentId: "payment-1",
+    idempotencyKey: "payment:payment-1:settle",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+  };
+  await service.finalize(exact);
+  assert.equal((await service.finalize(exact)).idempotent, true);
+  for (const changed of [
+    { orderDocumentId: "order-2" },
+    { paymentDocumentId: "payment-2" },
+    { idempotencyKey: "payment:payment-2:settle" },
+  ]) {
+    await assert.rejects(
+      service.finalize({ ...exact, ...changed }),
+      /binding|idempotency conflict/i,
+    );
+  }
+  assert.equal(adapter.checkouts.get(checkout.checkoutReference).orderDocumentId, "order-1");
+  assert.equal(adapter.checkouts.get(checkout.checkoutReference).settlementKey, exact.idempotencyKey);
+});
+
 test("redemption failure leaves no paid fulfillable order and compensates stock and credit", async () => {
   const { adapter, service } = fixture({ failRedeem: true });
   const checkout = await service.reserve(reserve);

@@ -2,27 +2,43 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import lifecycleModule from "./payment-lifecycles-factory.cjs";
+import writeGuardModule from "./payment-write-guard.cjs";
 
 const { createPaymentLifecycles } = lifecycleModule;
+const { withPaymentWriteAccess } = writeGuardModule;
 
 const expectedMoney = { amountMinor: 10000, currency: "RON" };
-const lifecycleFor = (existing = expectedMoney) => createPaymentLifecycles(async () => existing);
+const rawLifecycleFor = (existing = expectedMoney) =>
+  createPaymentLifecycles(async () => existing);
+const lifecycleFor = (existing = expectedMoney) => {
+  const raw = rawLifecycleFor(existing);
+  return Object.fromEntries(Object.entries(raw).map(([name, handler]) => [
+    name,
+    (...args) => withPaymentWriteAccess(() => handler(...args)),
+  ]));
+};
 
-test("validates expected and received money when a payment is created", () => {
-  const lifecycles = lifecycleFor();
-  assert.doesNotThrow(() => lifecycles.beforeCreate({ params: { data: { ...expectedMoney } } }));
-  assert.doesNotThrow(() => lifecycles.beforeCreate({ params: { data: {
+test("validates expected and received money when an authorized payment is created", async () => {
+  const lifecycles = rawLifecycleFor();
+  assert.throws(
+    () => lifecycles.beforeCreate({ params: { data: { ...expectedMoney } } }),
+    /payment operations service/i,
+  );
+  assert.doesNotThrow(() => withPaymentWriteAccess(
+    () => lifecycles.beforeCreate({ params: { data: { ...expectedMoney } } }),
+  ));
+  assert.doesNotThrow(() => withPaymentWriteAccess(() => lifecycles.beforeCreate({ params: { data: {
     ...expectedMoney, receivedAmountMinor: 10000, receivedCurrency: "EUR",
-  } } }));
-  assert.throws(() => lifecycles.beforeCreate({ params: { data: {
+  } } })));
+  assert.throws(() => withPaymentWriteAccess(() => lifecycles.beforeCreate({ params: { data: {
     amountMinor: -1, currency: "RON",
-  } } }), /amountMinor/);
-  assert.throws(() => lifecycles.beforeCreate({ params: { data: {
+  } } })), /amountMinor/);
+  assert.throws(() => withPaymentWriteAccess(() => lifecycles.beforeCreate({ params: { data: {
     ...expectedMoney, receivedAmountMinor: 10000,
-  } } }), /received/);
-  assert.throws(() => lifecycles.beforeCreate({ params: { data: {
+  } } })), /received/);
+  assert.throws(() => withPaymentWriteAccess(() => lifecycles.beforeCreate({ params: { data: {
     ...expectedMoney, receivedAmountMinor: Number.MAX_SAFE_INTEGER + 1, receivedCurrency: "RON",
-  } } }), /amountMinor/);
+  } } })), /amountMinor/);
 });
 
 test("validates every createMany payment row", () => {
@@ -85,4 +101,16 @@ test("payment identity, target, expected money, expiry, and snapshots are immuta
       /immutable/i,
     );
   }
+});
+
+test("direct update and delete lifecycle mutations are denied outside payment operations", async () => {
+  const lifecycles = rawLifecycleFor();
+  await assert.rejects(
+    () => lifecycles.beforeUpdate({ params: { data: { status: "paid" }, where: { id: 1 } } }),
+    /payment operations service/i,
+  );
+  assert.throws(
+    () => lifecycles.beforeDelete({ params: { where: { id: 1 } } }),
+    /payment operations service/i,
+  );
 });

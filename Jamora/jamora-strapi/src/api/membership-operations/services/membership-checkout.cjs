@@ -121,14 +121,27 @@ function createMembershipCheckoutService(adapter, env = process.env) {
 
     async finalize(input) {
       enabled(env);
+      if (typeof input.idempotencyKey !== "string" || !input.idempotencyKey.trim()) {
+        throw new Error("idempotencyKey is required.");
+      }
       return adapter.transaction(async (tx) => {
         const checkout = await tx.lockCheckout(input.checkoutReference);
         if (!checkout || checkout.customerDocumentId !== input.customerDocumentId) {
           throw new Error("Checkout not found.");
         }
         if (checkout.status === "paid" && checkout.orderDocumentId) {
+          if (checkout.settlementKey !== input.idempotencyKey ||
+              (input.orderDocumentId &&
+               input.orderDocumentId !== checkout.orderDocumentId)) {
+            throw new Error("Checkout settlement idempotency conflict.");
+          }
           const replayOrder = await tx.lockOrder(checkout.orderDocumentId);
-          if (!replayOrder || replayOrder.customerDocumentId !== checkout.customerDocumentId) {
+          if (!replayOrder ||
+              replayOrder.customerDocumentId !== checkout.customerDocumentId ||
+              replayOrder.checkoutReference !== checkout.checkoutReference ||
+              replayOrder.status !== "paid" ||
+              (input.paymentDocumentId &&
+               replayOrder.paymentDocumentId !== input.paymentDocumentId)) {
             throw new Error("Checkout order binding is invalid.");
           }
           return { checkout, order: replayOrder, idempotent: true };
@@ -147,7 +160,11 @@ function createMembershipCheckoutService(adapter, env = process.env) {
         if (input.orderDocumentId && (!order ||
             order.customerDocumentId !== checkout.customerDocumentId ||
             order.checkoutReference !== checkout.checkoutReference ||
-            order.status !== "paid")) throw new Error("Paid checkout order not found.");
+            order.status !== "paid" ||
+            (input.paymentDocumentId &&
+             order.paymentDocumentId !== input.paymentDocumentId))) {
+          throw new Error("Paid checkout order not found.");
+        }
         const membership = await tx.lockMembership(checkout.membershipDocumentId);
         const credit = await tx.lockCreditReservation(checkout.checkoutReference);
         if (!membership || membership.customerDocumentId !== checkout.customerDocumentId ||
@@ -184,8 +201,21 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             membershipDocumentId: membership.documentId,
             membershipSnapshot,
           });
-          await tx.setCheckoutStatus(checkout.checkoutReference, "paid", order.documentId);
-          return { checkout, order: updated };
+          await tx.setCheckoutStatus(
+            checkout.checkoutReference,
+            "paid",
+            order.documentId,
+            input.idempotencyKey,
+          );
+          return {
+            checkout: {
+              ...checkout,
+              status: "paid",
+              orderDocumentId: order.documentId,
+              settlementKey: input.idempotencyKey,
+            },
+            order: updated,
+          };
         } catch (error) {
           await tx.releaseStock(checkout.items);
           await tx.releaseCredits(credit);
@@ -449,8 +479,8 @@ function strapiTx(strapi, query, withTrx, trx) {
         data: { status: "failed", nonFulfillable: true, failureReason: reason },
       }));
     },
-    setCheckoutStatus: (reference, status, orderDocumentId) => checkoutQ.update(withTrx(trx, {
-      where: { checkoutReference: reference }, data: { status, orderDocumentId },
+    setCheckoutStatus: (reference, status, orderDocumentId, settlementKey) => checkoutQ.update(withTrx(trx, {
+      where: { checkoutReference: reference }, data: { status, orderDocumentId, settlementKey },
     })),
   };
 }
@@ -515,8 +545,8 @@ function memoryTx(adapter, options) {
     async failOrder(id, reason) {
       Object.assign(adapter.orders.get(id), { status: "failed", nonFulfillable: true, failureReason: reason });
     },
-    async setCheckoutStatus(id, status, orderDocumentId) {
-      Object.assign(adapter.checkouts.get(id), { status, orderDocumentId });
+    async setCheckoutStatus(id, status, orderDocumentId, settlementKey) {
+      Object.assign(adapter.checkouts.get(id), { status, orderDocumentId, settlementKey });
     },
   };
 }

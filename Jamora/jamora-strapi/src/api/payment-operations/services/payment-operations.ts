@@ -7,12 +7,17 @@ import {
   createPaymentSubjectSettlement,
   createStrapiPaymentAdapter,
   deriveAuthoritativePaymentSubject,
+  lockMembershipCheckoutOrder,
 } from "./payment-transaction.cjs";
+const { withPaymentWriteAccess } = require(
+  "../../payment/content-types/payment/payment-write-guard.cjs",
+);
 
 const uid = {
   payment: "api::payment.payment",
   order: "api::order.order",
   reservation: "api::stock-reservation.stock-reservation",
+  checkout: "api::membership-checkout.membership-checkout",
 };
 
 export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
@@ -55,15 +60,44 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
     }));
   }
 
+  async function lockCheckout(reference: string, trx: any) {
+    const query = strapi.db.query(uid.checkout);
+    const candidate = await query.findOne(withTransaction(trx, {
+      where: { checkoutReference: reference },
+    }));
+    if (!candidate) return null;
+    await strapi.db.connection("membership_checkouts")
+      .where({ document_id: candidate.documentId })
+      .transacting(trx)
+      .forUpdate()
+      .first();
+    return query.findOne(withTransaction(trx, {
+      where: { documentId: candidate.documentId },
+    }));
+  }
+
   async function resolvePaymentSubject(input: any, context: { trx: any; now: Date }) {
-    const subject = input.subjectType === "membership"
-      ? await lockDocument(
+    let subject;
+    if (input.subjectType === "membership") {
+      subject = await lockDocument(
           "api::membership.membership",
           "memberships",
           input.subjectId,
           context.trx,
-        )
-      : await lockDocument(uid.order, "orders", input.subjectId, context.trx);
+        );
+    } else if (input.checkoutReference) {
+      ({ order: subject } = await lockMembershipCheckoutOrder({
+        lockCheckout: (reference: string) => lockCheckout(reference, context.trx),
+        lockOrder: (documentId: string) =>
+          lockDocument(uid.order, "orders", documentId, context.trx),
+      }, {
+        checkoutReference: input.checkoutReference,
+        orderDocumentId: input.subjectId,
+        customerDocumentId: input.customerDocumentId,
+      }));
+    } else {
+      subject = await lockDocument(uid.order, "orders", input.subjectId, context.trx);
+    }
     const reservation = input.guestCheckoutCapability
       ? await lockReservation(input.guestCheckoutCapability, context.trx)
       : null;
@@ -91,6 +125,12 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
       purpose: payment.purpose,
       customerDocumentId: payment.customerDocumentId,
       currency: payment.currency,
+      ...(payment.priceSnapshot?.membershipCheckout?.checkoutReference
+        ? {
+            checkoutReference:
+              payment.priceSnapshot.membershipCheckout.checkoutReference,
+          }
+        : {}),
       ...(!payment.customerDocumentId && payment.ownerDocumentId?.startsWith("guest:")
         ? { guestCheckoutCapability: payment.ownerDocumentId.slice("guest:".length) }
         : {}),
@@ -177,23 +217,24 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
   return {
     async prepareBankTransfer(input: any) {
       assertPaymentsEnabled();
-      return operations(beneficiaryFromEnv(process.env)).prepareBankTransfer(input);
+      return withPaymentWriteAccess(() =>
+        operations(beneficiaryFromEnv(process.env)).prepareBankTransfer(input));
     },
     recordBankReceipt(input: any) {
       assertPaymentsEnabled();
-      return operations().recordBankReceipt(input);
+      return withPaymentWriteAccess(() => operations().recordBankReceipt(input));
     },
     resolvePaymentMismatch(input: any) {
       assertPaymentsEnabled();
-      return operations().resolvePaymentMismatch(input);
+      return withPaymentWriteAccess(() => operations().resolvePaymentMismatch(input));
     },
     expireDuePayments(now = new Date(), limit = 100) {
       assertPaymentsEnabled();
-      return operations().expireDuePayments(now, limit);
+      return withPaymentWriteAccess(() => operations().expireDuePayments(now, limit));
     },
     settlePayment(input: any) {
       assertPaymentsEnabled();
-      return operations().settlePayment(input);
+      return withPaymentWriteAccess(() => operations().settlePayment(input));
     },
   } as any;
 });

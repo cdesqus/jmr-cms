@@ -1,3 +1,3 @@
-import { factories } from "@strapi/strapi";
+const service = require("./payment-service.cjs");
 
-export default factories.createCoreService("api::payment.payment");
+export default () => service;

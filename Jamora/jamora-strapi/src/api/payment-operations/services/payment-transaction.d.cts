@@ -22,6 +22,17 @@ export function deriveAuthoritativePaymentSubject(
   now?: Date,
 ): any;
 export function assertOrderPaymentBinding(order: any, payment: any): void;
+export function lockMembershipCheckoutOrder(
+  adapters: {
+    lockCheckout(reference: string): Promise<any>;
+    lockOrder(documentId: string): Promise<any>;
+  },
+  binding: {
+    checkoutReference: string;
+    orderDocumentId: string;
+    customerDocumentId?: string;
+  },
+): Promise<{ checkout: any; order: any }>;
 export function createPaymentSubjectSettlement(adapters: {
   activateMembership(input: any): Promise<any>;
   finalizeMembershipCheckout(input: any): Promise<any>;
