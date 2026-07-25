@@ -9,7 +9,7 @@ import {
   createMemoryMembershipCheckoutAdapter,
 } from "./services/membership-checkout.cjs";
 import { listCustomerMemberships } from "./services/membership-customer-projection.cjs";
-import { prepareMembershipPurchase } from "./services/membership-purchase.cjs";
+import { preparePhase1MembershipPurchase } from "./services/phase1-membership-purchase.cjs";
 import { createPhase1MembershipConfirmation } from "./services/phase1-membership-confirmation.cjs";
 import { assertMembershipEnabled } from "./services/membership-service-contract.cjs";
 
@@ -67,7 +67,7 @@ test("Phase 1 route and service fixture smoke", async () => {
       return plan;
     },
     preparePurchase: (customerDocumentId, planDocumentId, idempotencyKey, renewalOf) =>
-      prepareMembershipPurchase({
+      preparePhase1MembershipPurchase({
         findPlan: async (documentId) => plans.get(documentId) ?? null,
         findMembership: async (documentId) => purchaseMemberships.get(documentId) ?? null,
         findByPaymentReference: async (paymentDocumentId) =>

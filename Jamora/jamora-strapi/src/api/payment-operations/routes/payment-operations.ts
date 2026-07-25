@@ -37,6 +37,12 @@ export default {
       config: { auth: false },
     },
     {
+      method: "GET",
+      path: "/jamora/payments/status/:reference",
+      handler: "payment-operations.readPaymentStatus",
+      config: { auth: false },
+    },
+    {
       method: "POST",
       path: "/jamora/admin/payments/:documentId/receipt",
       handler: "payment-operations.recordBankReceipt",

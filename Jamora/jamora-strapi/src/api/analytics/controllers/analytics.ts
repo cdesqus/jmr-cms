@@ -5,6 +5,15 @@ import {
   legacyShippingAddressText,
   normalizeShippingAddressPayload,
 } from "../services/checkout";
+import {
+  pendingPaymentOrderFields,
+  phase1MockPaidOrderFields,
+} from "../services/payment-order.cjs";
+import {
+  pendingCustomerSessionInput,
+  pendingPaymentOrderBoundary,
+  phase1MockOrderAllowed,
+} from "../services/pending-payment-order-policy.cjs";
 
 const DEFAULT_COST_RATIO = 0.42;
 
@@ -616,7 +625,7 @@ async function decrementProductStock(items: any[], reference: string) {
   }
 }
 
-export default {
+const controller = {
   async visit(ctx) {
     const body = ctx.request.body ?? {};
     const path = asString(body.path, "/").slice(0, 500);
@@ -658,6 +667,12 @@ export default {
 
   async mockPaidOrder(ctx) {
     const body = ctx.request.body ?? {};
+    const pendingPayment = ctx.state?.jamoraPendingPayment === true;
+    if (!phase1MockOrderAllowed(process.env, pendingPayment)) {
+      ctx.status = 404;
+      ctx.body = { error: "Not found." };
+      return;
+    }
     const orderNumber = asString(body.orderNumber);
     if (!orderNumber) {
       ctx.status = 400;
@@ -666,7 +681,7 @@ export default {
     }
 
     const existing = await strapi.documents("api::order.order").findMany({
-      fields: ["documentId", "orderNumber"],
+      fields: ["documentId", "orderNumber", "status"],
       filters: { orderNumber: { $eq: orderNumber } },
       limit: 1,
     });
@@ -780,6 +795,15 @@ export default {
       Math.round(totalCents * (1 - (Number.isFinite(costRatio) ? costRatio : DEFAULT_COST_RATIO))),
     );
 
+    const priceSnapshot = createDemoPriceSnapshot(totalCents);
+    const modeFields: any = pendingPayment
+      ? pendingPaymentOrderFields({
+          customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
+          priceSnapshot,
+        })
+      : phase1MockPaidOrderFields(orderNumber);
+    modeFields.statusHistory = (modeFields.statusHistory as any[])
+      .map((event) => timelineEvent(event));
     const order = await strapi.documents("api::order.order").create({
       data: {
         orderNumber,
@@ -787,7 +811,6 @@ export default {
         carrier: asString(body.carrier, "Jamora EU Fulfilment"),
         customerName: asString(body.customer?.name),
         email: asString(body.customer?.email, "customer@example.com"),
-        status: "paid",
         currency: "eur",
         subtotalCents,
         shippingCents,
@@ -795,17 +818,8 @@ export default {
         promotionCode: promotionResult?.promotion?.code,
         totalCents,
         estimatedProfitCents,
-        stripeSessionId: asString(body.stripeSessionId, "mock-paid-checkout"),
-        invoiceNumber: orderNumber.replace(/^JMR-/, "INV-"),
         items,
-        statusHistory: [
-          timelineEvent({
-            type: "status",
-            status: "paid",
-            note: "Payment confirmed in test mode.",
-            actor: "Checkout",
-          }),
-        ],
+        ...modeFields,
         reservationToken,
         batchAllocations: reservedAllocations,
         fulfilmentChecklist: items.map((item) => ({
@@ -821,7 +835,6 @@ export default {
           ? {
               shippingAddress: addressResult.shippingAddress,
               anonymousSessionId: asString(body.anonymousSessionId) || undefined,
-              priceSnapshot: createDemoPriceSnapshot(totalCents),
             }
           : {}),
         trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
@@ -830,13 +843,15 @@ export default {
       },
     });
 
-    await decrementProductStock(items, orderNumber);
-    if (reservationToken) {
-      const consumed = await consumeReservation(reservationToken, orderNumber);
-      if ("error" in consumed) strapi.log.warn(consumed.error);
+    if (!pendingPayment) {
+      await decrementProductStock(items, orderNumber);
+      if (reservationToken) {
+        const consumed = await consumeReservation(reservationToken, orderNumber);
+        if ("error" in consumed) strapi.log.warn(consumed.error);
+      }
     }
 
-    if (promotionResult?.promotion?.documentId) {
+    if (!pendingPayment && promotionResult?.promotion?.documentId) {
       await (strapi.documents as any)("api::promotion.promotion").update({
         documentId: promotionResult.promotion.documentId,
         data: {
@@ -845,15 +860,54 @@ export default {
       });
     }
 
-    await logNotification({
-      recipient: asString(body.customer?.email, "customer@example.com"),
-      template: "order_confirmed",
-      subject: `Jamora order ${orderNumber} confirmed`,
-      orderNumber,
-      payload: { status: "paid", totalCents },
-    });
+    if (!pendingPayment) {
+      await logNotification({
+        recipient: asString(body.customer?.email, "customer@example.com"),
+        template: "order_confirmed",
+        subject: `Jamora order ${orderNumber} confirmed`,
+        orderNumber,
+        payload: { status: "paid", totalCents },
+      });
+    }
 
     ctx.body = { ok: true, order };
+  },
+
+  async pendingPaymentOrder(ctx) {
+    ctx.state ??= {};
+    const boundary = pendingPaymentOrderBoundary(
+      process.env,
+      ctx.get("x-jamora-storefront-secret"),
+    );
+    if (boundary) {
+      ctx.status = boundary.status;
+      ctx.body = { error: boundary.error };
+      return;
+    }
+    let session;
+    try {
+      session = pendingCustomerSessionInput(
+        ctx.get("x-jamora-customer-document-id"),
+        ctx.get("x-jamora-customer-session-version"),
+      );
+    } catch {
+      ctx.status = 401;
+      ctx.body = { error: "Invalid session." };
+      return;
+    }
+    if (session) {
+      const customer = await (
+        strapi.service("api::customer-auth.customer-auth") as any
+      ).findActiveSessionCustomer(session.documentId, session.sessionVersion);
+      if (!customer) {
+        ctx.status = 401;
+        ctx.body = { error: "Invalid session." };
+        return;
+      }
+      ctx.state.jamoraCustomerDocumentId = customer.documentId;
+    }
+    ctx.state.jamoraPendingPayment = true;
+    return controller.mockPaidOrder(ctx);
   },
 
   async validatePromotion(ctx) {
@@ -1642,3 +1696,5 @@ export default {
     ctx.body = { ok: true, content };
   },
 };
+
+export default controller;

@@ -11,11 +11,7 @@ async function prepareMembershipPurchase(adapter, input) {
     const existing = await adapter.findByPaymentReference(paymentDocumentId);
     if (!existing) return null;
     assertIdentity(existing, input, renewalOf);
-    const activation = await adapter.confirm({
-      membershipId: existing.documentId,
-      paymentDocumentId,
-    });
-    return { membership: activation.membership, paymentDocumentId, mockConfirmed: true };
+    return { membership: existing, paymentDocumentId };
   };
 
   const existing = await reconcile();
@@ -47,8 +43,7 @@ async function prepareMembershipPurchase(adapter, input) {
     if (winner) return winner;
     throw error;
   }
-  const activation = await adapter.confirm({ membershipId: membership.documentId, paymentDocumentId });
-  return { membership: activation.membership, paymentDocumentId, mockConfirmed: true };
+  return { membership, paymentDocumentId };
 }
 
 function assertIdentity(membership, input, renewalOf) {

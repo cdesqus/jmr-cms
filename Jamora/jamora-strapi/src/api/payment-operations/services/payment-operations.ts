@@ -20,6 +20,11 @@ const {
   createRoPayAuthenticatedLimiter,
 } = require("./ropay-authenticated-limiter.cjs");
 const { projectAdminPayments } = require("./payment-admin-projection.cjs");
+const { authorizePaymentStatus } = require("./payment-status.cjs");
+const {
+  assertReservationAllocationBinding,
+  settleOrdinaryOrder: settleOrdinaryOrderTransaction,
+} = require("./order-payment-settlement.cjs");
 const { withPaymentWriteAccess } = require(
   "../../payment/content-types/payment/payment-write-guard.cjs",
 );
@@ -29,6 +34,10 @@ const uid = {
   order: "api::order.order",
   reservation: "api::stock-reservation.stock-reservation",
   checkout: "api::membership-checkout.membership-checkout",
+  batch: "api::inventory-batch.inventory-batch",
+  movement: "api::inventory-movement.inventory-movement",
+  product: "api::product.product",
+  promotion: "api::promotion.promotion",
 };
 
 export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
@@ -169,43 +178,183 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
   }
 
   async function settleOrdinaryOrder(payment: any, trx: any) {
-    const documentId = payment.orderDocumentId || payment.subjectId;
-    await strapi.db.connection("orders")
-      .where({ document_id: documentId })
-      .transacting(trx)
-      .forUpdate()
-      .first();
-    const orderQuery = strapi.db.query(uid.order);
-    const order = await orderQuery.findOne({
-      where: { documentId },
-      transacting: trx,
-    } as any);
-    if (!order) throw new Error("Payment order not found.");
-    assertOrderPaymentBinding(order, payment);
-    if (order.status === "paid" && order.paymentDocumentId === payment.documentId) {
-      return { order, idempotent: true };
+    const query = (uidValue: string) => strapi.db.query(uidValue);
+
+    async function consumeOrderReservation(
+      token: string,
+      orderNumber: string,
+      orderItems: any[],
+    ) {
+      const reservationQuery = query(uid.reservation);
+      const candidate = await reservationQuery.findOne(withTransaction(trx, {
+        where: { token },
+      }));
+      if (!candidate) throw new Error("Payment order reservation is unavailable.");
+      await strapi.db.connection("stock_reservations")
+        .where({ document_id: candidate.documentId })
+        .transacting(trx)
+        .forUpdate()
+        .first();
+      const reservation = await reservationQuery.findOne(withTransaction(trx, {
+        where: { documentId: candidate.documentId },
+      }));
+      if (!reservation || reservation.status !== "reserved") {
+        throw new Error("Payment order reservation cannot be consumed.");
+      }
+      const allocations = Array.isArray(reservation.allocations)
+        ? [...reservation.allocations]
+        : [];
+      if (allocations.length === 0) {
+        throw new Error("Payment order reservation allocation is invalid.");
+      }
+      assertReservationAllocationBinding(allocations, orderItems);
+      allocations.sort((left, right) =>
+        String(left?.batchDocumentId ?? "").localeCompare(
+          String(right?.batchDocumentId ?? ""),
+        ));
+      for (const allocation of allocations) {
+        const batchDocumentId = String(allocation?.batchDocumentId ?? "");
+        const quantity = Number(allocation?.qty);
+        if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+          throw new Error("Payment order reservation allocation is invalid.");
+        }
+        if (!batchDocumentId) {
+          if (
+            allocation?.batchNumber !== "LEGACY-STOCK"
+            || typeof allocation?.slug !== "string"
+            || !allocation.slug
+          ) {
+            throw new Error("Payment order reservation allocation is invalid.");
+          }
+          continue;
+        }
+        await strapi.db.connection("inventory_batches")
+          .where({ document_id: batchDocumentId })
+          .transacting(trx)
+          .forUpdate()
+          .first();
+        const batchQuery = query(uid.batch);
+        const batch = await batchQuery.findOne(withTransaction(trx, {
+          where: { documentId: batchDocumentId },
+        }));
+        if (
+          !batch
+          || !Number.isSafeInteger(batch.quantity)
+          || !Number.isSafeInteger(batch.reservedQuantity)
+          || batch.quantity < quantity
+          || batch.reservedQuantity < quantity
+        ) {
+          throw new Error("Payment order reserved inventory is unavailable.");
+        }
+        const balanceAfter = batch.quantity - quantity;
+        await batchQuery.update(withTransaction(trx, {
+          where: { documentId: batchDocumentId },
+          data: {
+            quantity: balanceAfter,
+            reservedQuantity: batch.reservedQuantity - quantity,
+            status: balanceAfter === 0 ? "depleted" : batch.status,
+          },
+        }));
+      }
+      await reservationQuery.update(withTransaction(trx, {
+        where: { documentId: reservation.documentId },
+        data: { status: "consumed", orderNumber },
+      }));
     }
-    if (order.status !== "pending") throw new Error("Payment order is not pending.");
-    const statusHistory = Array.isArray(order.statusHistory)
-      ? [...order.statusHistory]
-      : [];
-    statusHistory.push({
-      type: "status",
-      status: "paid",
-      note: "Payment confirmed by bank transfer reconciliation.",
-      actor: "Payment",
-      at: payment.paidAt,
-    });
-    const updated = await orderQuery.update({
-      where: { documentId },
-      data: {
-        status: "paid",
-        paymentDocumentId: payment.documentId,
-        statusHistory,
-      },
-      transacting: trx,
-    } as any);
-    return { order: updated, idempotent: false };
+
+    async function decrementOrderProducts(items: any[], reference: string) {
+      const quantities = new Map<string, number>();
+      for (const item of items) {
+        const slug = typeof item?.slug === "string" ? item.slug.trim() : "";
+        const quantity = Number(item?.qty);
+        if (!slug || !Number.isSafeInteger(quantity) || quantity <= 0) {
+          throw new Error("Payment order inventory item is invalid.");
+        }
+        const total = (quantities.get(slug) ?? 0) + quantity;
+        if (!Number.isSafeInteger(total)) {
+          throw new Error("Payment order inventory quantity is invalid.");
+        }
+        quantities.set(slug, total);
+      }
+      for (const [slug, quantity] of [...quantities].sort(([left], [right]) =>
+        left.localeCompare(right))) {
+        const productQuery = query(uid.product);
+        const candidate = await productQuery.findOne(withTransaction(trx, {
+          where: { slug },
+        }));
+        if (!candidate?.documentId) {
+          throw new Error(`Payment order product ${slug} is unavailable.`);
+        }
+        await strapi.db.connection("products")
+          .where({ document_id: candidate.documentId })
+          .transacting(trx)
+          .forUpdate();
+        const product = await productQuery.findOne(withTransaction(trx, {
+          where: { documentId: candidate.documentId },
+        }));
+        if (!product || !Number.isSafeInteger(product.stock) || product.stock < quantity) {
+          throw new Error(`Payment order product ${slug} has insufficient stock.`);
+        }
+        const balanceAfter = product.stock - quantity;
+        await productQuery.update(withTransaction(trx, {
+          where: { documentId: product.documentId },
+          data: { stock: balanceAfter },
+        }));
+        await query(uid.movement).create(withTransaction(trx, {
+          data: {
+            productDocumentId: product.documentId,
+            productName: product.name || slug,
+            sku: product.sku || "",
+            slug,
+            delta: -quantity,
+            balanceAfter,
+            reason: "sale",
+            reference,
+            actor: "Payment",
+          },
+        }));
+      }
+    }
+
+    async function incrementPromotionUse(code: string) {
+      const promotionQuery = query(uid.promotion);
+      const candidate = await promotionQuery.findOne(withTransaction(trx, {
+        where: { code },
+      }));
+      if (!candidate?.documentId) return;
+      await strapi.db.connection("promotions")
+        .where({ document_id: candidate.documentId })
+        .transacting(trx)
+        .forUpdate()
+        .first();
+      const promotion = await promotionQuery.findOne(withTransaction(trx, {
+        where: { documentId: candidate.documentId },
+      }));
+      const usageCount = Number(promotion?.usageCount ?? 0);
+      if (!promotion) return;
+      if (!Number.isSafeInteger(usageCount) || usageCount < 0) {
+        throw new Error("Payment order promotion usage is invalid.");
+      }
+      await promotionQuery.update(withTransaction(trx, {
+        where: { documentId: promotion.documentId },
+        data: { usageCount: usageCount + 1 },
+      }));
+    }
+
+    return settleOrdinaryOrderTransaction({
+      lockOrder: (documentId: string) =>
+        lockDocument(uid.order, "orders", documentId, trx),
+      assertBinding: (order: any, currentPayment: any) =>
+        assertOrderPaymentBinding(order, currentPayment),
+      consumeReservation: consumeOrderReservation,
+      decrementProductStock: decrementOrderProducts,
+      incrementPromotionUse,
+      updateOrder: (documentId: string, data: any) =>
+        query(uid.order).update(withTransaction(trx, {
+          where: { documentId },
+          data,
+        })),
+    }, payment);
   }
 
   const settleSubject = createPaymentSubjectSettlement({
@@ -258,6 +407,16 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
 
   return {
     listAdminPayments,
+    async readPaymentStatus(input: any) {
+      assertPaymentsEnabled();
+      const payment = await strapi.db.query(uid.payment).findOne({
+        where: { paymentReference: input.paymentReference },
+      });
+      return authorizePaymentStatus(payment, {
+        customerDocumentId: input.customerDocumentId,
+        guestCheckoutCapability: input.guestCheckoutCapability,
+      });
+    },
     async prepareBankTransfer(input: any) {
       assertPaymentsEnabled();
       return withPaymentWriteAccess(() =>

@@ -116,6 +116,7 @@ async function run(ctx: any, action: () => Promise<unknown>) {
 }
 
 function safeTransfer(payment: any) {
+  const beneficiary = payment.priceSnapshot?.bankTransfer;
   return {
     method: payment.method,
     status: payment.status,
@@ -123,7 +124,13 @@ function safeTransfer(payment: any) {
     amountMinor: payment.amountMinor,
     currency: payment.currency,
     expiresAt: payment.expiresAt,
-    beneficiary: payment.priceSnapshot?.bankTransfer,
+    beneficiary: {
+      name: beneficiary?.name,
+      iban: beneficiary?.iban,
+      ...(typeof beneficiary?.bank === "string" && beneficiary.bank
+        ? { bank: beneficiary.bank }
+        : {}),
+    },
   };
 }
 
@@ -271,6 +278,21 @@ export default {
         guestCheckoutCapability: identity.guestCheckoutCapability,
       }),
     ));
+  },
+
+  async readPaymentStatus(ctx: any) {
+    const identity = await statusIdentity(ctx);
+    if (!identity) return;
+    await run(ctx, async () => {
+      const payment = await paymentService().readPaymentStatus({
+        paymentReference: text(ctx.params?.reference),
+        customerDocumentId: identity.customer?.documentId,
+        guestCheckoutCapability: identity.guestCheckoutCapability,
+      });
+      return payment.method === "bank_transfer"
+        ? safeTransfer(payment)
+        : safeRoPayStatus(payment);
+    });
   },
 
   async recordBankReceipt(ctx: any) {

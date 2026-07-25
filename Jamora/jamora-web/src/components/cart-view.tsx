@@ -7,6 +7,7 @@ import {
   createMockOrder,
   saveMockOrder,
   syncMockOrderToStrapi,
+  type MockOrder,
 } from "@/lib/mock-orders";
 import { formatEUR } from "@/lib/products";
 import { useCart } from "@/components/cart-context";
@@ -27,14 +28,34 @@ import {
   guestShippingCents,
 } from "@/lib/commerce/checkout.cjs";
 import { membershipCartProjection } from "@/lib/commerce/membership-checkout.cjs";
-
-const PAYMENTS = ["Card", "iDEAL", "Bancontact", "Klarna", "Apple Pay", "Google Pay"];
+import { PaymentMethodSelector } from "@/components/payment-method-selector";
+import { PaymentInstructions } from "@/components/payment-instructions";
+import type {
+  CustomerPaymentSnapshot,
+  PaymentMethod,
+} from "@/lib/payment-customer-policy.cjs";
+import {
+  checkoutAttempt,
+  paymentPreparationRequest,
+  pendingCheckoutOrderState,
+} from "@/lib/payment-customer-view.cjs";
 
 interface AppliedCoupon {
   code: string;
   name: string;
   discountCents: number;
   signature: string;
+}
+
+interface CheckoutAttempt {
+  signature: string;
+  key: string;
+  reservation?: {
+    reservationToken: string;
+    checkoutReference?: string;
+  };
+  order?: MockOrder;
+  preparedOrderDocumentId?: string;
 }
 
 const EMPTY_ADDRESS = normaliseRomanianAddress();
@@ -61,9 +82,24 @@ export function CartView({
   const [checkingCoupon, setCheckingCoupon] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
   const [membershipMode, setMembershipMode] = useState(false);
-  const membershipAttempt = useRef<{ signature: string; key: string } | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("bank_transfer");
+  const [payment, setPayment] = useState<CustomerPaymentSnapshot>();
+  const [paymentCapability, setPaymentCapability] = useState("");
+  const checkoutAttemptRef = useRef<CheckoutAttempt | null>(null);
 
   if (items.length === 0) {
+    if (payment) {
+      return (
+        <div className="mt-8">
+          <PaymentInstructions
+            key={payment.paymentReference}
+            reference={payment.paymentReference}
+            initialSnapshot={payment}
+            guestCheckoutCapability={paymentCapability}
+          />
+        </div>
+      );
+    }
     return (
       <div className="mt-8 rounded-xl border border-clay/70 bg-white/40 p-12 text-center">
         <p className="text-stone">Your cart is empty.</p>
@@ -181,86 +217,157 @@ export function CartView({
         };
       }
 
-      if (!membershipAttempt.current || membershipAttempt.current.signature !== cartSignature) {
-        membershipAttempt.current = { signature: cartSignature, key: crypto.randomUUID() };
-      }
-      const membershipAttemptKey = membershipAttempt.current.key;
-      const reservationResponse = await fetch("/api/jamora/inventory/reserve", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      const normalizedShippingAddress = structuredCheckoutEnabled
+        ? normaliseRomanianAddress(shippingAddress)
+        : undefined;
+      const attemptSignature = JSON.stringify({
+        cart: cartSignature,
+        membership: activeMembershipMode ? membership?.documentId : null,
+        customer: {
+          name: customer.name.trim(),
           email: customer.email.trim(),
-          ...(activeMembershipMode ? {
-            membershipCheckout: {
-              membershipDocumentId: membership.documentId,
-              idempotencyKey: membershipAttemptKey,
-            },
-          } : {}),
-          items: items.map((item) => ({
-            productId: item.product.id,
-            sku: item.product.sku,
-            slug: item.product.slug,
-            name: item.product.name,
-            qty: item.qty,
-            unitPriceCents: item.product.priceCents,
-            lineTotalCents: item.lineTotalCents,
-          })),
-        }),
+          address: normalizedShippingAddress ?? customer.address.trim(),
+        },
+        promotion: checkoutCoupon
+          ? [checkoutCoupon.code, checkoutCoupon.discountCents]
+          : null,
       });
-      const reservation = await reservationResponse.json().catch(() => ({}));
-      if (!reservationResponse.ok || !reservation.reservationToken) {
-        throw new Error(reservation.error ?? "Stock could not be reserved.");
+      checkoutAttemptRef.current = checkoutAttempt(
+        checkoutAttemptRef.current,
+        attemptSignature,
+        () => crypto.randomUUID(),
+      ) as CheckoutAttempt;
+      const attempt = checkoutAttemptRef.current;
+      const membershipAttemptKey = attempt.key;
+      let reservation = attempt.reservation;
+      if (!reservation) {
+        const reservationResponse = await fetch("/api/jamora/inventory/reserve", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email: customer.email.trim(),
+            ...(activeMembershipMode ? {
+              membershipCheckout: {
+                membershipDocumentId: membership.documentId,
+                idempotencyKey: membershipAttemptKey,
+              },
+            } : {}),
+            items: items.map((item) => ({
+              productId: item.product.id,
+              sku: item.product.sku,
+              slug: item.product.slug,
+              name: item.product.name,
+              qty: item.qty,
+              unitPriceCents: item.product.priceCents,
+              lineTotalCents: item.lineTotalCents,
+            })),
+          }),
+        });
+        const result = await reservationResponse.json().catch(() => ({}));
+        if (!reservationResponse.ok || !result.reservationToken) {
+          throw new Error(result.error ?? "Stock could not be reserved.");
+        }
+        reservation = {
+          reservationToken: result.reservationToken,
+          ...(result.checkoutReference
+            ? { checkoutReference: result.checkoutReference }
+            : {}),
+        };
+        attempt.reservation = reservation;
       }
       reservedCheckoutReference = activeMembershipMode
         ? reservation.checkoutReference
         : undefined;
 
-      const normalizedShippingAddress = structuredCheckoutEnabled
-        ? normaliseRomanianAddress(shippingAddress)
-        : undefined;
-      const order = createMockOrder({
-        items,
-        subtotalCents: activeMembershipMode ? 0 : subtotalCents,
-        shippingCents: activeMembershipMode ? membershipShipping : shipping,
-        discountCents: activeMembershipMode ? 0 : checkoutCoupon?.discountCents,
-        promotionCode: checkoutCoupon?.code,
-        reservationToken: reservation.reservationToken,
-        anonymousSessionId: structuredCheckoutEnabled
-          ? getOrCreateAnonymousSessionId(localStorage, () => crypto.randomUUID())
-          : undefined,
-        shippingAddress: normalizedShippingAddress,
-        customer: {
-          name: customer.name.trim(),
-          email: customer.email.trim(),
-          address: normalizedShippingAddress
-            ? formatRomanianAddress(normalizedShippingAddress)
-            : customer.address.trim(),
-        },
-      });
-      if (activeMembershipMode) {
-        Object.assign(order, {
-          membershipCheckout: {
-            checkoutReference: reservation.checkoutReference,
-            idempotencyKey: `${membershipAttemptKey}:finalize`,
+      let order = attempt.order;
+      if (!order) {
+        order = createMockOrder({
+          items,
+          subtotalCents: activeMembershipMode ? 0 : subtotalCents,
+          shippingCents: activeMembershipMode ? membershipShipping : shipping,
+          discountCents: activeMembershipMode ? 0 : checkoutCoupon?.discountCents,
+          promotionCode: checkoutCoupon?.code,
+          reservationToken: reservation.reservationToken,
+          anonymousSessionId: structuredCheckoutEnabled
+            ? getOrCreateAnonymousSessionId(localStorage, () => crypto.randomUUID())
+            : undefined,
+          shippingAddress: normalizedShippingAddress,
+          customer: {
+            name: customer.name.trim(),
+            email: customer.email.trim(),
+            address: normalizedShippingAddress
+              ? formatRomanianAddress(normalizedShippingAddress)
+              : customer.address.trim(),
           },
         });
+        if (activeMembershipMode) {
+          Object.assign(order, {
+            membershipCheckout: {
+              checkoutReference: reservation.checkoutReference,
+              idempotencyKey: `${membershipAttemptKey}:finalize`,
+            },
+          });
+        } else {
+          Object.assign(order, pendingCheckoutOrderState(order.id, order.createdAt));
+        }
+        attempt.order = order;
       }
-      const synced = await syncMockOrderToStrapi(order);
-      if (!synced.ok) throw new Error(synced.error);
+      if (activeMembershipMode) {
+        const synced = await syncMockOrderToStrapi(order);
+        if (!synced.ok) throw new Error(synced.error);
+      } else {
+        if (!attempt.preparedOrderDocumentId) {
+          const orderResponse = await fetch("/api/jamora/orders/pending-payment", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(order),
+          });
+          const preparedOrder = await orderResponse.json().catch(() => ({})) as {
+            order?: { documentId?: string };
+            error?: string;
+          };
+          if (!orderResponse.ok || !preparedOrder.order?.documentId) {
+            throw new Error(preparedOrder.error ?? "Order could not be prepared.");
+          }
+          attempt.preparedOrderDocumentId = preparedOrder.order.documentId;
+        }
+        const request = paymentPreparationRequest(paymentMethod, {
+          idempotencyKey: `payment:${order.id}:${paymentMethod}`,
+          subjectType: "order",
+          subjectId: attempt.preparedOrderDocumentId,
+          purpose: "order",
+          currency: "RON",
+          guestCheckoutCapability: reservation.reservationToken,
+        });
+        const paymentResponse = await fetch(request.endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request.body),
+        });
+        const snapshot = await paymentResponse.json().catch(() => ({}));
+        if (!paymentResponse.ok) {
+          throw new Error("Payment instructions could not be prepared.");
+        }
+        setPayment(snapshot as CustomerPaymentSnapshot);
+        setPaymentCapability(reservation.reservationToken);
+      }
       saveMockOrder(order);
-      membershipAttempt.current = null;
+      checkoutAttemptRef.current = null;
       clear();
-      router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
+      if (activeMembershipMode) {
+        router.push(`/checkout/success?order=${encodeURIComponent(order.id)}`);
+      }
     } catch (caught) {
-      if (activeMembershipMode && reservedCheckoutReference && membershipAttempt.current) {
-        await fetch("/api/jamora/membership/checkout-release", {
+      if (activeMembershipMode && reservedCheckoutReference && checkoutAttemptRef.current) {
+        const released = await fetch("/api/jamora/membership/checkout-release", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             checkoutReference: reservedCheckoutReference,
-            idempotencyKey: `${membershipAttempt.current.key}:release`,
+            idempotencyKey: `${checkoutAttemptRef.current.key}:release`,
           }),
         }).catch(() => undefined);
+        if (released?.ok) checkoutAttemptRef.current = null;
       }
       setError(caught instanceof Error ? caught.message : "Checkout could not be completed.");
     } finally {
@@ -415,6 +522,14 @@ export function CartView({
           />
         ) : null}
 
+        {!activeMembershipMode ? (
+          <PaymentMethodSelector
+            value={paymentMethod}
+            onChange={setPaymentMethod}
+            disabled={checkingOut}
+          />
+        ) : null}
+
         <div className="mt-5 space-y-3 border-t border-clay/60 pt-5">
           <label className="block text-xs font-semibold uppercase text-stone">
             Full name
@@ -467,22 +582,17 @@ export function CartView({
           disabled={checkingOut}
           className="mt-5 w-full rounded-full bg-terracotta px-6 py-3 text-sm font-semibold text-cream hover:bg-terracotta-deep disabled:opacity-60"
         >
-          {checkingOut ? "Reserving stock..." : "Mock paid checkout"}
+          {checkingOut
+            ? "Preparing payment…"
+            : activeMembershipMode
+              ? "Redeem membership credits"
+              : "Continue to payment"}
         </button>
-        <p className="mt-2 text-center text-xs text-stone">
-          Test mode: order is marked as paid without charging a card.
-        </p>
-
-        <div className="mt-4 flex flex-wrap justify-center gap-2">
-          {PAYMENTS.map((p) => (
-            <span
-              key={p}
-              className="rounded border border-clay bg-cream px-2 py-1 text-[0.65rem] font-medium text-stone"
-            >
-              {p}
-            </span>
-          ))}
-        </div>
+        {!activeMembershipMode ? (
+          <p className="mt-2 text-center text-xs text-stone">
+            Your order remains pending until the server verifies payment.
+          </p>
+        ) : null}
         <p className="mt-3 text-center text-[0.7rem] text-stone">
           Prices include VAT. A compliant VAT invoice is issued with every order.
         </p>

@@ -3,7 +3,6 @@ import {
   createMembershipTransactions,
   createStrapiMembershipAdapter,
 } from "./membership-transaction.cjs";
-import { createPhase1MembershipConfirmation } from "./phase1-membership-confirmation.cjs";
 import { normalisePlan } from "./membership-domain.cjs";
 import {
   assertMembershipEnabled,
@@ -27,7 +26,6 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
   const documents = (name: string) => (strapi.documents as any)(name);
   const transactions = createMembershipTransactions(createStrapiMembershipAdapter(strapi));
   const checkout = createMembershipCheckoutService(createStrapiMembershipCheckoutAdapter(strapi));
-  const confirmation = createPhase1MembershipConfirmation(transactions.activateMembership);
 
   async function findMembership(documentId: string) {
     return documents(uid.membership).findOne({ documentId });
@@ -86,7 +84,6 @@ export default factories.createCoreService(uid.membership as any, ({ strapi }) =
           return rows[0] ?? null;
         },
         createMembership: (data: any) => documents(uid.membership).create({ data }),
-        confirm: confirmation.confirm,
         randomUUID: () => crypto.randomUUID(),
       }, {
         customerDocumentId,

@@ -660,6 +660,97 @@ test("browser return is authenticated, read-only, and exposes status only", asyn
   }
 });
 
+test("customer status route is read-only for manual and RoPay and returns safe snapshots", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    storefront: process.env.JAMORA_STOREFRONT_API_SECRET,
+  };
+  process.env.PAYMENTS_ENABLED = "true";
+  process.env.JAMORA_STOREFRONT_API_SECRET = "storefront-secret";
+  const reads = [];
+  installStrapi({
+    async readPaymentStatus(input) {
+      reads.push(input);
+      return input.paymentReference === "JMR-BANK-1"
+        ? {
+            method: "bank_transfer",
+            status: "awaiting_payment",
+            paymentReference: "JMR-BANK-1",
+            amountMinor: 5_000,
+            currency: "EUR",
+            expiresAt: "2026-07-28T12:10:00.000Z",
+            priceSnapshot: {
+              bankTransfer: {
+                name: "Jamora SRL",
+                iban: "RO49AAAA1B31007593840000",
+                bank: "Jamora Bank",
+                internalAccountId: "never-expose",
+              },
+              internal: "never-expose",
+            },
+            settlementKey: "never-expose",
+          }
+        : {
+            method: "ropay",
+            status: "paid",
+            paymentReference: "JMR-ROPAY-1",
+            amountMinor: 10_000,
+            currency: "RON",
+            expiresAt: "2026-07-25T12:10:00.000Z",
+            providerReference: "never-expose",
+            priceSnapshot: { ropay: { sessionToken: "never-expose" } },
+          };
+    },
+  }, { documentId: "customer-1", sessionVersion: 4 });
+  try {
+    const bank = context({}, {
+      "x-jamora-storefront-secret": "storefront-secret",
+      "x-jamora-checkout-capability": "reservation-1",
+    }, { reference: "JMR-BANK-1" });
+    bank.request.method = "GET";
+    await controller.readPaymentStatus(bank);
+    assert.deepEqual(bank.body, {
+      method: "bank_transfer",
+      status: "awaiting_payment",
+      paymentReference: "JMR-BANK-1",
+      amountMinor: 5_000,
+      currency: "EUR",
+      expiresAt: "2026-07-28T12:10:00.000Z",
+      beneficiary: {
+        name: "Jamora SRL",
+        iban: "RO49AAAA1B31007593840000",
+        bank: "Jamora Bank",
+      },
+    });
+    assert.deepEqual(reads[0], {
+      paymentReference: "JMR-BANK-1",
+      customerDocumentId: undefined,
+      guestCheckoutCapability: "reservation-1",
+    });
+
+    const ropay = context({}, {
+      "x-jamora-storefront-secret": "storefront-secret",
+      "x-jamora-customer-document-id": "customer-1",
+      "x-jamora-customer-session-version": "4",
+    }, { reference: "JMR-ROPAY-1" });
+    ropay.request.method = "GET";
+    await controller.readPaymentStatus(ropay);
+    assert.deepEqual(ropay.body, {
+      method: "ropay",
+      status: "paid",
+      paymentReference: "JMR-ROPAY-1",
+      amountMinor: 10_000,
+      currency: "RON",
+      expiresAt: "2026-07-25T12:10:00.000Z",
+    });
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.storefront === undefined) delete process.env.JAMORA_STOREFRONT_API_SECRET;
+    else process.env.JAMORA_STOREFRONT_API_SECRET = previous.storefront;
+  }
+});
+
 test("routes separate provider mutation from browser read-only return", () => {
   const byHandler = Object.fromEntries(
     routes.routes.map((route) => [route.handler, route]),
@@ -668,12 +759,17 @@ test("routes separate provider mutation from browser read-only return", () => {
     [byHandler["payment-operations.prepareRoPay"].method,
       byHandler["payment-operations.handleRoPayCallback"].method,
       byHandler["payment-operations.verifyRoPayStatus"].method,
-      byHandler["payment-operations.readRoPayReturn"].method],
-    ["POST", "POST", "POST", "GET"],
+      byHandler["payment-operations.readRoPayReturn"].method,
+      byHandler["payment-operations.readPaymentStatus"].method],
+    ["POST", "POST", "POST", "GET", "GET"],
   );
   assert.match(
     byHandler["payment-operations.readRoPayReturn"].path,
     /:reference$/,
+  );
+  assert.equal(
+    byHandler["payment-operations.readPaymentStatus"].path,
+    "/jamora/payments/status/:reference",
   );
 });
 

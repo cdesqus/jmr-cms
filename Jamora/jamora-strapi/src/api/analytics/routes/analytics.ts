@@ -18,6 +18,12 @@ export default {
     },
     {
       method: "POST",
+      path: "/jamora/orders/pending-payment",
+      handler: "analytics.pendingPaymentOrder",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
       path: "/jamora/inventory/reserve",
       handler: "analytics.reserveStock",
       config: { auth: false },
