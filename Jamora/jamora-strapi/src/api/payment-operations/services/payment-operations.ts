@@ -147,6 +147,17 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
     const reservation = reservationToken
       ? await lockReservation(reservationToken, context.trx)
       : null;
+    if (input.subjectType === "order" &&
+        process.env.SHIPPING_ENABLED === "true") {
+      await (
+        strapi.service("api::shipping-operations.shipping-quote") as any
+      ).validateLockedSubject({
+        order: subject,
+        checkout,
+        now: context.now,
+        trx: context.trx,
+      });
+    }
     return deriveAuthoritativePaymentSubject(
       authoritativeInput,
       subject,

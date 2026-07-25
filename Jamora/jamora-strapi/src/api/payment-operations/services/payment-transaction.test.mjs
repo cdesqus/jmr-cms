@@ -787,6 +787,10 @@ test("membership checkout/order locking always acquires checkout before order", 
           shippingMinor: 495,
           totalMinor: 495,
         },
+        shippingSnapshot: {
+          shippingAddressText: "Legacy address",
+          shippingAddress: { city: "Cluj" },
+        },
       };
     },
     async lockOrder(documentId) {
@@ -802,6 +806,8 @@ test("membership checkout/order locking always acquires checkout before order", 
         discountCents: 0,
         shippingCents: 495,
         totalCents: 495,
+        shippingAddressText: "Legacy address",
+        shippingAddress: { city: "Cluj" },
       };
     },
   }, {

@@ -164,7 +164,9 @@ function assertMembershipCheckoutOrderAggregate(checkout, order, binding) {
       !same(order.items, checkout.items) ||
       (order.shippingAddressText ?? "") !==
         (checkout.shippingSnapshot?.shippingAddressText ?? "") ||
-      !same(order.shippingAddress, checkout.shippingSnapshot?.shippingAddress)) {
+      !same(order.shippingAddress, checkout.shippingSnapshot?.shippingAddress) ||
+      (checkout.shippingSnapshot?.quote &&
+       !same(order.shippingSnapshot, checkout.shippingSnapshot))) {
     throw new Error("Membership checkout order totals or currency binding is invalid.");
   }
   return money;

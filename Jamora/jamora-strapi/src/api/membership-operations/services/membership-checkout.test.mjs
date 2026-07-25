@@ -4,6 +4,7 @@ import {
   createMemoryMembershipCheckoutAdapter,
   createMembershipCheckoutService,
 } from "./membership-checkout.cjs";
+import { quoteShipping } from "../../shipping-operations/services/shipping-domain.cjs";
 
 const membership = {
   documentId: "membership-1",
@@ -16,7 +17,7 @@ const membership = {
 };
 const product = {
   documentId: "product-1", slug: "beras-kencur",
-  priceCents: 3000, creditCost: 1, stock: 2,
+  priceCents: 3000, creditCost: 1, stock: 2, netWeight: "80 g",
 };
 const reserve = {
   customerDocumentId: "customer-1",
@@ -29,13 +30,117 @@ const reserve = {
 };
 
 function fixture(extra = {}) {
+  const { env = {}, ...adapterOptions } = extra;
   const adapter = createMemoryMembershipCheckoutAdapter({
     memberships: [membership],
     products: [product],
-    ...extra,
+    ...adapterOptions,
   });
-  return { adapter, service: createMembershipCheckoutService(adapter, { MEMBERSHIP_ENABLED: "true" }) };
+  return {
+    adapter,
+    service: createMembershipCheckoutService(adapter, {
+      MEMBERSHIP_ENABLED: "true",
+      ...env,
+    }),
+  };
 }
+
+test("shipping-enabled membership checkout uses only the selected authoritative RON quote", async () => {
+  const shippingAddress = {
+    recipient: "Ana Popescu",
+    phone: "+40 712 345 678",
+    countryCode: "RO",
+    subdivisionCode: "CJ",
+    locality: "Cluj-Napoca",
+    postalCode: "400001",
+    street: "Strada Memorandumului",
+    building: "10",
+    unit: "",
+    instructions: "",
+  };
+  const quoteSecret = "membership-shipping-secret-at-least-32-bytes";
+  const selection = quoteShipping({
+    address: shippingAddress,
+    items: reserve.items,
+    products: [product],
+  }, { secret: quoteSecret, now: reserve.now })[1];
+  const { service } = fixture({
+    env: {
+      SHIPPING_ENABLED: "true",
+      SHIPPING_QUOTE_SECRET: quoteSecret,
+    },
+  });
+
+  const checkout = await service.reserve({
+    ...reserve,
+    shippingSelection: selection,
+    shippingSnapshot: {
+      customerName: "Ana Popescu",
+      email: "ana@example.com",
+      shippingAddressText: "forged text",
+      shippingAddress,
+      estimatedDelivery: "forged estimate",
+    },
+    shippingMinor: 1,
+    currency: "EUR",
+  });
+
+  assert.equal(checkout.currency, "RON");
+  assert.equal(checkout.totals.shippingMinor, selection.amountMinor);
+  assert.equal(checkout.totals.totalMinor, selection.amountMinor);
+  assert.equal(checkout.shippingSnapshot.quote.quoteId, selection.quoteId);
+  assert.equal(checkout.shippingSnapshot.quote.currency, "RON");
+  assert.deepEqual(checkout.shippingSnapshot.shippingAddress, shippingAddress);
+  assert.match(checkout.shippingSnapshot.shippingAddressText, /Strada Memorandumului 10/);
+  assert.deepEqual(checkout.shippingSnapshot.estimatedDelivery, selection.estimate);
+});
+
+test("shipping-enabled membership checkout rejects forged, expired, or replay-changed selection", async () => {
+  const shippingAddress = {
+    recipient: "Ana Popescu",
+    countryCode: "RO",
+    subdivisionCode: "CJ",
+    locality: "Cluj-Napoca",
+    postalCode: "400001",
+    street: "Strada Memorandumului",
+    building: "10",
+  };
+  const quoteSecret = "membership-shipping-secret-at-least-32-bytes";
+  const selection = quoteShipping({
+    address: shippingAddress,
+    items: reserve.items,
+    products: [product],
+  }, { secret: quoteSecret, now: reserve.now })[0];
+  const make = () => fixture({
+    env: {
+      SHIPPING_ENABLED: "true",
+      SHIPPING_QUOTE_SECRET: quoteSecret,
+    },
+  }).service;
+  await assert.rejects(make().reserve({
+    ...reserve,
+    shippingSelection: { ...selection, amountMinor: 1 },
+    shippingSnapshot: { shippingAddress },
+  }), /shipping quote is invalid/i);
+  await assert.rejects(make().reserve({
+    ...reserve,
+    now: new Date(selection.expiresAt),
+    shippingSelection: selection,
+    shippingSnapshot: { shippingAddress },
+  }), /shipping quote expired/i);
+
+  const service = make();
+  await service.reserve({
+    ...reserve,
+    shippingSelection: selection,
+    shippingSnapshot: { shippingAddress },
+  });
+  await assert.rejects(service.reserve({
+    ...reserve,
+    shippingSelection: { ...selection, service: "express" },
+    shippingSnapshot: { shippingAddress },
+  }), /idempotency conflict|shipping quote is invalid/i);
+});
 
 test("persists authoritative customer, membership, stock, credit, and totals binding", async () => {
   const { adapter, service } = fixture();
@@ -87,6 +192,30 @@ test("prepares one pending order from authoritative checkout bindings", async ()
     first.order.documentId,
   );
   assert.equal(adapter.creditReservations.get(checkout.checkoutReference).status, "reserved");
+});
+
+test("feature-off pending order replay accepts a pre-shipping order without a copied snapshot", async () => {
+  const { service } = fixture();
+  const checkout = await service.reserve({
+    ...reserve,
+    shippingSnapshot: {
+      shippingAddressText: "Legacy address",
+      shippingAddress: { city: "Cluj" },
+    },
+  });
+  const input = {
+    customerDocumentId: checkout.customerDocumentId,
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "legacy-order",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+  };
+  const first = await service.preparePendingOrder(input);
+  delete first.order.shippingSnapshot;
+
+  const replay = await service.preparePendingOrder(input);
+
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.order.documentId, first.order.documentId);
 });
 
 test("pending order preparation rejects cross-customer and expired checkouts", async () => {

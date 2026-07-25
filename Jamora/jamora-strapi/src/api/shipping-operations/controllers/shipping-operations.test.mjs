@@ -25,10 +25,12 @@ async function withEnvironment(values, callback) {
   }
 }
 
-test("address routes expose only the two checkout operations", () => {
+test("shipping operations expose only address assistance and quote selection", () => {
   assert.deepEqual(routes.routes.map(({ method, path, handler }) => ({ method, path, handler })), [
     { method: "POST", path: "/jamora/address/suggest", handler: "shipping-operations.suggestAddress" },
     { method: "POST", path: "/jamora/address/assess", handler: "shipping-operations.assessAddress" },
+    { method: "POST", path: "/jamora/shipping/quotes", handler: "shipping-operations.quoteShipping" },
+    { method: "POST", path: "/jamora/shipping/select", handler: "shipping-operations.selectShippingQuote" },
   ]);
 });
 
@@ -81,4 +83,150 @@ test("assess route returns manual DTO plus separate required errors and warnings
       warnings: ["locality does not match subdivisionCode"],
     });
   });
+});
+
+test("shipping quote routes require the exact gate and return only safe quote fields", async () => {
+  const originalStrapi = globalThis.strapi;
+  const calls = [];
+  globalThis.strapi = {
+    service(uid) {
+      assert.equal(uid, "api::shipping-operations.shipping-quote");
+      return {
+        async quoteShipping(input) {
+          calls.push(input);
+          return [{
+            quoteId: `shq_${"A".repeat(43)}`,
+            carrier: "jamora-mock",
+            service: "standard",
+            amountMinor: 2090,
+            currency: "RON",
+            estimate: { minimumDays: 2, maximumDays: 3 },
+            quotedAt: "2026-07-25T10:00:00.000Z",
+            expiresAt: "2026-07-25T10:15:00.000Z",
+            addressDigest: "must-not-leak",
+            itemsDigest: "must-not-leak",
+            totalWeightGrams: 90,
+            zone: "regional",
+          }];
+        },
+      };
+    },
+  };
+  try {
+    await withEnvironment({
+      SHIPPING_ENABLED: "TRUE",
+      JAMORA_STOREFRONT_API_SECRET: "secret",
+    }, async () => {
+      const hidden = context();
+      await controller.quoteShipping(hidden);
+      assert.equal(hidden.status, 404);
+    });
+    await withEnvironment({
+      SHIPPING_ENABLED: "true",
+      JAMORA_STOREFRONT_API_SECRET: "secret",
+    }, async () => {
+      const ctx = context({
+        body: {
+          address: { locality: "Cluj-Napoca" },
+          items: [{ slug: "energy", qty: 1, weightGrams: 1 }],
+        },
+        headers: {
+          "x-jamora-storefront-secret": "secret",
+          "x-jamora-checkout-capability": "guest-capability",
+        },
+      });
+      await controller.quoteShipping(ctx);
+      assert.deepEqual(ctx.body, {
+        quotes: [{
+          quoteId: `shq_${"A".repeat(43)}`,
+          carrier: "jamora-mock",
+          service: "standard",
+          amountMinor: 2090,
+          currency: "RON",
+          estimate: { minimumDays: 2, maximumDays: 3 },
+          quotedAt: "2026-07-25T10:00:00.000Z",
+          expiresAt: "2026-07-25T10:15:00.000Z",
+        }],
+      });
+      assert.equal(calls[0].guestCheckoutCapability, "guest-capability");
+      assert.equal(calls[0].items[0].weightGrams, 1);
+    });
+  } finally {
+    globalThis.strapi = originalStrapi;
+  }
+});
+
+test("shipping selection binds verified identity and projects an idempotent safe snapshot", async () => {
+  const originalStrapi = globalThis.strapi;
+  let selected;
+  globalThis.strapi = {
+    service(uid) {
+      if (uid === "api::customer-auth.customer-auth") {
+        return {
+          findActiveSessionCustomer: async () => ({
+            documentId: "customer-1",
+          }),
+        };
+      }
+      assert.equal(uid, "api::shipping-operations.shipping-quote");
+      return {
+        async selectShippingQuote(input) {
+          selected = input;
+          return {
+            idempotent: true,
+            snapshot: {
+              quoteId: `shq_${"B".repeat(43)}`,
+              carrier: "jamora-mock",
+              service: "express",
+              amountMinor: 3890,
+              currency: "RON",
+              estimate: { minimumDays: 1, maximumDays: 2 },
+              quotedAt: "2026-07-25T10:00:00.000Z",
+              expiresAt: "2026-07-25T10:15:00.000Z",
+              addressDigest: "must-not-leak",
+              itemsDigest: "must-not-leak",
+              totalWeightGrams: 90,
+              zone: "regional",
+            },
+          };
+        },
+      };
+    },
+  };
+  try {
+    await withEnvironment({
+      SHIPPING_ENABLED: "true",
+      JAMORA_STOREFRONT_API_SECRET: "secret",
+    }, async () => {
+      const ctx = context({
+        body: {
+          subjectType: "order",
+          subjectId: "order-1",
+          selection: { quoteId: `shq_${"B".repeat(43)}` },
+        },
+        headers: {
+          "x-jamora-storefront-secret": "secret",
+          "x-jamora-customer-document-id": "customer-1",
+          "x-jamora-customer-session-version": "2",
+        },
+      });
+      await controller.selectShippingQuote(ctx);
+      assert.equal(selected.customerDocumentId, "customer-1");
+      assert.deepEqual(ctx.body, {
+        idempotent: true,
+        shipping: {
+          quoteId: `shq_${"B".repeat(43)}`,
+          carrier: "jamora-mock",
+          service: "express",
+          amountMinor: 3890,
+          currency: "RON",
+          estimate: { minimumDays: 1, maximumDays: 2 },
+          quotedAt: "2026-07-25T10:00:00.000Z",
+          expiresAt: "2026-07-25T10:15:00.000Z",
+        },
+      });
+    });
+  } finally {
+    globalThis.strapi = originalStrapi;
+  }
 });

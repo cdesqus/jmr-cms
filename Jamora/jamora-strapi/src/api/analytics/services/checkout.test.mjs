@@ -5,10 +5,87 @@ import {
   computeLegacyPricing,
   computeAuthoritativePricing,
   computePaymentOrderPricing,
+  applyAuthoritativeRonShipping,
   createDemoPriceSnapshot,
   legacyShippingAddressText,
   normalizeShippingAddressPayload,
 } from "./checkout.ts";
+
+test("authoritative RON shipping replaces fixed checkout delivery without browser money authority", () => {
+  const pricing = computeAuthoritativePricing({
+    body: {
+      items: [{ slug: "tea", qty: 1 }],
+      subtotalCents: 1,
+      shippingCents: 1,
+      discountCents: 1,
+    },
+    products: [{
+      documentId: "p1",
+      slug: "tea",
+      sku: "TEA",
+      name: "Tea",
+      priceCents: 3000,
+    }],
+    discountCents: 500,
+  });
+  const shipping = {
+    quoteId: `shq_${"A".repeat(43)}`,
+    carrier: "jamora-mock",
+    service: "standard",
+    amountMinor: 2090,
+    currency: "RON",
+    estimate: { minimumDays: 2, maximumDays: 3 },
+    quotedAt: "2026-07-25T10:00:00.000Z",
+    expiresAt: "2026-07-25T10:15:00.000Z",
+    addressDigest: "a".repeat(64),
+    itemsDigest: "b".repeat(64),
+    totalWeightGrams: 90,
+    zone: "regional",
+  };
+
+  assert.deepEqual(
+    applyAuthoritativeRonShipping(pricing, shipping, {
+      rate: "4.975000",
+      capturedAt: "2026-07-25T10:00:00.000Z",
+    }),
+    {
+      pricing: {
+        ...pricing,
+        shippingCents: 420,
+        totalCents: 2920,
+      },
+      priceSnapshot: {
+        reference: { amountMinor: 2920, currency: "EUR" },
+        charge: { amountMinor: 14528, currency: "RON" },
+        rate: "4.975000",
+        source: "demo-config",
+        capturedAt: "2026-07-25T10:00:00.000Z",
+        shipping,
+      },
+    },
+  );
+});
+
+test("authoritative RON shipping requires a safe signed RON snapshot", () => {
+  const pricing = {
+    items: [],
+    subtotalCents: 1000,
+    shippingCents: 495,
+    discountCents: 0,
+    totalCents: 1495,
+  };
+  for (const shipping of [
+    null,
+    { amountMinor: -1, currency: "RON" },
+    { amountMinor: 100, currency: "EUR" },
+    { amountMinor: 100, currency: "RON", quoteId: "forged" },
+  ]) {
+    assert.throws(
+      () => applyAuthoritativeRonShipping(pricing, shipping),
+      /shipping snapshot/i,
+    );
+  }
+});
 
 test("legacy shippingAddress.address remains a text address", () => {
   assert.deepEqual(

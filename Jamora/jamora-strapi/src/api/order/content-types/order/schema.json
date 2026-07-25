@@ -43,6 +43,7 @@
     "itemsSummary": { "type": "text" },
     "shippingAddressText": { "type": "text" },
     "shippingAddress": { "type": "json" },
+    "shippingSnapshot": { "type": "json" },
     "priceSnapshot": { "type": "json" },
     "paymentDocumentId": { "type": "string" },
     "membershipDocumentId": { "type": "string" },

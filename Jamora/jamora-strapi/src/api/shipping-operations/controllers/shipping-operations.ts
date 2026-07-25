@@ -25,6 +25,12 @@ function enabled(ctx: any) {
     : fail(ctx, 404, "Not found.");
 }
 
+function shippingEnabled(ctx: any) {
+  return process.env.SHIPPING_ENABLED === "true"
+    ? true
+    : fail(ctx, 404, "Not found.");
+}
+
 function isJsonRequest(ctx: any) {
   if (ctx.request?.is?.("application/json")) return true;
   return fail(ctx, 415, "JSON request required.");
@@ -140,9 +146,42 @@ function safeAssessment(assessment: any) {
   };
 }
 
+function safeQuote(quote: any) {
+  return {
+    quoteId: quote.quoteId,
+    carrier: quote.carrier,
+    service: quote.service,
+    amountMinor: quote.amountMinor,
+    currency: quote.currency,
+    estimate: quote.estimate,
+    quotedAt: quote.quotedAt,
+    expiresAt: quote.expiresAt,
+  };
+}
+
 function guarded(ctx: any) {
   if (!enabled(ctx) || !isJsonRequest(ctx) || !withinRateLimit(ctx)) return null;
   return requestBody(ctx);
+}
+
+function shippingGuarded(ctx: any) {
+  if (!shippingEnabled(ctx) || !isJsonRequest(ctx) || !withinRateLimit(ctx)) return null;
+  return requestBody(ctx);
+}
+
+async function run(ctx: any, action: () => Promise<unknown>) {
+  try {
+    ctx.body = await action();
+  } catch (caught) {
+    const error = caught instanceof Error ? caught : new Error("Shipping operation failed.");
+    if (/not found/i.test(error.message)) ctx.status = 404;
+    else if (caught instanceof TypeError || /\brequired\b|\binvalid\b/i.test(error.message)) {
+      ctx.status = 400;
+    } else {
+      ctx.status = 409;
+    }
+    ctx.body = { error: error.message };
+  }
 }
 
 export default {
@@ -166,5 +205,43 @@ export default {
       return fail(ctx, 400, "Structured address required.");
     }
     ctx.body = safeAssessment(assessRomanianAddress(body.address));
+  },
+
+  async quoteShipping(ctx: any) {
+    const body = shippingGuarded(ctx);
+    const identity = body ? await checkoutIdentity(ctx, body) : null;
+    if (!body || !identity) return;
+    await run(ctx, async () => ({
+      quotes: (await (
+        strapi.service("api::shipping-operations.shipping-quote") as any
+      ).quoteShipping({
+        address: body.address,
+        items: body.items,
+        ...identity,
+        now: new Date(),
+      })).map(safeQuote),
+    }));
+  },
+
+  async selectShippingQuote(ctx: any) {
+    const body = shippingGuarded(ctx);
+    const identity = body ? await checkoutIdentity(ctx, body) : null;
+    if (!body || !identity) return;
+    await run(ctx, async () => {
+      const result = await (
+        strapi.service("api::shipping-operations.shipping-quote") as any
+      ).selectShippingQuote({
+        subjectType: body.subjectType,
+        subjectId: body.subjectId,
+        selection: body.selection,
+        address: body.address,
+        ...identity,
+        now: new Date(),
+      });
+      return {
+        idempotent: result.idempotent === true,
+        shipping: safeQuote(result.snapshot),
+      };
+    });
   },
 };

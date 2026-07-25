@@ -210,7 +210,76 @@ function createDemoPriceSnapshot(
   };
 }
 
+function decimalRate(value: unknown) {
+  const rate = string(value, process.env.DEMO_EUR_RON_RATE ?? DEFAULT_DEMO_EUR_RON_RATE);
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(rate);
+  if (!match) throw new TypeError("DEMO_EUR_RON_RATE must be a positive decimal");
+  const decimals = match[2] ?? "";
+  const denominator = BigInt(10) ** BigInt(decimals.length);
+  const numerator = BigInt(match[1]) * denominator + BigInt(decimals || "0");
+  if (numerator <= BigInt(0)) throw new TypeError("DEMO_EUR_RON_RATE must be positive");
+  return { rate, numerator, denominator };
+}
+
+function applyAuthoritativeRonShipping(
+  pricing: {
+    items: unknown[];
+    subtotalCents: number;
+    shippingCents: number;
+    discountCents: number;
+    totalCents: number;
+  },
+  shipping: any,
+  options: { rate?: string; capturedAt?: string } = {},
+) {
+  if (!shipping ||
+      !Number.isSafeInteger(shipping.amountMinor) ||
+      shipping.amountMinor < 0 ||
+      shipping.currency !== "RON" ||
+      typeof shipping.quoteId !== "string" ||
+      !/^shq_[A-Za-z0-9_-]{43}$/.test(shipping.quoteId)) {
+    throw new TypeError("Authoritative shipping snapshot is invalid");
+  }
+  if (!Number.isSafeInteger(pricing.subtotalCents) ||
+      !Number.isSafeInteger(pricing.discountCents) ||
+      pricing.subtotalCents < pricing.discountCents) {
+    throw new TypeError("Authoritative checkout pricing is invalid");
+  }
+  const parsed = decimalRate(options.rate);
+  const merchandiseEurMinor = pricing.subtotalCents - pricing.discountCents;
+  const shippingEurMinor = Number(
+    (BigInt(shipping.amountMinor) * parsed.denominator + parsed.numerator / BigInt(2)) /
+      parsed.numerator,
+  );
+  const merchandiseRonMinor = Number(
+    (BigInt(merchandiseEurMinor) * parsed.numerator + parsed.denominator / BigInt(2)) /
+      parsed.denominator,
+  );
+  const totalCents = merchandiseEurMinor + shippingEurMinor;
+  const chargeMinor = merchandiseRonMinor + shipping.amountMinor;
+  if (![shippingEurMinor, merchandiseRonMinor, totalCents, chargeMinor]
+      .every((value) => Number.isSafeInteger(value) && value >= 0)) {
+    throw new RangeError("Authoritative shipping total exceeds safe integer range");
+  }
+  return {
+    pricing: {
+      ...pricing,
+      shippingCents: shippingEurMinor,
+      totalCents,
+    },
+    priceSnapshot: {
+      reference: { amountMinor: totalCents, currency: "EUR" },
+      charge: { amountMinor: chargeMinor, currency: "RON" },
+      rate: parsed.rate,
+      source: "demo-config",
+      capturedAt: options.capturedAt ?? new Date().toISOString(),
+      shipping: structuredClone(shipping),
+    },
+  };
+}
+
 export {
+  applyAuthoritativeRonShipping,
   computeLegacyPricing,
   computeAuthoritativePricing,
   computePaymentOrderPricing,

@@ -1,5 +1,10 @@
 "use strict";
 
+const {
+  selectShippingQuote,
+  validateShippingSnapshot,
+} = require("../../shipping-operations/services/shipping-domain.cjs");
+
 function enabled(env) {
   if (env.MEMBERSHIP_ENABLED !== "true") throw new Error("Not found.");
 }
@@ -21,6 +26,46 @@ function same(left, right) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
+function shippingEnabled(env) {
+  return env.SHIPPING_ENABLED === "true";
+}
+
+function shippingSecret(env) {
+  return env.SHIPPING_QUOTE_SECRET || env.JAMORA_STOREFRONT_API_SECRET;
+}
+
+function formatShippingAddress(address) {
+  const unit = address.unit ? `, ap. ${address.unit}` : "";
+  const county = address.subdivisionCode ? `, ${address.subdivisionCode}` : "";
+  const phone = address.phone ? `\nTelefon: ${address.phone}` : "";
+  const instructions = address.instructions ? `\nInstrucțiuni: ${address.instructions}` : "";
+  return `${address.recipient}\n${address.street} ${address.building}${unit}\n` +
+    `${address.postalCode} ${address.locality}${county}\nRomania${phone}${instructions}`;
+}
+
+function publicQuoteFromSnapshot(snapshot) {
+  return {
+    quoteId: snapshot.quoteId,
+    carrier: snapshot.carrier,
+    service: snapshot.service,
+    amountMinor: snapshot.amountMinor,
+    currency: snapshot.currency,
+    estimate: snapshot.estimate,
+    quotedAt: snapshot.quotedAt,
+    expiresAt: snapshot.expiresAt,
+  };
+}
+
+function assertShippingReplay(checkout, input, env) {
+  if (!shippingEnabled(env)) return;
+  const quote = checkout.shippingSnapshot?.quote;
+  if (!quote ||
+      !same(publicQuoteFromSnapshot(quote), input.shippingSelection) ||
+      !same(checkout.shippingSnapshot?.shippingAddress, input.shippingSnapshot?.shippingAddress)) {
+    throw new Error("Checkout idempotency conflict.");
+  }
+}
+
 function pendingOrderMatchesCheckout(order, checkout) {
   const shipping = checkout.shippingSnapshot ?? {};
   return order?.status === "pending" &&
@@ -34,11 +79,32 @@ function pendingOrderMatchesCheckout(order, checkout) {
     order.totalCents === checkout.totals.totalMinor &&
     same(order.items, checkout.items) &&
     (order.shippingAddressText ?? "") === (shipping.shippingAddressText ?? "") &&
-    same(order.shippingAddress, shipping.shippingAddress);
+    same(order.shippingAddress, shipping.shippingAddress) &&
+    (!shipping.quote || same(order.shippingSnapshot, shipping));
 }
 
 function createMembershipCheckoutService(adapter, env = process.env) {
   const ttlSeconds = checkoutTtlSeconds(env.MEMBERSHIP_CHECKOUT_TTL_SECONDS);
+
+  async function revalidateShipping(tx, checkout, now) {
+    if (!shippingEnabled(env)) return checkout.shippingSnapshot;
+    const products = [];
+    for (const item of checkout.items ?? []) {
+      const product = await tx.lockProductBySlug(item.slug);
+      if (!product) throw new Error("Shipping snapshot binding changed.");
+      products.push(product);
+    }
+    validateShippingSnapshot({
+      snapshot: checkout.shippingSnapshot?.quote,
+      address: checkout.shippingSnapshot?.shippingAddress,
+      items: checkout.items,
+      products,
+    }, {
+      secret: shippingSecret(env),
+      now,
+    });
+    return checkout.shippingSnapshot;
+  }
 
   async function settleReserved(tx, checkout, status) {
     if (checkout.status !== "reserved") return { ...checkout, idempotent: true };
@@ -79,6 +145,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
               replay.idempotencyKey !== input.idempotencyKey) {
             throw new Error("Checkout idempotency conflict.");
           }
+          assertShippingReplay(replay, input, env);
           return replay;
         }
         const membership = await tx.lockMembership(input.membershipDocumentId);
@@ -91,6 +158,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
         let coveredMerchandiseMinor = 0;
         let creditsRequired = 0;
         const authoritativeItems = [];
+        const authoritativeProducts = [];
         for (const requested of input.items ?? []) {
           const qty = positive(requested.qty, "qty");
           const product = await tx.lockProductBySlug(requested.slug);
@@ -106,10 +174,41 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             productDocumentId: product.documentId, slug: product.slug,
             qty, unitPriceMinor, creditCost,
           });
+          authoritativeProducts.push(product);
         }
         if (!authoritativeItems.length) throw new Error("Cart is empty.");
         if (creditsRequired > membership.ledgerBalance) throw new Error("Insufficient credits.");
-        const shippingMinor = positive(await tx.quoteShipping(authoritativeItems), "shippingMinor");
+        let currency = "EUR";
+        let shippingSnapshot = input.shippingSnapshot ?? {};
+        let shippingMinor;
+        if (shippingEnabled(env)) {
+          const shippingAddress = shippingSnapshot.shippingAddress;
+          const selected = selectShippingQuote({
+            selection: input.shippingSelection,
+            address: shippingAddress,
+            items: authoritativeItems,
+            products: authoritativeProducts,
+          }, {
+            secret: shippingSecret(env),
+            now,
+          }).snapshot;
+          currency = "RON";
+          shippingMinor = selected.amountMinor;
+          shippingSnapshot = {
+            customerName: typeof shippingSnapshot.customerName === "string"
+              ? shippingSnapshot.customerName.trim()
+              : "",
+            email: typeof shippingSnapshot.email === "string"
+              ? shippingSnapshot.email.trim()
+              : "",
+            shippingAddressText: formatShippingAddress(shippingAddress),
+            shippingAddress: structuredClone(shippingAddress),
+            estimatedDelivery: structuredClone(selected.estimate),
+            quote: selected,
+          };
+        } else {
+          shippingMinor = positive(await tx.quoteShipping(authoritativeItems), "shippingMinor");
+        }
         await tx.reserveCredits({
           membershipDocumentId: membership.documentId,
           checkoutReference: input.checkoutReference,
@@ -120,18 +219,19 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           idempotencyKey: input.idempotencyKey,
           customerDocumentId: input.customerDocumentId,
           membershipDocumentId: membership.documentId,
-          currency: "EUR",
+          currency,
           items: authoritativeItems,
           totals: {
             merchandiseMinor: 0, coveredMerchandiseMinor, creditsRequired,
             shippingMinor, totalMinor: shippingMinor,
           },
-          shippingSnapshot: input.shippingSnapshot ?? {},
+          shippingSnapshot,
           status: "reserved",
           expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
         });
         });
       } catch (error) {
+        if (/idempotency conflict/i.test(error?.message)) throw error;
         const winner = await adapter.findCheckout?.(input.checkoutReference);
         if (winner && winner.customerDocumentId === input.customerDocumentId &&
             winner.membershipDocumentId === input.membershipDocumentId &&
@@ -158,6 +258,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           error.compensated = true;
           throw error;
         }
+        await revalidateShipping(tx, checkout, now);
         if (checkout.orderDocumentId) {
           const order = await tx.lockOrder(checkout.orderDocumentId);
           if (!pendingOrderMatchesCheckout(order, checkout)) {
@@ -213,6 +314,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           error.compensated = true;
           throw error;
         }
+        await revalidateShipping(tx, checkout, now);
         let order = input.orderDocumentId
           ? await tx.lockOrder(input.orderDocumentId)
           : null;
@@ -473,12 +575,15 @@ function strapiTx(strapi, query, withTrx, trx) {
     },
     async createPaidOrder(checkout, metadata) {
       const now = new Date();
+      const shipping = checkout.shippingSnapshot?.quote
+        ? checkout.shippingSnapshot
+        : metadata;
       return orderQ.create(withTrx(trx, { data: {
         orderNumber: metadata.orderNumber || `JMR-${now.getUTCFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
         trackingNumber: metadata.trackingNumber || "",
-        carrier: metadata.carrier || "Jamora EU Fulfilment",
-        customerName: metadata.customerName || "",
-        email: metadata.email,
+        carrier: shipping.quote?.carrier || metadata.carrier || "Jamora EU Fulfilment",
+        customerName: shipping.customerName || "",
+        email: shipping.email || metadata.email,
         customerDocumentId: checkout.customerDocumentId,
         checkoutReference: checkout.checkoutReference,
         status: "paid", currency: checkout.currency.toLowerCase(),
@@ -487,9 +592,10 @@ function strapiTx(strapi, query, withTrx, trx) {
         items: checkout.items,
         reservationToken: checkout.checkoutReference,
         itemsSummary: JSON.stringify(checkout.items, null, 2),
-        shippingAddressText: metadata.shippingAddressText || "",
-        shippingAddress: metadata.shippingAddress,
-        estimatedDelivery: metadata.estimatedDelivery,
+        shippingAddressText: shipping.shippingAddressText || "",
+        shippingAddress: shipping.shippingAddress,
+        shippingSnapshot: shipping,
+        estimatedDelivery: shipping.quote ? undefined : shipping.estimatedDelivery,
       } }));
     },
     async createPendingOrder(checkout, metadata) {
@@ -497,7 +603,7 @@ function strapiTx(strapi, query, withTrx, trx) {
       const shipping = checkout.shippingSnapshot ?? {};
       return orderQ.create(withTrx(trx, { data: {
         orderNumber: metadata.orderNumber || `JMR-${now.getUTCFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
-        trackingNumber: "", carrier: "Jamora EU Fulfilment",
+        trackingNumber: "", carrier: shipping.quote?.carrier || "Jamora EU Fulfilment",
         customerName: shipping.customerName || "",
         email: shipping.email,
         customerDocumentId: checkout.customerDocumentId,
@@ -511,7 +617,8 @@ function strapiTx(strapi, query, withTrx, trx) {
         itemsSummary: JSON.stringify(checkout.items, null, 2),
         shippingAddressText: shipping.shippingAddressText || "",
         shippingAddress: shipping.shippingAddress,
-        estimatedDelivery: shipping.estimatedDelivery,
+        shippingSnapshot: shipping,
+        estimatedDelivery: shipping.quote ? undefined : shipping.estimatedDelivery,
         priceSnapshot: {
           membershipCheckout: {
             checkoutReference: checkout.checkoutReference,
@@ -633,6 +740,7 @@ function memoryTx(adapter, options) {
         items: structuredClone(checkout.items),
         shippingAddressText: shipping.shippingAddressText || "",
         shippingAddress: structuredClone(shipping.shippingAddress),
+        shippingSnapshot: structuredClone(shipping),
         priceSnapshot: { membershipCheckout: {
           checkoutReference: checkout.checkoutReference,
           membershipDocumentId: checkout.membershipDocumentId,

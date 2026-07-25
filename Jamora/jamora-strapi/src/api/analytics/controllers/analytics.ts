@@ -1,4 +1,5 @@
 import {
+  applyAuthoritativeRonShipping,
   computePaymentOrderPricing,
   createDemoPriceSnapshot,
   legacyShippingAddressText,
@@ -703,7 +704,7 @@ const controller = {
         : [];
       products = requestedSlugs.length
         ? await strapi.documents("api::product.product").findMany({
-            fields: ["documentId", "slug", "sku", "name", "priceCents"],
+            fields: ["documentId", "slug", "sku", "name", "priceCents", "netWeight"],
             filters: { slug: { $in: requestedSlugs } },
             limit: requestedSlugs.length,
           })
@@ -749,9 +750,9 @@ const controller = {
       ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
       return;
     }
-    const { items, subtotalCents, shippingCents, discountCents, totalCents } = pricing;
     let addressResult;
-    if (structuredCheckoutEnabled) {
+    const shippingEnabled = process.env.SHIPPING_ENABLED === "true";
+    if (structuredCheckoutEnabled || shippingEnabled) {
       try {
         addressResult = normalizeShippingAddressPayload(
           body.shippingAddress,
@@ -771,6 +772,45 @@ const controller = {
         ),
       };
     }
+    let shippingSnapshot;
+    let priceSnapshot;
+    if (shippingEnabled) {
+      if (!pendingPayment) {
+        ctx.status = 409;
+        ctx.body = { error: "Authoritative shipping requires pending payment checkout." };
+        return;
+      }
+      try {
+        const selected = await (
+          strapi.service("api::shipping-operations.shipping-quote") as any
+        ).validateSelection({
+          selection: body.shippingSelection,
+          address: addressResult.shippingAddress,
+          items: pricing.items,
+          products,
+          now: new Date(),
+        });
+        const authoritative = applyAuthoritativeRonShipping(
+          pricing,
+          selected.snapshot,
+        );
+        pricing = authoritative.pricing;
+        priceSnapshot = authoritative.priceSnapshot;
+        shippingSnapshot = {
+          shippingAddress: addressResult.shippingAddress,
+          shippingAddressText: addressResult.shippingAddressText,
+          estimatedDelivery: selected.snapshot.estimate,
+          quote: selected.snapshot,
+        };
+      } catch (error) {
+        ctx.status = 409;
+        ctx.body = {
+          error: error instanceof Error ? error.message : "Invalid shipping quote.",
+        };
+        return;
+      }
+    }
+    const { items, subtotalCents, shippingCents, discountCents, totalCents } = pricing;
     let reservationToken;
     try {
       reservationToken = pendingPayment
@@ -821,7 +861,7 @@ const controller = {
       Math.round(totalCents * (1 - (Number.isFinite(costRatio) ? costRatio : DEFAULT_COST_RATIO))),
     );
 
-    const priceSnapshot = createDemoPriceSnapshot(totalCents);
+    priceSnapshot ??= createDemoPriceSnapshot(totalCents);
     const modeFields: any = pendingPayment
       ? pendingPaymentOrderFields({
           customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
@@ -834,7 +874,8 @@ const controller = {
       data: {
         orderNumber,
         trackingNumber: asString(body.trackingNumber),
-        carrier: asString(body.carrier, "Jamora EU Fulfilment"),
+        carrier: shippingSnapshot?.quote?.carrier ??
+          asString(body.carrier, "Jamora EU Fulfilment"),
         customerName: asString(body.customer?.name),
         email: asString(body.customer?.email, "customer@example.com"),
         currency: "eur",
@@ -857,7 +898,8 @@ const controller = {
         })),
         itemsSummary: JSON.stringify(items, null, 2),
         shippingAddressText: addressResult.shippingAddressText,
-        ...(structuredCheckoutEnabled
+        ...(shippingSnapshot ? { shippingSnapshot } : {}),
+        ...(structuredCheckoutEnabled || shippingEnabled
           ? {
               shippingAddress: addressResult.shippingAddress,
               anonymousSessionId: asString(body.anonymousSessionId) || undefined,
@@ -865,7 +907,7 @@ const controller = {
           : {}),
         trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
         deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
-        estimatedDelivery: body.estimatedDelivery,
+        estimatedDelivery: shippingEnabled ? undefined : body.estimatedDelivery,
       },
     });
 

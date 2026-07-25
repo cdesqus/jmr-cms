@@ -12,5 +12,17 @@ export default {
       handler: "shipping-operations.assessAddress",
       config: { auth: false },
     },
+    {
+      method: "POST",
+      path: "/jamora/shipping/quotes",
+      handler: "shipping-operations.quoteShipping",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
+      path: "/jamora/shipping/select",
+      handler: "shipping-operations.selectShippingQuote",
+      config: { auth: false },
+    },
   ],
 };
