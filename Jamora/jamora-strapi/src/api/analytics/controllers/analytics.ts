@@ -1,6 +1,5 @@
 import {
-  computeAuthoritativePricing,
-  computeLegacyPricing,
+  computePaymentOrderPricing,
   createDemoPriceSnapshot,
   legacyShippingAddressText,
   normalizeShippingAddressPayload,
@@ -12,8 +11,12 @@ import {
 import {
   pendingCustomerSessionInput,
   pendingPaymentOrderBoundary,
+  pendingPaymentReservationToken,
   phase1MockOrderAllowed,
 } from "../services/pending-payment-order-policy.cjs";
+import {
+  assertReservationAllocationBinding,
+} from "../../payment-operations/services/order-payment-settlement.cjs";
 
 const DEFAULT_COST_RATIO = 0.42;
 
@@ -691,9 +694,10 @@ const controller = {
     }
 
     const structuredCheckoutEnabled = process.env.STRUCTURED_CHECKOUT_ENABLED === "true";
+    const authoritativePricing = pendingPayment || structuredCheckoutEnabled;
     let products: any[] = [];
     let pricing;
-    if (structuredCheckoutEnabled) {
+    if (authoritativePricing) {
       const requestedSlugs = Array.isArray(body.items)
         ? [...new Set(body.items.map((item: any) => asString(item?.slug)).filter(Boolean))]
         : [];
@@ -704,15 +708,19 @@ const controller = {
             limit: requestedSlugs.length,
           })
         : [];
-      try {
-        pricing = computeAuthoritativePricing({ body, products, discountCents: 0 });
-      } catch (error) {
-        ctx.status = 400;
-        ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
-        return;
-      }
-    } else {
-      pricing = computeLegacyPricing(body, 0);
+    }
+    try {
+      pricing = computePaymentOrderPricing({
+        body,
+        products,
+        discountCents: 0,
+        pendingPayment,
+        structuredCheckoutEnabled,
+      });
+    } catch (error) {
+      ctx.status = 400;
+      ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
+      return;
     }
 
     const promotionResult = body.promotionCode
@@ -728,20 +736,18 @@ const controller = {
       ctx.body = { error: promotionResult.error };
       return;
     }
-    if (structuredCheckoutEnabled) {
-      try {
-        pricing = computeAuthoritativePricing({
-          body,
-          products,
-          discountCents: promotionResult?.discountCents ?? 0,
-        });
-      } catch (error) {
-        ctx.status = 400;
-        ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
-        return;
-      }
-    } else {
-      pricing = computeLegacyPricing(body, promotionResult?.discountCents ?? 0);
+    try {
+      pricing = computePaymentOrderPricing({
+        body,
+        products,
+        discountCents: promotionResult?.discountCents ?? 0,
+        pendingPayment,
+        structuredCheckoutEnabled,
+      });
+    } catch (error) {
+      ctx.status = 400;
+      ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
+      return;
     }
     const { items, subtotalCents, shippingCents, discountCents, totalCents } = pricing;
     let addressResult;
@@ -765,7 +771,18 @@ const controller = {
         ),
       };
     }
-    const reservationToken = asString(body.reservationToken);
+    let reservationToken;
+    try {
+      reservationToken = pendingPayment
+        ? pendingPaymentReservationToken(body.reservationToken)
+        : asString(body.reservationToken);
+    } catch (error) {
+      ctx.status = 409;
+      ctx.body = {
+        error: error instanceof Error ? error.message : "Stock reservation is required.",
+      };
+      return;
+    }
     let reservedAllocations: any[] = [];
     if (reservationToken) {
       await expireReservations();
@@ -782,6 +799,15 @@ const controller = {
       reservedAllocations = Array.isArray(reservations[0].allocations)
         ? reservations[0].allocations
         : [];
+      if (pendingPayment) {
+        try {
+          assertReservationAllocationBinding(reservedAllocations, items);
+        } catch {
+          ctx.status = 409;
+          ctx.body = { error: "Stock reservation does not match this order." };
+          return;
+        }
+      }
     }
 
     const storefrontUrl = (

@@ -8,6 +8,7 @@ import {
   createStrapiPaymentAdapter,
   deriveAuthoritativePaymentSubject,
   lockAuthoritativeOrderSubject,
+  paymentSubjectReservationToken,
 } from "./payment-transaction.cjs";
 const {
   createRoPayIntent,
@@ -23,6 +24,7 @@ const { projectAdminPayments } = require("./payment-admin-projection.cjs");
 const { authorizePaymentStatus } = require("./payment-status.cjs");
 const {
   assertReservationAllocationBinding,
+  nextPromotionUsage,
   settleOrdinaryOrder: settleOrdinaryOrderTransaction,
 } = require("./order-payment-settlement.cjs");
 const { withPaymentWriteAccess } = require(
@@ -137,8 +139,13 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         };
       }
     }
-    const reservation = input.guestCheckoutCapability
-      ? await lockReservation(input.guestCheckoutCapability, context.trx)
+    const reservationToken = paymentSubjectReservationToken(
+      input,
+      subject,
+      checkout,
+    );
+    const reservation = reservationToken
+      ? await lockReservation(reservationToken, context.trx)
       : null;
     return deriveAuthoritativePaymentSubject(
       authoritativeInput,
@@ -321,7 +328,9 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
       const candidate = await promotionQuery.findOne(withTransaction(trx, {
         where: { code },
       }));
-      if (!candidate?.documentId) return;
+      if (!candidate?.documentId) {
+        throw new Error("Payment order promotion is unavailable.");
+      }
       await strapi.db.connection("promotions")
         .where({ document_id: candidate.documentId })
         .transacting(trx)
@@ -330,14 +339,12 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
       const promotion = await promotionQuery.findOne(withTransaction(trx, {
         where: { documentId: candidate.documentId },
       }));
-      const usageCount = Number(promotion?.usageCount ?? 0);
-      if (!promotion) return;
-      if (!Number.isSafeInteger(usageCount) || usageCount < 0) {
-        throw new Error("Payment order promotion usage is invalid.");
+      if (!promotion) {
+        throw new Error("Payment order promotion is unavailable.");
       }
       await promotionQuery.update(withTransaction(trx, {
         where: { documentId: promotion.documentId },
-        data: { usageCount: usageCount + 1 },
+        data: { usageCount: nextPromotionUsage(promotion) },
       }));
     }
 

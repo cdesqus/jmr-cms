@@ -74,6 +74,25 @@ function validateGuestCheckoutCapability(reservation, input, now = new Date()) {
   return `guest:${capability}`;
 }
 
+function paymentSubjectReservationToken(input, subject, checkout) {
+  if (input?.subjectType !== "order" || checkout) return null;
+  return requiredText(
+    input.guestCheckoutCapability || subject?.reservationToken,
+    "order reservation token",
+  );
+}
+
+function validateOrderReservation(reservation, subject, now = new Date()) {
+  const token = requiredText(subject?.reservationToken, "order reservation token");
+  if (!reservation || reservation.token !== token || reservation.status !== "reserved") {
+    throw new Error("Order payment reservation is invalid.");
+  }
+  if (instant(reservation.expiresAt, "reservation expiry") <= instant(now, "now")) {
+    throw new Error("Order payment reservation expired.");
+  }
+  return iso(reservation.expiresAt, "reservation expiry");
+}
+
 function chargeFromSnapshot(snapshot, currency, fallbackAmount, fallbackCurrency) {
   for (const candidate of [snapshot?.charge, snapshot?.reference]) {
     if (candidate?.currency?.toUpperCase() === currency) {
@@ -200,6 +219,9 @@ function deriveAuthoritativePaymentSubject(
   }
   let ownerDocumentId;
   let subjectExpiresAt;
+  if (!checkout) {
+    subjectExpiresAt = validateOrderReservation(reservation, subject, now);
+  }
   if (input.customerDocumentId) {
     if (subject.customerDocumentId !== input.customerDocumentId) {
       throw new Error("Order payment subject not found.");
@@ -211,7 +233,6 @@ function deriveAuthoritativePaymentSubject(
         subject.checkoutReference !== reservation.token) {
       throw new Error("Guest checkout capability binding is invalid.");
     }
-    subjectExpiresAt = iso(reservation.expiresAt, "reservation expiry");
   }
   const checkoutMoney = checkout
     ? assertMembershipCheckoutOrderAggregate(checkout, subject, {
@@ -1160,6 +1181,7 @@ module.exports = {
   deriveAuthoritativePaymentSubject,
   lockAuthoritativeOrderSubject,
   lockMembershipCheckoutOrder,
+  paymentSubjectReservationToken,
   ttlSeconds,
   validateGuestCheckoutCapability,
 };

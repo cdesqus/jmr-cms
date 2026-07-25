@@ -33,6 +33,23 @@ function assertReservationAllocationBinding(allocations, orderItems) {
   }
 }
 
+function nextPromotionUsage(promotion) {
+  const usageCount = Number(promotion?.usageCount ?? 0);
+  const usageLimit = Number(promotion?.usageLimit ?? 0);
+  if (
+    !Number.isSafeInteger(usageCount)
+    || usageCount < 0
+    || !Number.isSafeInteger(usageLimit)
+    || usageLimit < 0
+  ) {
+    throw new Error("Payment order promotion usage is invalid.");
+  }
+  if (usageLimit > 0 && usageCount >= usageLimit) {
+    throw new Error("Payment order promotion usage limit was reached.");
+  }
+  return usageCount + 1;
+}
+
 async function settleOrdinaryOrder(adapter, payment) {
   const documentId = payment.orderDocumentId || payment.subjectId;
   const order = await adapter.lockOrder(documentId);
@@ -62,11 +79,10 @@ async function settleOrdinaryOrder(adapter, payment) {
     ? [...order.statusHistory]
     : [];
   statusHistory.push({
-    type: "status",
+    id: `evt-${payment.documentId}-paid`,
     status: "paid",
     note: "Payment confirmed by verified settlement.",
-    actor: "Payment",
-    at: payment.paidAt,
+    createdAt: payment.paidAt,
   });
   const updated = await adapter.updateOrder(documentId, {
     status: "paid",
@@ -79,5 +95,6 @@ async function settleOrdinaryOrder(adapter, payment) {
 
 module.exports = {
   assertReservationAllocationBinding,
+  nextPromotionUsage,
   settleOrdinaryOrder,
 };

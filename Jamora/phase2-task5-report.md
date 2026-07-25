@@ -21,3 +21,12 @@
 ## Cleanup
 
 - Restored generated Strapi `dist/` files and `.strapi-updater.json` after builds.
+
+## Independent-Findings Follow-up
+
+- Pending-payment orders now use the server product catalogue for product identity, unit prices, line totals, subtotal, shipping, discounts, and total even when `STRUCTURED_CHECKOUT_ENABLED` is off. Missing products fail closed, and a live opaque reservation is mandatory and must exactly cover the authoritative order items.
+- Signed-customer and guest ordinary payments now lock the order-bound reservation. Preparation inherits the reservation expiry, while preparation and settlement reject expired, consumed, released, missing, or mismatched reservations.
+- Promotion use is checked and incremented under its locked row during settlement. The configured usage cap is enforced transactionally, payment/order/inventory changes roll back when exhausted, and exact paid replay does not increment twice.
+- Paid timeline entries now use the safe `{ id, status, createdAt, note }` shape. The storefront normalizes and bounds server history before rendering so malformed timestamps or extra fields cannot break the timeline.
+- Follow-up verification: all 82 `jamora-web` tests and 229 `jamora-strapi` tests passed; web lint passed with the same two pre-existing `no-img-element` warnings; both production builds passed.
+- Generated Strapi `dist/` files and `.strapi-updater.json` were restored after the follow-up build. Docker was not run.

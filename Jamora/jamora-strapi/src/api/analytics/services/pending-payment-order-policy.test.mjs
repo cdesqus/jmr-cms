@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   phase1MockOrderAllowed,
+  pendingPaymentReservationToken,
   pendingCustomerSessionInput,
   pendingPaymentOrderBoundary,
 } from "./pending-payment-order-policy.cjs";
@@ -47,4 +48,13 @@ test("Phase 2 cannot invoke the Phase 1 paid-order adapter", () => {
   assert.equal(phase1MockOrderAllowed({ PAYMENTS_ENABLED: "false" }, false), true);
   assert.equal(phase1MockOrderAllowed({ PAYMENTS_ENABLED: "true" }, true), true);
   assert.equal(phase1MockOrderAllowed({ PAYMENTS_ENABLED: "true" }, false), false);
+});
+
+test("pending payment order requires an opaque stock reservation", () => {
+  assert.equal(
+    pendingPaymentReservationToken("  rsv_opaque-token  "),
+    "rsv_opaque-token",
+  );
+  assert.throws(() => pendingPaymentReservationToken(""), /reservation/i);
+  assert.throws(() => pendingPaymentReservationToken(123), /reservation/i);
 });

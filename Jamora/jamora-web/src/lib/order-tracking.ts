@@ -1,4 +1,5 @@
 import type { MockOrder, MockOrderStatus } from "@/lib/mock-orders";
+import { normalizeOrderTimeline } from "@/lib/order-timeline.cjs";
 
 interface StrapiTrackedOrder {
   documentId?: string;
@@ -83,7 +84,7 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
     createdAt: order.createdAt ?? new Date().toISOString(),
     estimatedDelivery: order.estimatedDelivery ?? new Date().toISOString(),
     emailConfirmationSent: true,
-    statusHistory: Array.isArray(order.statusHistory) ? order.statusHistory : [],
+    statusHistory: normalizeOrderTimeline(order.statusHistory, order.createdAt),
   };
 }
 

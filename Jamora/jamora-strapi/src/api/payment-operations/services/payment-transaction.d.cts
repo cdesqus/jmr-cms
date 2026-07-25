@@ -16,6 +16,11 @@ export function validateGuestCheckoutCapability(
   input: any,
   now?: Date,
 ): string;
+export function paymentSubjectReservationToken(
+  input: any,
+  subject: any,
+  checkout?: any,
+): string | null;
 export function deriveAuthoritativePaymentSubject(
   input: any,
   subject: any,

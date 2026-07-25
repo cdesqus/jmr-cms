@@ -39,8 +39,17 @@ function phase1MockOrderAllowed(env, pendingPayment) {
   return pendingPayment === true || env.PAYMENTS_ENABLED !== "true";
 }
 
+function pendingPaymentReservationToken(value) {
+  const token = typeof value === "string" ? value.trim() : "";
+  if (!token || token.length > 500) {
+    throw new Error("Stock reservation is required.");
+  }
+  return token;
+}
+
 module.exports = {
   pendingCustomerSessionInput,
   pendingPaymentOrderBoundary,
+  pendingPaymentReservationToken,
   phase1MockOrderAllowed,
 };

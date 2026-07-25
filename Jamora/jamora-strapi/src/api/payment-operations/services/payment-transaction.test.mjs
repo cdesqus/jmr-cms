@@ -12,6 +12,7 @@ import {
   deriveAuthoritativePaymentSubject,
   lockAuthoritativeOrderSubject,
   lockMembershipCheckoutOrder,
+  paymentSubjectReservationToken,
   validateGuestCheckoutCapability,
 } from "./payment-transaction.cjs";
 
@@ -114,6 +115,84 @@ test("authoritative preparation replay rejects a currency change", async () => {
   await assert.rejects(
     service.prepareBankTransfer({ ...requested, currency: "EUR" }),
     /idempotency conflict/i,
+  );
+});
+
+test("signed ordinary payment locks its order reservation and inherits its lifetime", async () => {
+  const reservation = {
+    token: "reservation-signed",
+    status: "reserved",
+    expiresAt: "2026-07-25T08:10:00.000Z",
+  };
+  const order = {
+    documentId: "order-signed",
+    customerDocumentId: "customer-1",
+    reservationToken: reservation.token,
+    status: "pending",
+    totalCents: 2_000,
+    currency: "eur",
+    priceSnapshot: {
+      reference: { amountMinor: 2_000, currency: "EUR" },
+      charge: { amountMinor: 10_000, currency: "RON" },
+    },
+  };
+  assert.equal(
+    paymentSubjectReservationToken({
+      subjectType: "order",
+      customerDocumentId: "customer-1",
+    }, order, null),
+    reservation.token,
+  );
+  const adapter = createMemoryPaymentAdapter({
+    resolvePaymentSubject: async (requested) =>
+      deriveAuthoritativePaymentSubject(requested, order, reservation, now),
+  });
+  const service = createPaymentTransactions(adapter, {
+    env: enabled,
+    beneficiary,
+  });
+  const payment = await service.prepareBankTransfer({
+    idempotencyKey: "signed-order-payment",
+    subjectType: "order",
+    subjectId: order.documentId,
+    customerDocumentId: "customer-1",
+    purpose: "order",
+    currency: "RON",
+    now,
+  });
+  assert.equal(payment.expiresAt, reservation.expiresAt);
+
+  for (const status of ["consumed", "released", "expired"]) {
+    assert.throws(
+      () => deriveAuthoritativePaymentSubject(
+        {
+          subjectType: "order",
+          subjectId: order.documentId,
+          customerDocumentId: "customer-1",
+          purpose: "order",
+          currency: "RON",
+        },
+        order,
+        { ...reservation, status },
+        now,
+      ),
+      /reservation/i,
+    );
+  }
+  assert.throws(
+    () => deriveAuthoritativePaymentSubject(
+      {
+        subjectType: "order",
+        subjectId: order.documentId,
+        customerDocumentId: "customer-1",
+        purpose: "order",
+        currency: "RON",
+      },
+      order,
+      { ...reservation, expiresAt: now.toISOString() },
+      now,
+    ),
+    /expired/i,
   );
 });
 

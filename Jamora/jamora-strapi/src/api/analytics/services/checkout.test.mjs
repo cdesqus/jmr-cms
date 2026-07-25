@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   computeLegacyPricing,
   computeAuthoritativePricing,
+  computePaymentOrderPricing,
   createDemoPriceSnapshot,
   legacyShippingAddressText,
   normalizeShippingAddressPayload,
@@ -92,6 +93,59 @@ test("authoritative product prices replace tampered browser totals", () => {
       discountCents: 0,
       totalCents: 6000,
     },
+  );
+});
+
+test("pending payments use authoritative prices even when structured checkout is off", () => {
+  const body = {
+    subtotalCents: 1,
+    shippingCents: 0,
+    items: [{
+      slug: "tea",
+      qty: 1,
+      unitPriceCents: 1,
+      lineTotalCents: 1,
+    }],
+  };
+  assert.deepEqual(
+    computePaymentOrderPricing({
+      body,
+      products: [{
+        documentId: "p1",
+        slug: "tea",
+        sku: "TEA",
+        name: "Tea",
+        priceCents: 3000,
+      }],
+      discountCents: 0,
+      pendingPayment: true,
+      structuredCheckoutEnabled: false,
+    }),
+    {
+      items: [{
+        productId: "p1",
+        slug: "tea",
+        sku: "TEA",
+        name: "Tea",
+        qty: 1,
+        unitPriceCents: 3000,
+        lineTotalCents: 3000,
+      }],
+      subtotalCents: 3000,
+      shippingCents: 495,
+      discountCents: 0,
+      totalCents: 3495,
+    },
+  );
+  assert.throws(
+    () => computePaymentOrderPricing({
+      body,
+      products: [],
+      discountCents: 0,
+      pendingPayment: true,
+      structuredCheckoutEnabled: false,
+    }),
+    /unknown product/i,
   );
 });
 

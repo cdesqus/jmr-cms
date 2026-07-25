@@ -165,6 +165,24 @@ function computeAuthoritativePricing({
   return { items, subtotalCents, shippingCents, discountCents: safeDiscount, totalCents };
 }
 
+function computePaymentOrderPricing({
+  body,
+  products,
+  discountCents,
+  pendingPayment,
+  structuredCheckoutEnabled,
+}: {
+  body: UnknownRecord;
+  products: CheckoutProduct[];
+  discountCents: number;
+  pendingPayment: boolean;
+  structuredCheckoutEnabled: boolean;
+}) {
+  return pendingPayment || structuredCheckoutEnabled
+    ? computeAuthoritativePricing({ body, products, discountCents })
+    : computeLegacyPricing(body, discountCents);
+}
+
 function createDemoPriceSnapshot(
   eurMinor: number,
   options: { rate?: string; capturedAt?: string } = {},
@@ -195,6 +213,7 @@ function createDemoPriceSnapshot(
 export {
   computeLegacyPricing,
   computeAuthoritativePricing,
+  computePaymentOrderPricing,
   createDemoPriceSnapshot,
   legacyShippingAddressText,
   normalizeShippingAddressPayload,

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertReservationAllocationBinding,
+  nextPromotionUsage,
   settleOrdinaryOrder,
 } from "./order-payment-settlement.cjs";
 
@@ -63,11 +64,10 @@ test("verified ordinary settlement consumes inventory and promotion once before 
   ]);
   assert.equal(calls[4][0], "order");
   assert.deepEqual(calls[4][1].statusHistory, [{
-    type: "status",
+    id: "evt-payment-1-paid",
     status: "paid",
     note: "Payment confirmed by verified settlement.",
-    actor: "Payment",
-    at: "2026-07-25T10:00:00.000Z",
+    createdAt: "2026-07-25T10:00:00.000Z",
   }]);
 });
 
@@ -90,6 +90,84 @@ test("reservation allocations must cover exactly the order products and quantiti
   ], [
     { slug: "sku-a", qty: 2 },
   ]), /does not match/i);
+});
+
+test("locked promotion usage enforces its cap without double-counting paid replay", async () => {
+  assert.equal(nextPromotionUsage({ usageCount: 0, usageLimit: 1 }), 1);
+  assert.throws(
+    () => nextPromotionUsage({ usageCount: 1, usageLimit: 1 }),
+    /usage limit/i,
+  );
+  assert.equal(nextPromotionUsage({ usageCount: 5, usageLimit: 0 }), 6);
+
+  let usageCount = 0;
+  let releaseLock = Promise.resolve();
+  const orders = new Map([
+    ["order-a", {
+      documentId: "order-a",
+      orderNumber: "JMR-2026-A",
+      status: "pending",
+      reservationToken: "reservation-a",
+      promotionCode: "LIMIT1",
+      items: [{ slug: "tea", qty: 1 }],
+      statusHistory: [],
+    }],
+    ["order-b", {
+      documentId: "order-b",
+      orderNumber: "JMR-2026-B",
+      status: "pending",
+      reservationToken: "reservation-b",
+      promotionCode: "LIMIT1",
+      items: [{ slug: "tea", qty: 1 }],
+      statusHistory: [],
+    }],
+  ]);
+  const adapter = {
+    lockOrder: async (documentId) => structuredClone(orders.get(documentId)),
+    assertBinding: () => undefined,
+    consumeReservation: async () => undefined,
+    decrementProductStock: async () => undefined,
+    incrementPromotionUse: async () => {
+      const previous = releaseLock;
+      let unlock;
+      releaseLock = new Promise((resolve) => {
+        unlock = resolve;
+      });
+      await previous;
+      try {
+        usageCount = nextPromotionUsage({ usageCount, usageLimit: 1 });
+      } finally {
+        unlock();
+      }
+    },
+    updateOrder: async (documentId, data) => {
+      const updated = { ...orders.get(documentId), ...data };
+      orders.set(documentId, updated);
+      return updated;
+    },
+  };
+  const attempts = await Promise.allSettled([
+    settleOrdinaryOrder(adapter, {
+      documentId: "payment-a",
+      orderDocumentId: "order-a",
+      paidAt: payment.paidAt,
+    }),
+    settleOrdinaryOrder(adapter, {
+      documentId: "payment-b",
+      orderDocumentId: "order-b",
+      paidAt: payment.paidAt,
+    }),
+  ]);
+  assert.equal(attempts.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(attempts.filter((result) => result.status === "rejected").length, 1);
+  assert.equal(usageCount, 1);
+  const paid = [...orders.values()].find((order) => order.status === "paid");
+  await settleOrdinaryOrder(adapter, {
+    documentId: paid.paymentDocumentId,
+    orderDocumentId: paid.documentId,
+    paidAt: payment.paidAt,
+  });
+  assert.equal(usageCount, 1);
 });
 
 test("exact paid replay is idempotent and never consumes inventory twice", async () => {
