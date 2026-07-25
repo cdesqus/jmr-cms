@@ -4,6 +4,7 @@ export function visibleAdminNavigation<TGroup>(
   groups: readonly TGroup[],
   role: string,
   membershipEnabled: boolean,
+  paymentsEnabled?: boolean,
 ): TGroup[];
 
 export function membershipCheckoutMode(

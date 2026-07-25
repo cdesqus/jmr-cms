@@ -229,6 +229,60 @@ test("receipt and mismatch resolution require owner credentials and server-deriv
   }
 });
 
+test("owner payment reconciliation list requires the exact feature gate and owner credentials", async () => {
+  const previous = {
+    payments: process.env.PAYMENTS_ENABLED,
+    admin: process.env.JAMORA_ADMIN_API_SECRET,
+  };
+  let calls = 0;
+  installStrapi({
+    async listAdminPayments() {
+      calls += 1;
+      return [{ paymentReference: "JMR-1", events: [] }];
+    },
+  });
+  try {
+    process.env.PAYMENTS_ENABLED = "TRUE";
+    process.env.JAMORA_ADMIN_API_SECRET = "admin-secret";
+    const disabled = context({}, {
+      "x-jamora-admin-secret": "admin-secret",
+      "x-jamora-admin-actor": "owner@example.test",
+      "x-jamora-admin-role": "owner",
+    });
+    disabled.request.method = "GET";
+    await controller.listAdminPayments(disabled);
+    assert.equal(disabled.status, 404);
+    assert.equal(calls, 0);
+
+    process.env.PAYMENTS_ENABLED = "true";
+    const denied = context({}, {
+      "x-jamora-admin-secret": "admin-secret",
+      "x-jamora-admin-actor": "operator@example.test",
+      "x-jamora-admin-role": "support",
+    });
+    denied.request.method = "GET";
+    await controller.listAdminPayments(denied);
+    assert.equal(denied.status, 401);
+    assert.equal(calls, 0);
+
+    const accepted = context({}, {
+      "x-jamora-admin-secret": "admin-secret",
+      "x-jamora-admin-actor": "owner@example.test",
+      "x-jamora-admin-role": "owner",
+    });
+    accepted.request.method = "GET";
+    await controller.listAdminPayments(accepted);
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(accepted.body, { payments: [{ paymentReference: "JMR-1", events: [] }] });
+    assert.equal(calls, 1);
+  } finally {
+    if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
+    else process.env.PAYMENTS_ENABLED = previous.payments;
+    if (previous.admin === undefined) delete process.env.JAMORA_ADMIN_API_SECRET;
+    else process.env.JAMORA_ADMIN_API_SECRET = previous.admin;
+  }
+});
+
 test("RoPay preparation requires both exact feature gates while manual transfer remains available", async () => {
   const previous = {
     payments: process.env.PAYMENTS_ENABLED,
@@ -584,4 +638,11 @@ test("routes separate provider mutation from browser read-only return", () => {
     byHandler["payment-operations.readRoPayReturn"].path,
     /:reference$/,
   );
+});
+
+test("owner reconciliation list is a GET-only custom route", () => {
+  const route = routes.routes.find((candidate) =>
+    candidate.handler === "payment-operations.listAdminPayments",
+  );
+  assert.deepEqual(route && [route.method, route.path], ["GET", "/jamora/admin/payments"]);
 });

@@ -4,12 +4,14 @@ function membershipSurfaceEnabled(env = process.env) {
   return env.MEMBERSHIP_ENABLED === "true";
 }
 
-function visibleAdminNavigation(groups, role, membershipEnabled) {
+function visibleAdminNavigation(groups, role, membershipEnabled, paymentsEnabled = false) {
   return groups
     .map((group) => ({
       ...group,
       items: group.items.filter((item) =>
-        item.roles.includes(role) && (!item.membershipOnly || membershipEnabled)),
+        item.roles.includes(role) &&
+        (!item.membershipOnly || membershipEnabled) &&
+        (!item.paymentsOnly || paymentsEnabled)),
     }))
     .filter((group) => group.items.length > 0);
 }

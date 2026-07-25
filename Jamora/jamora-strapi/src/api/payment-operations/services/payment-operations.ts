@@ -19,6 +19,7 @@ const {
 const {
   createRoPayAuthenticatedLimiter,
 } = require("./ropay-authenticated-limiter.cjs");
+const { projectAdminPayments } = require("./payment-admin-projection.cjs");
 const { withPaymentWriteAccess } = require(
   "../../payment/content-types/payment/payment-write-guard.cjs",
 );
@@ -232,7 +233,31 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
     maxBuckets: process.env.ROPAY_AUTH_RATE_MAX_BUCKETS,
   });
 
+  async function listAdminPayments() {
+    assertPaymentsEnabled();
+    const payments = await strapi.db.query(uid.payment).findMany({
+      orderBy: { createdAt: "desc" },
+      limit: 100,
+      select: [
+        "documentId", "paymentReference", "purpose", "method", "amountMinor", "currency",
+        "receivedAmountMinor", "receivedCurrency", "receivedAt", "status", "expiresAt",
+        "customerDocumentId", "orderDocumentId", "membershipDocumentId",
+      ],
+    } as any);
+    const paymentDocumentIds = payments.map((payment: any) => payment.documentId);
+    const events = paymentDocumentIds.length === 0
+      ? []
+      : await strapi.db.query("api::payment-event.payment-event").findMany({
+          where: { paymentDocumentId: { $in: paymentDocumentIds } },
+          orderBy: { occurredAt: "desc" },
+          limit: 1000,
+          select: ["eventId", "paymentDocumentId", "transition", "actor", "reason", "occurredAt"],
+        } as any);
+    return projectAdminPayments(payments, events);
+  }
+
   return {
+    listAdminPayments,
     async prepareBankTransfer(input: any) {
       assertPaymentsEnabled();
       return withPaymentWriteAccess(() =>

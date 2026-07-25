@@ -185,6 +185,12 @@ async function statusIdentity(ctx: any) {
 }
 
 export default {
+  async listAdminPayments(ctx: any) {
+    if (!owner(ctx)) return;
+    await run(ctx, async () => ({
+      payments: await paymentService().listAdminPayments(),
+    }));
+  },
   async prepareBankTransfer(ctx: any) {
     const identity = await preparationIdentity(ctx);
     if (!identity) return;

@@ -1,6 +1,12 @@
 export default {
   routes: [
     {
+      method: "GET",
+      path: "/jamora/admin/payments",
+      handler: "payment-operations.listAdminPayments",
+      config: { auth: false },
+    },
+    {
       method: "POST",
       path: "/jamora/payments/bank-transfer",
       handler: "payment-operations.prepareBankTransfer",

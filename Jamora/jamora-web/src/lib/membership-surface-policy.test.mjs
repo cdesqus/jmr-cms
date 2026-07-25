@@ -8,7 +8,7 @@ import {
 import { isMembershipEnabled } from "./membership-admin-policy.cjs";
 import { membershipCustomerBoundary } from "./membership-customer-policy.cjs";
 
-test("feature-off hides membership pages and owner navigation", () => {
+test("feature-off hides membership/payment pages and owner navigation", () => {
   assert.equal(isMembershipEnabled({}), false);
   assert.deepEqual(membershipCustomerBoundary({}, { documentId: "customer-1" }), {
     status: 404,
@@ -22,15 +22,20 @@ test("feature-off hides membership pages and owner navigation", () => {
     label: "Storefront",
     items: [
       { href: "/admin/membership", roles: ["owner"], membershipOnly: true },
+      { href: "/admin/payments", roles: ["owner"], paymentsOnly: true },
       { href: "/admin/content", roles: ["owner", "content"] },
     ],
   }];
   assert.deepEqual(
-    visibleAdminNavigation(groups, "owner", false)[0].items.map((item) => item.href),
+    visibleAdminNavigation(groups, "owner", false, false)[0].items.map((item) => item.href),
     ["/admin/content"],
   );
   assert.deepEqual(
-    visibleAdminNavigation(groups, "owner", true)[0].items.map((item) => item.href),
+    visibleAdminNavigation(groups, "owner", true, true)[0].items.map((item) => item.href),
+    ["/admin/membership", "/admin/payments", "/admin/content"],
+  );
+  assert.deepEqual(
+    visibleAdminNavigation(groups, "owner", true, false)[0].items.map((item) => item.href),
     ["/admin/membership", "/admin/content"],
   );
 });
