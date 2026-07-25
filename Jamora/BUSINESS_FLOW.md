@@ -8,7 +8,7 @@ payment, dan fulfillment. Stack saat ini:
 | Storefront | Next.js | Website customer, katalog, cart, checkout trigger |
 | CMS / Admin | Strapi | Kelola produk, stok, konten, dan order |
 | Database | Postgres | Simpan data CMS, produk, order |
-| Payment | Mock payment (Phase 0) | Membuat payment/order demo; pembayaran live baru Phase 2 |
+| Payment | Bank transfer + RoPay mock adapter | Menyiapkan payment, mencatat receipt/callback terverifikasi, dan menyelesaikan order secara idempotent |
 | Reverse Proxy | Nginx | Routing domain ke storefront dan Strapi |
 | Analytics | Strapi + visit events | Visit, sales, omzet, estimated profit dashboard |
 
@@ -256,9 +256,9 @@ Notes:
 | Simulated email confirmation | Done |
 | Visit analytics capture | Done |
 | Sales / omzet / profit Strapi widget | Done |
-| Live payment request adapter (bank transfer/RoPay) | Phase 2 |
-| Verified live provider callback/status handling | Phase 2 |
-| Finalize paid order from verified live provider callback | Phase 2 |
+| Bank transfer + RoPay mock payment adapter | Done; flag-gated |
+| Verified RoPay callback/status handling | Done for mock adapter; signed authority only |
+| Finalize paid order from receipt/callback | Done; idempotent |
 | Shipping/tracking fields | Later |
 
 ---
@@ -297,3 +297,39 @@ returns 404 from storefront, owner BFF, controller, and direct service
 boundaries. Disabling it is the rollback path: membership surfaces disappear,
 ordinary guest/one-time checkout continues unchanged, and persisted membership
 history remains intact for a later safe re-enable.
+
+## 13. Phase 2 Payment Flow and Boundaries
+
+Phase 2 adds manual bank transfer and a RoPay **mock adapter** behind a
+provider-neutral payment interface. `ROPAY_PROVIDER_MODE=live` intentionally
+fails closed: a real RoPay adapter has not yet been implemented or approved.
+
+1. Storefront requests a payment using the shared storefront secret and either
+   a validated customer session or the exact guest checkout capability.
+2. Bank transfer persists a beneficiary snapshot, safe minor-unit amount,
+   reference, and expiry. An owner records the receipt. Underpayment,
+   overpayment, or currency mismatch is recorded but never settles anything.
+3. Only an owner may resolve a mismatch as `accept` or `cancel`; the action
+   requires an audit reason and idempotency key. An exact receipt settles once.
+4. RoPay intent returns an ephemeral mock QR/deep link. Its callback or
+   server-to-server status must carry a valid HMAC, fresh timestamp, matching
+   provider reference, amount, currency, and immutable event identity. Replay
+   of that event is idempotent.
+5. A `paid` payment carries one settlement key: membership purchase/renewal
+   activates and grants once; an ordinary order consumes its reservation and
+   stock once. The resulting order timeline entry has `type: status` for
+   tracking/admin consumers.
+6. Browser RoPay return and payment-status endpoints are owner-bound reads;
+   they do not open a transaction or mutate payment state. A late receipt or
+   provider event cannot settle an expired payment.
+
+`PAYMENTS_ENABLED` and `ROPAY_ENABLED` both require exact lowercase `true`.
+When payments are disabled, public, owner, controller, and direct-service
+payment boundaries fail closed. Disabling only RoPay preserves bank transfer.
+These flags are the rollback: retain additive payment, payment-event,
+membership, and order data; do not delete tables or immutable history.
+
+Before enabling either flag, back up PostgreSQL and deploy the additive Strapi
+schemas (`payment`, immutable `payment-event`, and additive order/membership
+links). Money remains the stored safe integer minor-unit value plus currency
+and immutable price snapshot; operators must never recalculate historical rows.

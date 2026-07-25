@@ -194,7 +194,7 @@ An overview of Jamora's core feature readiness based on the current implementati
 | Romania structured address | **Automated verification complete; live smoke pending** | Checkout can persist editable `RO` address fields and a formatted snapshot. |
 | EUR/RON immutable price snapshot | **Automated verification complete; live smoke pending** | Orders retain integer minor-unit amounts, rate, source, and timestamp. |
 | Versioned consent categories | **Automated verification complete; live smoke pending** | Necessary, analytics, and lifecycle-email decisions are persisted append-only per purpose; optional processing defaults off. |
-| Live bank transfer/RoPay + verified callback | **Phase 2** | Live settlement and idempotent provider confirmation have not been activated; other providers may later use the same interface. |
+| Bank transfer + RoPay mock adapter | **Automated verification complete; PostgreSQL/provider smoke required** | Flag-gated bank transfer receipts and signed RoPay mock callbacks settle idempotently. A real RoPay provider adapter is intentionally not enabled. |
 | Prepaid 3/6/12-month membership | **Automated verification complete; dev-server live smoke required** | Owners configure plans and eligible packages; verified customers purchase through a Phase 1 mock payment boundary and renew manually into a new immutable period. |
 | Append-only membership credits | **Automated verification complete; dev-server live smoke required** | Grant, reserve, release, redeem, expiry, and reasoned owner adjustments are auditable; dashboard balance is derived from the ledger. |
 | Membership redemption checkout | **Automated verification complete; dev-server live smoke required** | Stock and credits reserve together, failure/expiry releases both, and a successful redemption charges customer-paid shipping while merchandise is credit-covered. |
@@ -216,6 +216,33 @@ Phase 2 responsibility. Membership shipping is always customer-paid.
 Automated tests, lint, and production builds are the completed implementation
 gate. Local Docker/live smoke was waived; the documented live smoke on the dev
 server must pass before any production promotion.
+
+## 13. Phase 2 Payment Readiness
+
+Phase 2 adds a provider-neutral payment foundation without treating a browser
+success page as payment proof. Manual bank transfer stores an immutable amount,
+currency, beneficiary snapshot, reference, and expiry. Exact owner-recorded
+receipts settle once; amount/currency mismatches remain visible for a reasoned
+owner decision and cannot activate a membership or order on their own.
+
+RoPay currently uses a mock adapter. Intent returns a short-lived QR/deep-link
+presentation, while only a signed callback or signed server-to-server status
+message can settle it. HMAC verification binds the canonical event payload,
+provider reference, timestamp, amount, and currency. Replays are idempotent;
+bad signatures and expired events are rejected. Return/status pages are
+owner-bound reads and do not mutate state.
+
+`PAYMENTS_ENABLED` and `ROPAY_ENABLED` are independent exact-`true` rollout
+flags. They provide configuration-first rollback while retaining additive
+schemas and immutable payment event history. Payments can activate prepaid
+memberships (one ledger grant) and finalize ordinary orders (reservation,
+stock, promotion, invoice, and a `type: status` timeline entry) once.
+
+Automated non-Docker tests, lint, and builds are required before deployment.
+Docker was waived locally, but production promotion remains blocked on the
+documented dev-server smoke against PostgreSQL and the actual provider callback
+configuration. A real provider adapter must preserve these verification and
+idempotency contracts before `ROPAY_PROVIDER_MODE=live` is ever supported.
 
 # JAMORA
 

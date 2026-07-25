@@ -452,3 +452,138 @@ Rollback is configuration-first: set `MEMBERSHIP_ENABLED=false` in both
 processes and restart. This hides all membership UI/routes/mutations while
 preserving schemas and immutable history; ordinary checkout remains available.
 Do not roll back by dropping tables or deleting ledger entries.
+
+---
+
+## Phase 2 Payment Deployment, Rollback, and Reconciliation
+
+Phase 2 ships additive `payment` and immutable `payment-event` schemas plus
+additive links to orders and memberships. Back up PostgreSQL before deploying.
+Deploy the Strapi build with both flags off first, let Strapi apply the schema,
+then run the repository gates below. Never migrate by deleting payment/event
+rows or by recalculating historical money: amounts are safe integer minor
+units and snapshots are immutable.
+
+Add the following values to the server `.env`; replace every `change_me` value
+with a secret manager/runtime value and never commit the real file:
+
+```dotenv
+PAYMENTS_ENABLED=false
+PAYMENT_BENEFICIARY_NAME=Jamora SRL
+PAYMENT_BENEFICIARY_IBAN=RO49AAAA1B31007593840000
+PAYMENT_BENEFICIARY_BANK=Example Bank
+PAYMENT_TRANSFER_TTL_SECONDS=259200
+
+ROPAY_ENABLED=false
+ROPAY_PROVIDER_MODE=mock
+ROPAY_CALLBACK_SECRET=change_me_generate_with_openssl_rand_base64_48
+ROPAY_INTENT_TTL_SECONDS=600
+ROPAY_RATE_LIMIT=60
+ROPAY_RATE_WINDOW_MS=60000
+ROPAY_RATE_MAX_BUCKETS=10000
+ROPAY_AUTH_RATE_LIMIT=10
+ROPAY_AUTH_REPLAY_LIMIT=3
+ROPAY_AUTH_RATE_WINDOW_MS=60000
+ROPAY_AUTH_RATE_MAX_BUCKETS=10000
+```
+
+`PAYMENTS_ENABLED` and `ROPAY_ENABLED` accept only exact lowercase `true`.
+`PAYMENT_TRANSFER_TTL_SECONDS` is 300–604800 seconds (default 72 hours);
+`ROPAY_INTENT_TTL_SECONDS` is 60–900 seconds (default 600). The current
+RoPay adapter is deliberately `mock` only. Setting `ROPAY_PROVIDER_MODE=live`
+does not enable live charging—it fails closed until a reviewed real adapter is
+implemented. The real adapter contract must preserve the payment reference,
+provider reference, amount/currency, expiry, signed callback/status envelope,
+and idempotency semantics; it must not let provider presentation or a browser
+redirect become settlement authority.
+
+Pass these variables to the Strapi container. The storefront needs only
+`PAYMENTS_ENABLED` and `ROPAY_ENABLED` for feature visibility; callback secret,
+beneficiary, provider mode, and rate-limit values remain server-side in Strapi.
+The Compose file is wired accordingly.
+
+### Callback and reverse-proxy setup
+
+Register the external provider callback URL as:
+
+```text
+https://<public-domain>/api/jamora/payments/ropay/callback
+```
+
+Use the same high-entropy value for the provider HMAC secret and
+`ROPAY_CALLBACK_SECRET`. The provider must send `x-ropay-signature`,
+`x-ropay-timestamp`, and `x-ropay-provider-reference`; the Strapi route accepts
+only canonical signed payload fields. Server-to-server verification is
+`POST /api/jamora/internal/payments/ropay/status` with the same signing model.
+Do not expose it to a browser integration. Keep the existing Nginx `/api`
+proxy before the storefront catch-all and retain forwarded client IP headers so
+the pre-verification request guard can rate limit correctly. Preserve the
+4096-byte callback body limit; do not strip the three RoPay headers.
+
+There are two bounded, in-memory protections: the pre-verification request
+guard (`ROPAY_RATE_*`) and the verified-reference/replay limiter
+(`ROPAY_AUTH_*`). They are appropriate only for one Strapi process. Before
+running multiple replicas, replace both with a shared Redis/distributed
+implementation and validate its replay semantics.
+
+### Enable, rollback, and reconciliation runbook
+
+After the additive deployment and smoke pass, enable bank transfer first:
+
+```dotenv
+PAYMENTS_ENABLED=true
+ROPAY_ENABLED=false
+```
+
+Restart Strapi and storefront. After the provider callback smoke passes, set
+`ROPAY_ENABLED=true` in both processes and restart again. To roll back,
+set `ROPAY_ENABLED=false` (RoPay only) or `PAYMENTS_ENABLED=false` (all Phase 2
+surfaces) in both processes and restart. This hides new routes/UI without
+touching payment, order, membership, or immutable event history.
+
+For reconciliation, an owner lists payment records and compares the provider
+or bank statement reference, amount, currency, and received time with the
+stored payment/event history. Exact bank receipts settle automatically once.
+For `underpaid`, `overpaid`, or `currency_mismatch`, record the owner’s
+accept/cancel decision with a concrete reason; never force-edit payment status.
+Duplicate provider events must be retried with their original signed payload,
+not recreated. Escalate unmatched or expired funds for refund/manual review.
+Browser return pages are read-only evidence and must never be used to settle.
+
+### Required gates and dev-server smoke
+
+Run this non-Docker gate from a clean checkout:
+
+```bash
+cd jamora-web
+node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
+npm run lint
+npm run build
+cd ../jamora-strapi
+node --test --test-force-exit src/api/**/*.test.mjs scripts/package-runtime-cjs.test.mjs
+npm run build
+```
+
+Docker was explicitly waived locally for Phase 2. It is not a production
+waiver: a dev server backed by PostgreSQL and the provider callback/status
+configuration must complete the following before production promotion:
+
+1. With both flags false, confirm payment public/admin/direct paths return 404
+   and ordinary legacy checkout still works.
+2. Enable bank transfer, prepare an order payment, verify beneficiary/reference
+   and expiry, then submit underpaid, overpaid, and wrong-currency receipts.
+   Confirm no stock/order/membership settlement occurs until a reasoned owner
+   resolution; verify an exact receipt and replay settle exactly once.
+3. Enable mock RoPay, create an intent, and deliver a provider-signed callback
+   to the HTTPS callback URL. Verify the signed callback settles once, exact
+   replay is idempotent, invalid signature is rejected, and the signed internal
+   status route has the same authority.
+4. Open the RoPay return/status URL with the owning session/capability and
+   verify it is read-only. Attempt an expired callback/receipt and verify no
+   settlement occurs.
+5. Pay a membership purchase and verify one activation/grant; pay an ordinary
+   order and verify reservation, stock, promotion, invoice, and `type: status`
+   timeline entry are finalized once. Confirm disabled membership still leaves
+   ordinary checkout available.
+
+The PostgreSQL/provider smoke is a release blocker, not an optional checklist.
