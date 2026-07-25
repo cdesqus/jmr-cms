@@ -65,6 +65,7 @@ test("verified ordinary settlement consumes inventory and promotion once before 
   assert.equal(calls[4][0], "order");
   assert.deepEqual(calls[4][1].statusHistory, [{
     id: "evt-payment-1-paid",
+    type: "status",
     status: "paid",
     note: "Payment confirmed by verified settlement.",
     createdAt: "2026-07-25T10:00:00.000Z",

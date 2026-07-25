@@ -80,6 +80,7 @@ async function settleOrdinaryOrder(adapter, payment) {
     : [];
   statusHistory.push({
     id: `evt-${payment.documentId}-paid`,
+    type: "status",
     status: "paid",
     note: "Payment confirmed by verified settlement.",
     createdAt: payment.paidAt,
