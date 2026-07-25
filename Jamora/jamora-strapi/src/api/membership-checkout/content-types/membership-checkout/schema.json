@@ -12,6 +12,12 @@
     "idempotencyKey": { "type": "string", "required": true },
     "customerDocumentId": { "type": "string", "required": true },
     "membershipDocumentId": { "type": "string", "required": true },
+    "currency": {
+      "type": "enumeration",
+      "enum": ["EUR", "RON"],
+      "default": "EUR",
+      "required": true
+    },
     "items": { "type": "json", "required": true },
     "totals": { "type": "json", "required": true },
     "status": {

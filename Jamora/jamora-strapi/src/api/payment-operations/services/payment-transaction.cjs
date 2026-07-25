@@ -87,11 +87,80 @@ function chargeFromSnapshot(snapshot, currency, fallbackAmount, fallbackCurrency
   throw new Error(`Authoritative ${currency} price is unavailable.`);
 }
 
-function deriveAuthoritativePaymentSubject(input, subject, reservation, now = new Date()) {
+function checkoutAggregateMoney(checkout) {
+  const totals = checkout?.totals;
+  if (!totals || typeof totals !== "object" || Array.isArray(totals)) {
+    throw new Error("Membership checkout totals binding is invalid.");
+  }
+  for (const field of ["merchandiseMinor", "shippingMinor", "totalMinor"]) {
+    if (!Number.isSafeInteger(totals[field]) || totals[field] < 0) {
+      throw new Error("Membership checkout totals binding is invalid.");
+    }
+  }
+  if (totals.totalMinor !== totals.merchandiseMinor + totals.shippingMinor) {
+    throw new Error("Membership checkout totals binding is invalid.");
+  }
+  return normaliseMoney({
+    amountMinor: totals.totalMinor,
+    currency: checkout.currency,
+  });
+}
+
+function assertMembershipCheckoutOrderAggregate(checkout, order, binding) {
+  const now = instant(binding.now ?? new Date(), "now");
+  if (!checkout || checkout.status !== "reserved") {
+    throw new Error("Membership checkout is not reserved.");
+  }
+  if (instant(checkout.expiresAt, "checkout expiry") <= now) {
+    throw new Error("Membership checkout expired.");
+  }
+  if (checkout.checkoutReference !== binding.checkoutReference ||
+      checkout.customerDocumentId !== binding.customerDocumentId ||
+      (binding.membershipDocumentId &&
+       checkout.membershipDocumentId !== binding.membershipDocumentId)) {
+    throw new Error("Membership checkout binding is invalid.");
+  }
+  const money = checkoutAggregateMoney(checkout);
+  if (!order ||
+      order.documentId !== binding.orderDocumentId ||
+      order.customerDocumentId !== checkout.customerDocumentId ||
+      order.checkoutReference !== checkout.checkoutReference ||
+      order.membershipDocumentId !== checkout.membershipDocumentId) {
+    throw new Error("Membership checkout order binding is invalid.");
+  }
+  const orderMoney = normaliseMoney({
+    amountMinor: order.totalCents,
+    currency: order.currency,
+  });
+  for (const field of ["subtotalCents", "shippingCents", "discountCents"]) {
+    if (!Number.isSafeInteger(order[field]) || order[field] < 0) {
+      throw new Error("Membership checkout order totals binding is invalid.");
+    }
+  }
+  if (order.subtotalCents !== checkout.totals.merchandiseMinor ||
+      order.shippingCents !== checkout.totals.shippingMinor ||
+      order.discountCents !== 0 ||
+      orderMoney.amountMinor !== money.amountMinor ||
+      orderMoney.currency !== money.currency) {
+    throw new Error("Membership checkout order totals or currency binding is invalid.");
+  }
+  return money;
+}
+
+function deriveAuthoritativePaymentSubject(
+  input,
+  subject,
+  reservation,
+  now = new Date(),
+  checkout,
+) {
   const subjectType = requiredText(input.subjectType, "subjectType");
   const subjectId = requiredText(input.subjectId, "subjectId");
   const purpose = requiredText(input.purpose, "purpose");
-  const currency = normaliseMoney({ amountMinor: 0, currency: input.currency }).currency;
+  const currency = normaliseMoney({
+    amountMinor: 0,
+    currency: checkout ? checkout.currency : input.currency,
+  }).currency;
   if (!subject || subject.documentId !== subjectId) {
     throw new Error("Payment subject not found.");
   }
@@ -144,12 +213,37 @@ function deriveAuthoritativePaymentSubject(input, subject, reservation, now = ne
     }
     subjectExpiresAt = iso(reservation.expiresAt, "reservation expiry");
   }
-  const money = chargeFromSnapshot(
-    subject.priceSnapshot,
-    currency,
-    subject.totalCents,
-    subject.currency,
-  );
+  const checkoutMoney = checkout
+    ? assertMembershipCheckoutOrderAggregate(checkout, subject, {
+        checkoutReference: input.checkoutReference,
+        orderDocumentId: subject.documentId,
+        customerDocumentId: input.customerDocumentId,
+        membershipDocumentId: input.membershipDocumentId,
+        now,
+      })
+    : null;
+  const money = checkoutMoney ?? chargeFromSnapshot(
+      subject.priceSnapshot,
+      currency,
+      subject.totalCents,
+      subject.currency,
+    );
+  const membershipCheckout = checkout
+    ? {
+        checkoutReference: checkout.checkoutReference,
+        customerDocumentId: checkout.customerDocumentId,
+        membershipDocumentId: checkout.membershipDocumentId,
+        expiresAt: iso(checkout.expiresAt, "checkout expiry"),
+        currency: money.currency,
+        totals: clone(checkout.totals),
+        ...(subject.priceSnapshot?.membershipCheckout?.orderMetadata
+          ? {
+              orderMetadata:
+                clone(subject.priceSnapshot.membershipCheckout.orderMetadata),
+            }
+          : {}),
+      }
+    : null;
   return {
     subjectType,
     subjectId: subject.documentId,
@@ -165,9 +259,14 @@ function deriveAuthoritativePaymentSubject(input, subject, reservation, now = ne
     ...money,
     priceSnapshot: {
       ...clone(subject.priceSnapshot ?? {}),
+      ...(membershipCheckout ? { membershipCheckout } : {}),
       charge: money,
     },
-    ...(subjectExpiresAt ? { subjectExpiresAt } : {}),
+    ...(checkout
+      ? { subjectExpiresAt: iso(checkout.expiresAt, "checkout expiry") }
+      : subjectExpiresAt
+        ? { subjectExpiresAt }
+        : {}),
   };
 }
 
@@ -196,21 +295,16 @@ async function lockMembershipCheckoutOrder(adapters, binding) {
   const orderDocumentId = requiredText(binding.orderDocumentId, "orderDocumentId");
   const checkout = await adapters.lockCheckout(checkoutReference);
   if (!checkout ||
-      checkout.checkoutReference !== checkoutReference ||
-      (binding.customerDocumentId &&
-       checkout.customerDocumentId !== binding.customerDocumentId) ||
       (checkout.orderDocumentId &&
        checkout.orderDocumentId !== orderDocumentId)) {
     throw new Error("Membership checkout binding is invalid.");
   }
   const order = await adapters.lockOrder(orderDocumentId);
-  if (!order ||
-      order.documentId !== orderDocumentId ||
-      order.checkoutReference !== checkoutReference ||
-      (binding.customerDocumentId &&
-       order.customerDocumentId !== binding.customerDocumentId)) {
-    throw new Error("Membership checkout order binding is invalid.");
-  }
+  assertMembershipCheckoutOrderAggregate(checkout, order, {
+    ...binding,
+    checkoutReference,
+    orderDocumentId,
+  });
   return { checkout, order };
 }
 
@@ -269,6 +363,29 @@ function clone(value) {
 
 function same(left, right) {
   return isDeepStrictEqual(left ?? null, right ?? null);
+}
+
+function comparableSnapshot(snapshot) {
+  const copy = clone(snapshot ?? {});
+  delete copy.bankTransfer;
+  return copy;
+}
+
+function assertAuthoritativePaymentSubjectBinding(payment, resolved) {
+  for (const field of [
+    "subjectType", "subjectId", "ownerDocumentId", "customerDocumentId",
+    "purpose", "orderDocumentId", "membershipDocumentId", "amountMinor", "currency",
+  ]) {
+    if ((resolved[field] ?? null) !== (payment[field] ?? null)) {
+      throw new Error("Authoritative payment subject binding changed.");
+    }
+  }
+  if (!same(
+    comparableSnapshot(payment.priceSnapshot),
+    comparableSnapshot(resolved.priceSnapshot),
+  )) {
+    throw new Error("Authoritative payment subject binding changed.");
+  }
 }
 
 function has(input, field) {
@@ -360,11 +477,18 @@ function assertReplayIdentity(payment, input) {
       payment.purpose !== input.purpose) {
     throw new Error("Payment preparation idempotency conflict.");
   }
-  const requestedCurrency = normaliseMoney({
+  const checkoutReference = typeof input.checkoutReference === "string"
+    ? input.checkoutReference.trim()
+    : "";
+  if (checkoutReference) {
+    if (payment.priceSnapshot?.membershipCheckout?.checkoutReference !==
+        checkoutReference) {
+      throw new Error("Payment preparation idempotency conflict.");
+    }
+  } else if (payment.currency !== normaliseMoney({
     amountMinor: 0,
     currency: input.currency,
-  }).currency;
-  if (payment.currency !== requestedCurrency) {
+  }).currency) {
     throw new Error("Payment preparation idempotency conflict.");
   }
   if (input.customerDocumentId) {
@@ -382,6 +506,7 @@ function createPaymentTransactions(adapter, options = {}) {
   const env = options.env ?? process.env;
   const beneficiary = clone(options.beneficiary ?? {});
   const uuid = options.randomUUID ?? nodeRandomUUID;
+  const clock = typeof options.now === "function" ? options.now : () => new Date();
   const lifetimeSeconds = ttlSeconds(env.PAYMENT_TRANSFER_TTL_SECONDS);
 
   async function transactionForPayment(paymentDocumentId, providerEventId, work) {
@@ -436,16 +561,17 @@ function createPaymentTransactions(adapter, options = {}) {
     const { occurredAt, identity: occurredAtIdentity } = instantIdentity(
       input,
       ["occurredAt", "receivedAt"],
-      new Date(),
+      clock(),
     );
     const reasonIdentity = optionalTextIdentity(input, "reason");
     const reason = reasonIdentity.value ?? "";
     const providerReferenceIdentity = optionalTextIdentity(input, "providerReference");
     return transactionForPayment(input.paymentDocumentId, providerEventId, async (tx, payment, events, replay) => {
-      if (MISMATCH_STATUSES.has(payment.status)) {
+      if (!replay && MISMATCH_STATUSES.has(payment.status)) {
         throw new Error("Owner resolution is required for a payment mismatch.");
       }
-      if (payment.expiresAt &&
+      if (!replay &&
+          payment.expiresAt &&
           instant(occurredAt, "occurredAt") >= instant(payment.expiresAt, "expiresAt")) {
         throw new Error("Payment expired before settlement.");
       }
@@ -481,6 +607,14 @@ function createPaymentTransactions(adapter, options = {}) {
           actor,
           payload,
         });
+        if (payment.status !== "paid" ||
+            !payment.settlementKey ||
+            payment.receivedAmountMinor !== received.amountMinor ||
+            payment.receivedCurrency !== received.currency ||
+            (providerReferenceIdentity.provided &&
+             payment.providerReference !== providerReference)) {
+          throw new Error("Payment event idempotency conflict.");
+        }
         return { ...payment, idempotent: true };
       }
       if (payment.providerReference && payment.providerReference !== providerReference) {
@@ -912,6 +1046,7 @@ function createStrapiPaymentAdapter(strapi, options = {}) {
 }
 
 module.exports = {
+  assertAuthoritativePaymentSubjectBinding,
   assertOrderPaymentBinding,
   beneficiaryFromEnv,
   createMemoryPaymentAdapter,

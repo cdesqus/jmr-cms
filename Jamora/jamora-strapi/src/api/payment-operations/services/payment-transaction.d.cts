@@ -2,6 +2,7 @@ export interface PaymentTransactionOptions {
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
   beneficiary?: { name?: string; iban?: string; bank?: string };
   randomUUID?: () => string;
+  now?: () => Date;
   settleSubject?: (payment: any, context: { settlementKey: string; trx?: any }) => Promise<unknown>;
 }
 
@@ -20,8 +21,13 @@ export function deriveAuthoritativePaymentSubject(
   subject: any,
   reservation?: any,
   now?: Date,
+  checkout?: any,
 ): any;
 export function assertOrderPaymentBinding(order: any, payment: any): void;
+export function assertAuthoritativePaymentSubjectBinding(
+  payment: any,
+  resolved: any,
+): void;
 export function lockMembershipCheckoutOrder(
   adapters: {
     lockCheckout(reference: string): Promise<any>;
@@ -31,6 +37,8 @@ export function lockMembershipCheckoutOrder(
     checkoutReference: string;
     orderDocumentId: string;
     customerDocumentId?: string;
+    membershipDocumentId?: string;
+    now?: Date;
   },
 ): Promise<{ checkout: any; order: any }>;
 export function createPaymentSubjectSettlement(adapters: {

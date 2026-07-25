@@ -44,6 +44,7 @@ test("persists authoritative customer, membership, stock, credit, and totals bin
     merchandiseMinor: 0, coveredMerchandiseMinor: 6000,
     creditsRequired: 2, shippingMinor: 495, totalMinor: 495,
   });
+  assert.equal(result.currency, "EUR");
   assert.equal(adapter.checkouts.get(reserve.checkoutReference).customerDocumentId, "customer-1");
   assert.equal(adapter.stock.get("product-1"), 0);
   assert.equal(adapter.creditReservations.get(reserve.checkoutReference).credits, 2);

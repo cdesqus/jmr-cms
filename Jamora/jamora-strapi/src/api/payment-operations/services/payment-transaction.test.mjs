@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   assertOrderPaymentBinding,
+  assertAuthoritativePaymentSubjectBinding,
   beneficiaryFromEnv,
   createMemoryPaymentAdapter,
   createPaymentSubjectSettlement,
@@ -590,6 +591,38 @@ test("provider settlement replay requires exact optional-field presence and valu
   }
 });
 
+test("exact provider replay reconciles before expiry while changed or new events do not", async () => {
+  let clock = new Date("2026-07-25T09:00:00.000Z");
+  const { service } = operations({ now: () => clock });
+  const payment = await service.prepareBankTransfer(input());
+  const settlement = {
+    paymentDocumentId: payment.documentId,
+    actor: "provider",
+    providerEventId: "provider:replay-after-expiry",
+    receivedAmountMinor: 10_000,
+    receivedCurrency: "RON",
+    providerReference: "provider-reference-1",
+  };
+  await service.settlePayment(settlement);
+  clock = new Date("2026-07-29T09:00:00.000Z");
+
+  assert.equal((await service.settlePayment(settlement)).idempotent, true);
+  await assert.rejects(
+    service.settlePayment({
+      ...settlement,
+      providerReference: "provider-reference-2",
+    }),
+    /idempotency conflict/i,
+  );
+  await assert.rejects(
+    service.settlePayment({
+      ...settlement,
+      providerEventId: "provider:new-after-expiry",
+    }),
+    /expired/i,
+  );
+});
+
 test("receipt replay distinguishes an omitted bank reference from an explicitly empty one", async () => {
   const { service } = operations();
   const payment = await service.prepareBankTransfer(input());
@@ -638,7 +671,16 @@ test("membership checkout/order locking always acquires checkout before order", 
       return {
         checkoutReference: reference,
         customerDocumentId: "customer-1",
+        membershipDocumentId: "membership-1",
         orderDocumentId: "order-1",
+        status: "reserved",
+        expiresAt: "2026-07-25T09:00:00.000Z",
+        currency: "EUR",
+        totals: {
+          merchandiseMinor: 0,
+          shippingMinor: 495,
+          totalMinor: 495,
+        },
       };
     },
     async lockOrder(documentId) {
@@ -646,17 +688,267 @@ test("membership checkout/order locking always acquires checkout before order", 
       return {
         documentId,
         customerDocumentId: "customer-1",
+        membershipDocumentId: "membership-1",
         checkoutReference: "checkout-1",
+        status: "pending",
+        currency: "eur",
+        subtotalCents: 0,
+        discountCents: 0,
+        shippingCents: 495,
+        totalCents: 495,
       };
     },
   }, {
     checkoutReference: "checkout-1",
     orderDocumentId: "order-1",
     customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    now: new Date("2026-07-25T08:00:00.000Z"),
   });
 
   assert.deepEqual(calls, ["checkout:checkout-1", "order:order-1"]);
   assert.equal(result.order.documentId, "order-1");
+});
+
+test("membership checkout payment derives money and expiry only from the locked checkout", () => {
+  const checkout = {
+    checkoutReference: "checkout-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    status: "reserved",
+    expiresAt: "2026-07-25T09:00:00.000Z",
+    currency: "EUR",
+    totals: {
+      merchandiseMinor: 0,
+      coveredMerchandiseMinor: 6_000,
+      creditsRequired: 2,
+      shippingMinor: 495,
+      totalMinor: 495,
+    },
+  };
+  const order = {
+    documentId: "order-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    checkoutReference: "checkout-1",
+    status: "pending",
+    currency: "eur",
+    subtotalCents: 0,
+    discountCents: 0,
+    shippingCents: 495,
+    totalCents: 495,
+    priceSnapshot: {
+      charge: { amountMinor: 99_999, currency: "RON" },
+    },
+  };
+  const resolved = deriveAuthoritativePaymentSubject({
+    subjectType: "order",
+    subjectId: "order-1",
+    purpose: "order",
+    customerDocumentId: "customer-1",
+    checkoutReference: "checkout-1",
+    currency: "USD",
+  }, order, null, now, checkout);
+
+  assert.equal(resolved.amountMinor, 495);
+  assert.equal(resolved.currency, "EUR");
+  assert.equal(resolved.subjectExpiresAt, checkout.expiresAt);
+  assert.deepEqual(resolved.priceSnapshot.membershipCheckout, {
+    checkoutReference: "checkout-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    expiresAt: checkout.expiresAt,
+    currency: "EUR",
+    totals: checkout.totals,
+  });
+});
+
+test("membership checkout preparation replay uses checkout identity rather than forged currency", async () => {
+  const checkout = {
+    checkoutReference: "checkout-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    status: "reserved",
+    expiresAt: "2026-07-25T09:00:00.000Z",
+    currency: "EUR",
+    totals: {
+      merchandiseMinor: 0,
+      shippingMinor: 495,
+      totalMinor: 495,
+    },
+  };
+  const order = {
+    documentId: "order-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    checkoutReference: "checkout-1",
+    status: "pending",
+    currency: "eur",
+    subtotalCents: 0,
+    discountCents: 0,
+    shippingCents: 495,
+    totalCents: 495,
+  };
+  const adapter = createMemoryPaymentAdapter({
+    resolvePaymentSubject: async (requested) =>
+      deriveAuthoritativePaymentSubject(requested, order, null, now, checkout),
+  });
+  const service = createPaymentTransactions(adapter, {
+    env: enabled,
+    beneficiary,
+  });
+  const requested = {
+    idempotencyKey: "prepare:checkout-1",
+    subjectType: "order",
+    subjectId: "order-1",
+    customerDocumentId: "customer-1",
+    purpose: "order",
+    checkoutReference: "checkout-1",
+    currency: "USD",
+    now,
+  };
+
+  const first = await service.prepareBankTransfer(requested);
+  assert.equal(first.currency, "EUR");
+  assert.equal((await service.prepareBankTransfer(requested)).idempotent, true);
+  await assert.rejects(
+    service.prepareBankTransfer({
+      ...requested,
+      checkoutReference: "checkout-2",
+    }),
+    /idempotency conflict/i,
+  );
+});
+
+test("settlement binding rejects a coherently changed checkout aggregate", () => {
+  const checkout = {
+    checkoutReference: "checkout-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    status: "reserved",
+    expiresAt: "2026-07-25T09:00:00.000Z",
+    currency: "EUR",
+    totals: {
+      merchandiseMinor: 0,
+      shippingMinor: 495,
+      totalMinor: 495,
+    },
+  };
+  const order = {
+    documentId: "order-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    checkoutReference: "checkout-1",
+    status: "pending",
+    currency: "eur",
+    subtotalCents: 0,
+    discountCents: 0,
+    shippingCents: 495,
+    totalCents: 495,
+  };
+  const requested = {
+    subjectType: "order",
+    subjectId: "order-1",
+    purpose: "order",
+    customerDocumentId: "customer-1",
+    checkoutReference: "checkout-1",
+    currency: "EUR",
+  };
+  const payment = deriveAuthoritativePaymentSubject(
+    requested,
+    order,
+    null,
+    now,
+    checkout,
+  );
+  const changedCheckout = {
+    ...checkout,
+    totals: {
+      ...checkout.totals,
+      shippingMinor: 496,
+      totalMinor: 496,
+    },
+  };
+  const changedOrder = {
+    ...order,
+    shippingCents: 496,
+    totalCents: 496,
+  };
+  const resolvedAtSettlement = deriveAuthoritativePaymentSubject(
+    requested,
+    changedOrder,
+    null,
+    now,
+    changedCheckout,
+  );
+
+  assert.throws(
+    () => assertAuthoritativePaymentSubjectBinding(payment, resolvedAtSettlement),
+    /binding changed/i,
+  );
+});
+
+test("membership checkout lock rejects expired or divergent aggregate bindings", async () => {
+  const baseCheckout = {
+    checkoutReference: "checkout-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    status: "reserved",
+    expiresAt: "2026-07-25T09:00:00.000Z",
+    currency: "EUR",
+    totals: {
+      merchandiseMinor: 0,
+      shippingMinor: 495,
+      totalMinor: 495,
+    },
+  };
+  const baseOrder = {
+    documentId: "order-1",
+    customerDocumentId: "customer-1",
+    membershipDocumentId: "membership-1",
+    checkoutReference: "checkout-1",
+    status: "pending",
+    currency: "eur",
+    subtotalCents: 0,
+    discountCents: 0,
+    shippingCents: 495,
+    totalCents: 495,
+  };
+  const divergences = [
+    [{ status: "expired" }, {}],
+    [{ expiresAt: "2026-07-25T08:00:00.000Z" }, {}],
+    [{ customerDocumentId: "customer-2" }, {}],
+    [{ membershipDocumentId: "membership-2" }, {}],
+    [{ currency: "RON" }, {}],
+    [{ totals: { ...baseCheckout.totals, totalMinor: 496 } }, {}],
+    [{}, { customerDocumentId: "customer-2" }],
+    [{}, { membershipDocumentId: "membership-2" }],
+    [{}, { checkoutReference: "checkout-2" }],
+    [{}, { currency: "ron" }],
+    [{}, { totalCents: 496 }],
+  ];
+
+  for (const [checkoutPatch, orderPatch] of divergences) {
+    await assert.rejects(
+      lockMembershipCheckoutOrder({
+        lockCheckout: async () => ({
+          ...structuredClone(baseCheckout),
+          ...checkoutPatch,
+        }),
+        lockOrder: async () => ({
+          ...structuredClone(baseOrder),
+          ...orderPatch,
+        }),
+      }, {
+        checkoutReference: "checkout-1",
+        orderDocumentId: "order-1",
+        customerDocumentId: "customer-1",
+        membershipDocumentId: "membership-1",
+        now: new Date("2026-07-25T08:00:00.000Z"),
+      }),
+      /binding|reserved|expired|total|currency/i,
+    );
+  }
 });
 
 test("Strapi adapter enlists row lock and authoritative payment/event reads in one transaction", async () => {

@@ -127,3 +127,36 @@ Both commands were rerun green after their minimal implementations.
 - `git diff --check`: exit `0`.
 - Build-generated `dist` and `.strapi-updater.json` changes were restored after verification.
 - No Docker or live PostgreSQL verification was run. The deterministic adapter lock-sequence test and memory concurrency tests are evidence for this environment; a real PostgreSQL dev-server concurrency/rollback smoke remains a production-promotion gate.
+
+## Final Important Review Fixes
+
+Two additional Important findings were handled in a final TDD cycle:
+
+- Generic provider settlement now resolves an existing provider-event replay before applying mutable status/expiry checks. An exact replay with omitted occurrence time remains idempotent after the payment expires; changed replay fields conflict; a new provider event after expiry is rejected.
+- Membership-checkout payment preparation now locks and validates the complete checkout/order aggregate: reserved status, future expiry, checkout/customer/reference/membership binding, order/customer/reference/membership binding, component totals, total amount, and currency.
+- Membership checkout aggregates persist their authoritative currency. Payment amount, currency, immutable snapshot, and subject expiry come from the locked checkout rather than caller currency or an order charge snapshot. Payment expiry remains the minimum of configured transfer TTL and checkout expiry.
+- Settlement uses the same checkout-then-order resolver and compares the freshly derived aggregate binding and snapshot to the immutable payment, so even a coherently changed checkout and order total is rejected.
+
+### Final RED Evidence
+
+Focused command:
+
+`node --test src/api/payment-operations/services/payment-transaction.test.mjs src/api/membership-operations/services/membership-checkout.test.mjs`
+
+Observed exit code `1`, 35 passed and 4 failed:
+
+- checkout currency was not persisted;
+- a new provider event was accepted after expiry;
+- membership checkout money still came from the order charge snapshot;
+- expired/divergent checkout bindings were accepted.
+
+A later focused currency-authority command failed both selected tests because forged `USD` input was normalized before reading the checkout currency. The checkout path was then changed to derive currency exclusively from the locked aggregate.
+
+### Final Verification Evidence
+
+- Focused checkout/payment suite: exit `0`; 41 tests passed, 0 failed.
+- Full `node --test` in `Jamora/jamora-strapi`: exit `0`; 160 tests passed, 0 failed.
+- `npm run build` in `Jamora/jamora-strapi`: exit `0`; TypeScript compilation and Strapi admin build completed. Runtime packaging reported 35 CJS assets and 92 compiled JavaScript files validated.
+- `git diff --check`: exit `0`.
+- Build-generated `dist` and `.strapi-updater.json` changes were restored.
+- The live PostgreSQL dev-server gate remains outstanding and is not claimed here.

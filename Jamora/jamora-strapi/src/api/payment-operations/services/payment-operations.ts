@@ -1,6 +1,6 @@
 import { factories } from "@strapi/strapi";
-import { isDeepStrictEqual } from "node:util";
 import {
+  assertAuthoritativePaymentSubjectBinding,
   assertOrderPaymentBinding,
   beneficiaryFromEnv,
   createPaymentTransactions,
@@ -78,6 +78,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
 
   async function resolvePaymentSubject(input: any, context: { trx: any; now: Date }) {
     let subject;
+    let checkout = null;
     if (input.subjectType === "membership") {
       subject = await lockDocument(
           "api::membership.membership",
@@ -86,7 +87,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
           context.trx,
         );
     } else if (input.checkoutReference) {
-      ({ order: subject } = await lockMembershipCheckoutOrder({
+      ({ checkout, order: subject } = await lockMembershipCheckoutOrder({
         lockCheckout: (reference: string) => lockCheckout(reference, context.trx),
         lockOrder: (documentId: string) =>
           lockDocument(uid.order, "orders", documentId, context.trx),
@@ -94,6 +95,8 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         checkoutReference: input.checkoutReference,
         orderDocumentId: input.subjectId,
         customerDocumentId: input.customerDocumentId,
+        membershipDocumentId: input.membershipDocumentId,
+        now: context.now,
       }));
     } else {
       subject = await lockDocument(uid.order, "orders", input.subjectId, context.trx);
@@ -106,13 +109,8 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
       subject,
       reservation,
       context.now,
+      checkout,
     );
-  }
-
-  function comparableSnapshot(snapshot: any) {
-    const copy = structuredClone(snapshot ?? {});
-    delete copy.bankTransfer;
-    return copy;
   }
 
   async function validateSettlementSubject(
@@ -124,6 +122,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
       subjectId: payment.subjectId,
       purpose: payment.purpose,
       customerDocumentId: payment.customerDocumentId,
+      membershipDocumentId: payment.membershipDocumentId,
       currency: payment.currency,
       ...(payment.priceSnapshot?.membershipCheckout?.checkoutReference
         ? {
@@ -139,20 +138,7 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
       trx: context.trx,
       now: new Date(context.occurredAt),
     });
-    for (const field of [
-      "subjectType", "subjectId", "ownerDocumentId", "customerDocumentId",
-      "purpose", "orderDocumentId", "membershipDocumentId", "amountMinor", "currency",
-    ]) {
-      if ((resolved[field] ?? null) !== (payment[field] ?? null)) {
-        throw new Error("Authoritative payment subject binding changed.");
-      }
-    }
-    if (!isDeepStrictEqual(
-      comparableSnapshot(payment.priceSnapshot),
-      comparableSnapshot(resolved.priceSnapshot),
-    )) {
-      throw new Error("Authoritative payment price snapshot changed.");
-    }
+    assertAuthoritativePaymentSubjectBinding(payment, resolved);
   }
 
   async function settleOrdinaryOrder(payment: any, trx: any) {

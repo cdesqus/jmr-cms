@@ -101,6 +101,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           idempotencyKey: input.idempotencyKey,
           customerDocumentId: input.customerDocumentId,
           membershipDocumentId: membership.documentId,
+          currency: "EUR",
           items: authoritativeItems,
           totals: {
             merchandiseMinor: 0, coveredMerchandiseMinor, creditsRequired,
@@ -421,7 +422,7 @@ function strapiTx(strapi, query, withTrx, trx) {
         email: metadata.email,
         customerDocumentId: checkout.customerDocumentId,
         checkoutReference: checkout.checkoutReference,
-        status: "paid", currency: "eur",
+        status: "paid", currency: checkout.currency.toLowerCase(),
         subtotalCents: 0, shippingCents: checkout.totals.shippingMinor,
         discountCents: 0, totalCents: checkout.totals.shippingMinor,
         items: checkout.items,
