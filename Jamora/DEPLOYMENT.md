@@ -43,6 +43,7 @@ STRAPI_JWT_SECRET=$(openssl rand -base64 32)
 
 STRAPI_PUBLIC_URL=http://<server>:9014
 STRAPI_PORT=9014
+TRUST_PROXY=false
 STOREFRONT_PORT=3095
 POSTGRES_PORT=5439
 JAMORA_COST_RATIO=0.42
@@ -124,7 +125,7 @@ server {
         proxy_pass http://192.168.18.204:9014;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
@@ -138,7 +139,7 @@ server {
         proxy_pass http://192.168.18.204:9014;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
@@ -148,7 +149,7 @@ server {
         proxy_pass http://192.168.18.204:9014;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
@@ -158,7 +159,7 @@ server {
         proxy_pass http://192.168.18.204:9014;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
@@ -168,7 +169,7 @@ server {
         proxy_pass http://192.168.18.204:9014;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
@@ -178,7 +179,7 @@ server {
         proxy_pass http://192.168.18.204:9014;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
@@ -188,7 +189,7 @@ server {
         proxy_pass http://192.168.18.204:9014;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
@@ -425,7 +426,7 @@ node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
 npm run lint
 npm run build
 cd ../jamora-strapi
-node --test --test-force-exit src/api/**/*.test.mjs scripts/package-runtime-cjs.test.mjs
+node --test --test-force-exit src/api/**/*.test.mjs src/middlewares/*.test.mjs scripts/package-runtime-cjs.test.mjs
 npm run build
 ```
 
@@ -487,7 +488,9 @@ ROPAY_AUTH_RATE_WINDOW_MS=60000
 ROPAY_AUTH_RATE_MAX_BUCKETS=10000
 ```
 
-`PAYMENTS_ENABLED` and `ROPAY_ENABLED` accept only exact lowercase `true`.
+Bank transfer requires only `PAYMENTS_ENABLED=true`; RoPay requires both
+`PAYMENTS_ENABLED=true` and `ROPAY_ENABLED=true`. Both flags accept only exact
+lowercase `true`.
 `PAYMENT_TRANSFER_TTL_SECONDS` is 300–604800 seconds (default 72 hours);
 `ROPAY_INTENT_TTL_SECONDS` is 60–900 seconds (default 600). The current
 RoPay adapter is deliberately `mock` only. Setting `ROPAY_PROVIDER_MODE=live`
@@ -516,9 +519,69 @@ Use the same high-entropy value for the provider HMAC secret and
 only canonical signed payload fields. Server-to-server verification is
 `POST /api/jamora/internal/payments/ropay/status` with the same signing model.
 Do not expose it to a browser integration. Keep the existing Nginx `/api`
-proxy before the storefront catch-all and retain forwarded client IP headers so
-the pre-verification request guard can rate limit correctly. Preserve the
-4096-byte callback body limit; do not strip the three RoPay headers.
+proxy before the storefront catch-all and preserve the three RoPay headers and
+the 4096-byte callback body limit.
+
+Set `TRUST_PROXY=true` only when Nginx (or another controlled proxy) is the
+sole network path to Strapi: bind port `9014` to loopback/private networking,
+block direct public access with the host firewall/security group, and have the
+proxy overwrite—not append untrusted—`X-Forwarded-For`, `X-Forwarded-Proto`,
+and `X-Real-IP`. In that deployment Koa derives `ctx.ip` from the forwarded
+client address, allowing the RoPay pre-verification limiter to distinguish
+provider clients. Leave `TRUST_PROXY=false` for local/direct Strapi access;
+otherwise a client can forge forwarded headers and evade IP buckets.
+
+### Canonical RoPay HMAC contract
+
+For callback verification, sign UTF-8 bytes of exactly:
+
+```text
+ropay-callback\n<timestamp>\n<canonical-json>
+```
+
+For the internal status endpoint, the domain is exactly
+`ropay-status\n<timestamp>\n<canonical-json>`. `timestamp` must be an exact
+ISO-8601 UTC instant within the configured five-minute tolerance. The
+canonical JSON has no extra fields and this exact insertion order:
+
+```json
+{"providerEventId":"...","providerReference":"...","paymentReference":"...","status":"paid","amountMinor":10000,"currency":"RON","occurredAt":"..."}
+```
+
+`status` is lowercase `pending`, `paid`, or `failed`; `amountMinor` is a safe
+integer; RoPay currency is `RON`. The signature header is
+`sha256=<lowercase-hex-hmac-sha256>`. This reproducible Linux shell example
+uses placeholders only and emits a callback curl command:
+
+```bash
+export ROPAY_CALLBACK_SECRET='replace-with-secret-manager-value'
+export ROPAY_BASE_URL='https://<public-domain>'
+node - <<'NODE'
+const { createHmac } = require('node:crypto');
+const payload = {
+  providerEventId: 'smoke-event-001', providerReference: 'RPI-SMOKE-001',
+  paymentReference: 'JMR-ROPAY-SMOKE', status: 'paid', amountMinor: 10000,
+  currency: 'RON', occurredAt: new Date().toISOString(),
+};
+const timestamp = new Date().toISOString();
+const body = JSON.stringify(payload);
+const signature = `sha256=${createHmac('sha256', process.env.ROPAY_CALLBACK_SECRET)
+  .update(`ropay-callback\\n${timestamp}\\n${body}`).digest('hex')}`;
+console.log(JSON.stringify({ payload, timestamp, signature }));
+NODE
+# Copy the JSON values above; do not log or persist the real secret.
+curl --fail-with-body -X POST "$ROPAY_BASE_URL/api/jamora/payments/ropay/callback" \
+  -H 'content-type: application/json' \
+  -H 'x-ropay-provider-reference: RPI-SMOKE-001' \
+  -H 'x-ropay-timestamp: <timestamp>' \
+  -H 'x-ropay-signature: <signature>' \
+  --data '<canonical-json>'
+```
+
+For `/api/jamora/internal/payments/ropay/status`, use the same payload/header
+format but compute `ropay-status` rather than `ropay-callback`. Use a fresh
+event identity and a pre-created matching payment; never aim this smoke command
+at production or replay a live provider event.
 
 There are two bounded, in-memory protections: the pre-verification request
 guard (`ROPAY_RATE_*`) and the verified-reference/replay limiter
@@ -560,7 +623,7 @@ node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
 npm run lint
 npm run build
 cd ../jamora-strapi
-node --test --test-force-exit src/api/**/*.test.mjs scripts/package-runtime-cjs.test.mjs
+node --test --test-force-exit src/api/**/*.test.mjs src/middlewares/*.test.mjs scripts/package-runtime-cjs.test.mjs
 npm run build
 ```
 

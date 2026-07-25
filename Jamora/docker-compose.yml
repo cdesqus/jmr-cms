@@ -36,6 +36,7 @@ services:
       HOST: 0.0.0.0
       PORT: 1337
       PUBLIC_URL: ${STRAPI_PUBLIC_URL:-http://localhost:9014}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: ${POSTGRES_DB:-jamora_strapi}
