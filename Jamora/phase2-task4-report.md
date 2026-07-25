@@ -17,3 +17,10 @@
 ## Cleanup
 
 - Restored generated Strapi `dist/` files and `.strapi-updater.json` after the build.
+
+## Leak-Fix Follow-up
+
+- Mutation controllers now project receipt and resolution results to `documentId`, `paymentReference`, `status`, `idempotent`, and the derived resolution outcome; expiry returns only its bounded count.
+- The owner BFF applies the same allowlist projection defensively to every successful mutation response.
+- Adversarial sentinel tests prove idempotency keys, settlement/provider references, owner/subject identifiers, snapshots, and event payloads are absent.
+- Focused web policy tests and Strapi controller tests passed; web lint/build and Strapi build passed. Generated Strapi artifacts were restored again.

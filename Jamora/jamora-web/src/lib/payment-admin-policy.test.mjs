@@ -8,6 +8,7 @@ import {
   isPaymentsEnabled,
   paymentAdminPath,
   paymentProviderError,
+  safePaymentMutationResponse,
 } from "./payment-admin-policy.cjs";
 
 test("payment reconciliation is enabled only by the exact true flag and only for owners", () => {
@@ -60,4 +61,32 @@ test("allows only safe receipt and mismatch-resolution fields", () => {
   }), { reason: "Underpayment accepted after bank fee.", resolution: "cancel" });
   assert.throws(() => assertPaymentResolutionInput({ reason: " " }), /reason/i);
   assert.throws(() => assertPaymentResolutionInput({ reason: "Reason", resolution: "refund" }), /accept or cancel/i);
+});
+
+test("BFF mutation responses retain only reconciliation outcomes", () => {
+  const internalPayment = {
+    documentId: "payment-1",
+    paymentReference: "JMR-1",
+    status: "paid",
+    idempotent: false,
+    idempotencyKey: "internal-key",
+    settlementKey: "settlement-key",
+    providerReference: "provider-reference",
+    ownerDocumentId: "owner-1",
+    subjectId: "order-1",
+    priceSnapshot: { secret: "never expose" },
+    event: { payload: { secret: "never expose" } },
+  };
+  assert.deepEqual(
+    safePaymentMutationResponse(internalPayment, ["payment-1", "receipt"]),
+    { documentId: "payment-1", paymentReference: "JMR-1", status: "paid", idempotent: false },
+  );
+  assert.deepEqual(
+    safePaymentMutationResponse(internalPayment, ["payment-1", "resolve"]),
+    { documentId: "payment-1", paymentReference: "JMR-1", status: "paid", idempotent: false, resolution: "accept" },
+  );
+  assert.deepEqual(
+    safePaymentMutationResponse({ expired: 2, providerReference: "never expose" }, ["expire"]),
+    { expired: 2 },
+  );
 });

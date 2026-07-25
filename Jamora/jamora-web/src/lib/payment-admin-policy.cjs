@@ -31,6 +31,23 @@ function paymentProviderError() {
   return "Payment service unavailable.";
 }
 
+function safePaymentMutationResponse(value, path) {
+  if (path.length === 1 && path[0] === "expire") {
+    return { expired: Number.isSafeInteger(value?.expired) && value.expired >= 0 ? value.expired : 0 };
+  }
+  const result = {
+    documentId: value?.documentId,
+    paymentReference: value?.paymentReference,
+    status: value?.status,
+    idempotent: value?.idempotent === true,
+  };
+  if (path.length === 2 && path[1] === "resolve") {
+    if (value?.status === "paid") result.resolution = "accept";
+    if (value?.status === "cancelled") result.resolution = "cancel";
+  }
+  return result;
+}
+
 function assertPaymentReceiptInput(input) {
   const amountMinor = Number(input?.amountMinor);
   if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
@@ -69,4 +86,5 @@ module.exports = {
   isPaymentsEnabled,
   paymentAdminPath,
   paymentProviderError,
+  safePaymentMutationResponse,
 };

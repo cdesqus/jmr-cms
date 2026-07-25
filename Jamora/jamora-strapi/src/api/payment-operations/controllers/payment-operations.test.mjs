@@ -184,7 +184,7 @@ test("trusted guest preparation requires an order checkout capability", async ()
   }
 });
 
-test("receipt and mismatch resolution require owner credentials and server-derived actor", async () => {
+test("receipt, resolution, and expiry return minimal owner reconciliation DTOs", async () => {
   const previous = {
     payments: process.env.PAYMENTS_ENABLED,
     admin: process.env.JAMORA_ADMIN_API_SECRET,
@@ -195,7 +195,22 @@ test("receipt and mismatch resolution require owner credentials and server-deriv
   installStrapi({
     async recordBankReceipt(input) {
       received = input;
-      return { status: "underpaid" };
+      return {
+        documentId: "payment-1", paymentReference: "JMR-1", status: "underpaid", idempotent: false,
+        idempotencyKey: "internal-key", settlementKey: "settlement-key", providerReference: "provider-ref",
+        ownerDocumentId: "owner-1", subjectId: "order-1", priceSnapshot: { secret: "never expose" },
+        event: { payload: { secret: "never expose" } },
+      };
+    },
+    async resolvePaymentMismatch() {
+      return {
+        documentId: "payment-1", paymentReference: "JMR-1", status: "cancelled", idempotent: false,
+        idempotencyKey: "internal-key", settlementKey: "settlement-key", providerReference: "provider-ref",
+        ownerDocumentId: "owner-1", subjectId: "order-1", priceSnapshot: { secret: "never expose" },
+      };
+    },
+    async expireDuePayments() {
+      return 3;
     },
   });
   try {
@@ -221,6 +236,28 @@ test("receipt and mismatch resolution require owner credentials and server-deriv
     assert.equal(accepted.status, 200);
     assert.equal(received.actor, "owner@example.test");
     assert.equal(received.paymentDocumentId, "payment-1");
+    assert.deepEqual(accepted.body, {
+      documentId: "payment-1", paymentReference: "JMR-1", status: "underpaid", idempotent: false,
+    });
+
+    const resolution = context({ reason: "Bank charge accepted.", resolution: "cancel" }, {
+      "x-jamora-admin-secret": "admin-secret",
+      "x-jamora-admin-actor": "owner@example.test",
+      "x-jamora-admin-role": "owner",
+    }, { documentId: "payment-1" });
+    await controller.resolvePaymentMismatch(resolution);
+    assert.deepEqual(resolution.body, {
+      documentId: "payment-1", paymentReference: "JMR-1", status: "cancelled", idempotent: false,
+      resolution: "cancel",
+    });
+
+    const expiry = context({}, {
+      "x-jamora-admin-secret": "admin-secret",
+      "x-jamora-admin-actor": "owner@example.test",
+      "x-jamora-admin-role": "owner",
+    });
+    await controller.expireDuePayments(expiry);
+    assert.deepEqual(expiry.body, { expired: 3 });
   } finally {
     if (previous.payments === undefined) delete process.env.PAYMENTS_ENABLED;
     else process.env.PAYMENTS_ENABLED = previous.payments;

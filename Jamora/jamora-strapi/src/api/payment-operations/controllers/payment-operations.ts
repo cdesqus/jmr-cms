@@ -153,6 +153,20 @@ function safeRoPayStatus(payment: any) {
   };
 }
 
+function safeAdminPaymentMutation(payment: any, resolution?: "accept" | "cancel") {
+  return {
+    documentId: payment.documentId,
+    paymentReference: payment.paymentReference,
+    status: payment.status,
+    idempotent: payment.idempotent === true,
+    ...(resolution ? { resolution } : {}),
+  };
+}
+
+function safeExpiryOutcome(expired: unknown) {
+  return { expired: typeof expired === "number" && Number.isSafeInteger(expired) && expired >= 0 ? expired : 0 };
+}
+
 function providerEnvelope(ctx: any) {
   return {
     payload: requestBody(ctx),
@@ -263,32 +277,39 @@ export default {
     const identity = owner(ctx);
     if (!identity) return;
     const input = requestBody(ctx);
-    await run(ctx, () => paymentService().recordBankReceipt({
-      ...input,
-      paymentDocumentId: text(ctx.params?.documentId),
-      actor: identity.actor,
-    }));
+    await run(ctx, async () => safeAdminPaymentMutation(
+      await paymentService().recordBankReceipt({
+        ...input,
+        paymentDocumentId: text(ctx.params?.documentId),
+        actor: identity.actor,
+      }),
+    ));
   },
 
   async resolvePaymentMismatch(ctx: any) {
     const identity = owner(ctx);
     if (!identity) return;
     const input = requestBody(ctx);
-    await run(ctx, () => paymentService().resolvePaymentMismatch({
-      ...input,
-      paymentDocumentId: text(ctx.params?.documentId),
-      actor: identity.actor,
-    }));
+    await run(ctx, async () => {
+      const payment = await paymentService().resolvePaymentMismatch({
+        ...input,
+        paymentDocumentId: text(ctx.params?.documentId),
+        actor: identity.actor,
+      });
+      const resolution = payment.status === "paid" ? "accept"
+        : payment.status === "cancelled" ? "cancel" : undefined;
+      return safeAdminPaymentMutation(payment, resolution);
+    });
   },
 
   async expireDuePayments(ctx: any) {
     if (!owner(ctx)) return;
     const input = requestBody(ctx);
-    await run(ctx, async () => ({
-      expired: await paymentService().expireDuePayments(
+    await run(ctx, async () => safeExpiryOutcome(
+      await paymentService().expireDuePayments(
         input.now ? new Date(input.now) : new Date(),
         input.limit ?? 100,
       ),
-    }));
+    ));
   },
 };

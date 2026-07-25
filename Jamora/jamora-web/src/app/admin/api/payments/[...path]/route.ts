@@ -8,6 +8,7 @@ import {
   isPaymentsEnabled,
   paymentAdminPath,
   paymentProviderError,
+  safePaymentMutationResponse,
 } from "@/lib/payment-admin-policy.cjs";
 
 const STRAPI_URL = process.env.STRAPI_URL ?? "http://localhost:9014";
@@ -71,7 +72,10 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
       return NextResponse.json({ error: paymentProviderError() }, { status: response.status });
     }
     const json = await response.json().catch(() => null);
-    return NextResponse.json(json, { status: response.status });
+    return NextResponse.json(
+      request.method === "POST" ? safePaymentMutationResponse(json, path) : json,
+      { status: response.status },
+    );
   } catch {
     return NextResponse.json({ error: paymentProviderError() }, { status: 502 });
   }
