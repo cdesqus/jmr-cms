@@ -1,5 +1,11 @@
 "use strict";
 
+const {
+  resolveRomanianLocalityCounty,
+  resolveRomanianPostalAuthority,
+  resolveRomanianSubdivision,
+} = require("./romanian-postal-authority.cjs");
+
 const REGIONAL_SUBDIVISIONS = new Set([
   "BV", "CJ", "CT", "DJ", "IS", "SB", "TM",
 ]);
@@ -27,29 +33,24 @@ function parseAuthoritativeWeightGrams(product) {
   return rounded;
 }
 
-function canonicalSubdivision(value) {
-  return text(value).toUpperCase().replace(/^RO-/, "");
-}
-
-function canonicalLocality(value) {
-  return text(value)
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLocaleLowerCase("ro-RO");
-}
-
 function deriveRomanianShippingZone(address) {
-  const subdivision = canonicalSubdivision(address?.subdivisionCode);
-  const postalCode = text(address?.postalCode);
-  const metroSubdivision = subdivision === "B" || subdivision === "IF";
-  const metroPostalCode = /^0[1-7]\d{4}$/.test(postalCode);
-  if (metroSubdivision !== metroPostalCode) return "national";
-  if (subdivision === "B" &&
-      canonicalLocality(address?.locality) !== "bucuresti") {
+  const postal = resolveRomanianPostalAuthority(address?.postalCode);
+  const subdivision = resolveRomanianSubdivision(address?.subdivisionCode);
+  if (!postal ||
+      !subdivision ||
+      postal.countyCode !== subdivision.countyCode ||
+      (subdivision.sector && postal.sector !== subdivision.sector)) {
     return "national";
   }
-  if (metroSubdivision) return "metro";
-  if (REGIONAL_SUBDIVISIONS.has(subdivision)) return "regional";
+  const proposedZone = postal.countyCode === "B" || postal.countyCode === "IF"
+    ? "metro"
+    : REGIONAL_SUBDIVISIONS.has(postal.countyCode) ? "regional" : "national";
+  if (proposedZone === "national") return proposedZone;
+  if (resolveRomanianLocalityCounty(address?.locality) !== postal.countyCode) {
+    return "national";
+  }
+  if (proposedZone === "metro") return "metro";
+  if (proposedZone === "regional") return "regional";
   return "national";
 }
 

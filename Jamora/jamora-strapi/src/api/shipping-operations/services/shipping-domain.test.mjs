@@ -5,6 +5,12 @@ import {
   selectShippingQuote,
   validateShippingSnapshot,
 } from "./shipping-domain.cjs";
+import {
+  COUNTY_AUTHORITIES,
+  normalizeRomanianCountyCode,
+  resolveRomanianPostalAuthority,
+  resolveRomanianSubdivision,
+} from "./romanian-postal-authority.cjs";
 
 const SECRET = "test-shipping-quote-secret-at-least-32-bytes";
 const NOW = new Date("2026-07-25T10:00:00.000Z");
@@ -38,6 +44,30 @@ const products = [
 const items = [
   { slug: "energy", qty: 2, weightGrams: 999_999, zone: "free" },
   { slug: "balance", qty: 1, weightGrams: 1 },
+];
+
+const POSTAL_AUTHORITIES = [
+  ["AB", "51", "Alba Iulia"], ["AR", "31", "Arad"],
+  ["AG", "11", "Pitesti"], ["BC", "60", "Bacau"],
+  ["BH", "41", "Oradea"], ["BN", "42", "Bistrita"],
+  ["BT", "71", "Botosani"], ["BV", "50", "Brasov"],
+  ["BR", "81", "Braila"], ["BZ", "12", "Buzau"],
+  ["CS", "32", "Resita"], ["CL", "91", "Calarasi"],
+  ["CJ", "40", "Cluj-Napoca"], ["CT", "90", "Constanta"],
+  ["CV", "52", "Sfantu Gheorghe"], ["DB", "13", "Targoviste"],
+  ["DJ", "20", "Craiova"], ["GL", "80", "Galati"],
+  ["GR", "08", "Giurgiu"], ["GJ", "21", "Targu Jiu"],
+  ["HR", "53", "Miercurea Ciuc"], ["HD", "33", "Deva"],
+  ["IL", "92", "Slobozia"], ["IS", "70", "Iasi"],
+  ["IF", "07", "Otopeni"], ["MM", "43", "Baia Mare"],
+  ["MH", "22", "Drobeta-Turnu Severin"], ["MS", "54", "Targu Mures"],
+  ["NT", "61", "Piatra Neamt"], ["OT", "23", "Slatina"],
+  ["PH", "10", "Ploiesti"], ["SM", "44", "Satu Mare"],
+  ["SJ", "45", "Zalau"], ["SB", "55", "Sibiu"],
+  ["SV", "72", "Suceava"], ["TR", "14", "Alexandria"],
+  ["TM", "30", "Timisoara"], ["TL", "82", "Tulcea"],
+  ["VS", "73", "Vaslui"], ["VL", "24", "Ramnicu Valcea"],
+  ["VN", "62", "Focsani"],
 ];
 
 const options = { secret: SECRET, now: NOW };
@@ -172,6 +202,121 @@ test("contradictory postal and subdivision signals can never select a cheaper zo
   assert.equal(bucharestSignalsWithClujLocality[0].amountMinor, 2440);
   assert.equal(bucharestSignalsWithClujAlias[0].amountMinor, 2440);
   assert.equal(bucharestSignalsWithUnknownLocality[0].amountMinor, 2440);
+});
+
+test("all Romanian county prefixes and Bucharest sectors derive only their authoritative zone", () => {
+  assert.equal(COUNTY_AUTHORITIES.length, 41);
+  assert.equal(new Set(COUNTY_AUTHORITIES.map(({ code }) => code)).size, 41);
+  assert.equal(new Set(COUNTY_AUTHORITIES.map(({ prefix }) => prefix)).size, 41);
+  const regional = new Set(["BV", "CJ", "CT", "DJ", "IS", "SB", "TM"]);
+  for (const [subdivisionCode, prefix, locality] of POSTAL_AUTHORITIES) {
+    assert.deepEqual(resolveRomanianPostalAuthority(`${prefix}0001`), {
+      countyCode: subdivisionCode,
+      prefix,
+    });
+    const authority = COUNTY_AUTHORITIES.find(
+      ({ code }) => code === subdivisionCode,
+    );
+    assert.equal(
+      normalizeRomanianCountyCode(`Judetul ${authority.name}`),
+      subdivisionCode,
+    );
+    const [quote] = quoteShipping({
+      address: {
+        ...address,
+        subdivisionCode,
+        locality,
+        postalCode: `${prefix}0001`,
+      },
+      items: [{ slug: "energy", qty: 1 }],
+      products,
+    }, options);
+    const expected = subdivisionCode === "IF"
+      ? 1690
+      : regional.has(subdivisionCode) ? 2090 : 2440;
+    assert.equal(
+      quote.amountMinor,
+      expected,
+      `${subdivisionCode} must derive from postal prefix ${prefix}`,
+    );
+  }
+
+  for (let sector = 1; sector <= 6; sector += 1) {
+    assert.deepEqual(resolveRomanianPostalAuthority(`0${sector}0001`), {
+      countyCode: "B",
+      sector,
+      prefix: `0${sector}`,
+    });
+    const [quote] = quoteShipping({
+      address: {
+        ...address,
+        subdivisionCode: `Bucuresti Sector ${sector}`,
+        locality: "Bucuresti",
+        postalCode: `0${sector}0001`,
+      },
+      items: [{ slug: "energy", qty: 1 }],
+      products,
+    }, options);
+    assert.equal(quote.amountMinor, 1690, `Bucharest sector ${sector}`);
+  }
+});
+
+test("postal county mismatches, range boundaries, and unmapped values fail closed", () => {
+  const cases = [
+    ["CJ", "Satu Mare", "440001"],
+    ["CJ", "Cluj-Napoca", "399999"],
+    ["B", "Bucuresti", "070000"],
+    ["Bucuresti Sector 1", "Bucuresti", "020001"],
+    ["SM", "Satu Mare", "990001"],
+  ];
+  for (const [subdivisionCode, locality, postalCode] of cases) {
+    const [quote] = quoteShipping({
+      address: {
+        ...address,
+        subdivisionCode,
+        locality,
+        postalCode,
+      },
+      items: [{ slug: "energy", qty: 1 }],
+      products,
+    }, options);
+    assert.equal(
+      quote.amountMinor,
+      2440,
+      `${subdivisionCode}/${locality}/${postalCode}`,
+    );
+  }
+
+  for (const postalCode of ["40000", "4000000", "40A001", ""]) {
+    assert.throws(
+      () => quoteShipping({
+        address: { ...address, postalCode },
+        items: [{ slug: "energy", qty: 1 }],
+        products,
+      }, options),
+      /invalid shipping address/i,
+    );
+  }
+});
+
+test("ambiguous Bucharest sector aliases cannot hide a conflicting county", () => {
+  for (const subdivisionCode of [
+    "RO-CJ Bucuresti Sector 1",
+    "Bucuresti Sector 1 Cluj",
+  ]) {
+    assert.equal(resolveRomanianSubdivision(subdivisionCode), null);
+    const [quote] = quoteShipping({
+      address: {
+        ...address,
+        subdivisionCode,
+        locality: "Bucuresti",
+        postalCode: "010001",
+      },
+      items: [{ slug: "energy", qty: 1 }],
+      products,
+    }, options);
+    assert.equal(quote.amountMinor, 2440, subdivisionCode);
+  }
 });
 
 test("selects one signed quote into an immutable snapshot and exact replay is idempotent", () => {
