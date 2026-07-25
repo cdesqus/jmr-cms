@@ -255,10 +255,21 @@ function applyAuthoritativeRonShipping(
     (BigInt(merchandiseEurMinor) * parsed.numerator + parsed.denominator / BigInt(2)) /
       parsed.denominator,
   );
+  const discountRonMinor = Number(
+    (BigInt(pricing.discountCents) * parsed.numerator + parsed.denominator / BigInt(2)) /
+      parsed.denominator,
+  );
+  const subtotalRonMinor = merchandiseRonMinor + discountRonMinor;
   const totalCents = merchandiseEurMinor + shippingEurMinor;
   const chargeMinor = merchandiseRonMinor + shipping.amountMinor;
-  if (![shippingEurMinor, merchandiseRonMinor, totalCents, chargeMinor]
-      .every((value) => Number.isSafeInteger(value) && value >= 0)) {
+  if (![
+    shippingEurMinor,
+    merchandiseRonMinor,
+    discountRonMinor,
+    subtotalRonMinor,
+    totalCents,
+    chargeMinor,
+  ].every((value) => Number.isSafeInteger(value) && value >= 0)) {
     throw new RangeError("Authoritative shipping total exceeds safe integer range");
   }
   return {
@@ -274,6 +285,13 @@ function applyAuthoritativeRonShipping(
       source: "demo-config",
       capturedAt: options.capturedAt ?? new Date().toISOString(),
       shipping: structuredClone(shipping),
+      breakdown: {
+        subtotalMinor: subtotalRonMinor,
+        shippingMinor: shipping.amountMinor,
+        discountMinor: discountRonMinor,
+        totalMinor: chargeMinor,
+        currency: "RON",
+      },
     },
   };
 }

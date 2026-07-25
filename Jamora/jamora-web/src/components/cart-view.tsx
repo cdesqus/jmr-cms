@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
+  authoritativeMockOrder,
   createMockOrder,
   saveMockOrder,
   syncMockOrderToStrapi,
@@ -369,9 +370,14 @@ export function CartView({
               result.error ?? "Membership checkout could not be completed.",
             );
           }
+          const result = await finalizeResponse.json().catch(() => ({}));
+          order = authoritativeMockOrder(result.order);
+          attempt.order = order;
         } else {
           const synced = await syncMockOrderToStrapi(order);
           if (!synced.ok) throw new Error(synced.error);
+          order = synced.order;
+          attempt.order = order;
         }
       } else {
         if (!attempt.preparedOrderDocumentId) {

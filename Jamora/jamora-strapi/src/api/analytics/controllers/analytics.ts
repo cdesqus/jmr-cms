@@ -13,12 +13,21 @@ import {
   authoritativeShippingCheckoutAllowed,
   pendingCustomerSessionInput,
   pendingPaymentOrderBoundary,
-  pendingPaymentReservationToken,
   phase1MockOrderAllowed,
 } from "../services/pending-payment-order-policy.cjs";
 import {
-  assertReservationAllocationBinding,
-} from "../../payment-operations/services/order-payment-settlement.cjs";
+  assertExistingOrderReplay,
+  assertLiveReservationBinding,
+  exactAllocationUpdate,
+  reservationExpiryForSelection,
+  requiredOrderReservationToken,
+} from "../services/shipping-order-finalization.cjs";
+import {
+  safeCheckoutOrder,
+} from "../services/checkout-order-response.cjs";
+import {
+  hasStorefrontSecret,
+} from "../../customer-auth/controllers/storefront-secret.cjs";
 
 const DEFAULT_COST_RATIO = 0.42;
 
@@ -48,6 +57,30 @@ function requireAdminSecret(ctx: any) {
   ctx.status = 401;
   ctx.body = { error: "Admin API secret required." };
   return false;
+}
+
+async function trustedCheckoutCustomer(ctx: any) {
+  let session;
+  try {
+    session = pendingCustomerSessionInput(
+      ctx.get("x-jamora-customer-document-id"),
+      ctx.get("x-jamora-customer-session-version"),
+    );
+  } catch {
+    throw new Error("Invalid session.");
+  }
+  if (!session) return undefined;
+  if (!hasStorefrontSecret(
+    ctx.get("x-jamora-storefront-secret"),
+    process.env.JAMORA_STOREFRONT_API_SECRET,
+  )) {
+    throw new Error("Invalid session.");
+  }
+  const customer = await (
+    strapi.service("api::customer-auth.customer-auth") as any
+  ).findActiveSessionCustomer(session.documentId, session.sessionVersion);
+  if (!customer) throw new Error("Invalid session.");
+  return customer;
 }
 
 function asOrderStatus(value: unknown) {
@@ -373,6 +406,135 @@ const reservationDocuments = () => (strapi.documents as any)("api::stock-reserva
 const returnDocuments = () => (strapi.documents as any)("api::return-request.return-request");
 const notificationDocuments = () => (strapi.documents as any)("api::notification-log.notification-log");
 
+function withTransaction(trx: any, value: any) {
+  return trx ? { ...value, transacting: trx } : value;
+}
+
+async function createOrderWithLockedReservation(input: {
+  token: string;
+  items: any[];
+  email: string;
+  customerDocumentId?: string;
+  shippingQuote?: any;
+  orderNumber: string;
+  pendingPayment: boolean;
+  data: Record<string, unknown>;
+}) {
+  return strapi.db.transaction(async ({ trx }: { trx: any }) => {
+    const reservationQuery = strapi.db.query(
+      "api::stock-reservation.stock-reservation",
+    );
+    const candidate = await reservationQuery.findOne(withTransaction(trx, {
+      where: { token: input.token },
+    }));
+    if (!candidate?.documentId) {
+      throw new Error("Stock reservation expired or was already used.");
+    }
+    await strapi.db.connection("stock_reservations")
+      .where({ document_id: candidate.documentId })
+      .transacting(trx)
+      .forUpdate()
+      .first();
+    const reservation = await reservationQuery.findOne(withTransaction(trx, {
+      where: { documentId: candidate.documentId },
+    }));
+    const allocations = assertLiveReservationBinding(reservation, {
+      token: input.token,
+      items: input.items,
+      email: input.email,
+      customerDocumentId: input.customerDocumentId,
+      orderNumber: input.orderNumber,
+      shippingQuote: input.shippingQuote,
+      now: new Date(),
+    }) as any[];
+
+    const order = await strapi.db.query("api::order.order").create(
+      withTransaction(trx, {
+        data: {
+          ...input.data,
+          batchAllocations: allocations,
+          reservationToken: input.token,
+        },
+      }),
+    );
+    if (input.pendingPayment) {
+      await reservationQuery.update(withTransaction(trx, {
+        where: { documentId: reservation.documentId },
+        data: { orderNumber: input.orderNumber },
+      }));
+      return { order, allocations };
+    }
+
+    const orderedAllocations = [...allocations].sort((left, right) =>
+      `${left?.productDocumentId ?? ""}:${left?.batchDocumentId ?? ""}`
+        .localeCompare(
+          `${right?.productDocumentId ?? ""}:${right?.batchDocumentId ?? ""}`,
+        ));
+    for (const allocation of orderedAllocations) {
+      if (allocation.batchDocumentId) {
+        await strapi.db.connection("inventory_batches")
+          .where({ document_id: allocation.batchDocumentId })
+          .transacting(trx)
+          .forUpdate()
+          .first();
+        const batchQuery = strapi.db.query(
+          "api::inventory-batch.inventory-batch",
+        );
+        const batch = await batchQuery.findOne(withTransaction(trx, {
+          where: { documentId: allocation.batchDocumentId },
+        }));
+        const update = exactAllocationUpdate(allocation, batch) as any;
+        await batchQuery.update(withTransaction(trx, {
+          where: { documentId: update.documentId },
+          data: {
+            quantity: update.quantity,
+            reservedQuantity: update.reservedQuantity,
+            status: update.status,
+          },
+        }));
+      }
+
+      await strapi.db.connection("products")
+        .where({ document_id: allocation.productDocumentId })
+        .transacting(trx)
+        .forUpdate()
+        .first();
+      const productQuery = strapi.db.query("api::product.product");
+      const product = await productQuery.findOne(withTransaction(trx, {
+        where: { documentId: allocation.productDocumentId },
+      }));
+      const productUpdate = exactAllocationUpdate(
+        { ...allocation, batchDocumentId: null },
+        product,
+      ) as any;
+      await productQuery.update(withTransaction(trx, {
+        where: { documentId: productUpdate.documentId },
+        data: { stock: productUpdate.stock },
+      }));
+      await strapi.db.query("api::inventory-movement.inventory-movement").create(
+        withTransaction(trx, {
+          data: {
+            productDocumentId: product.documentId,
+            productName: product.name || allocation.name || allocation.slug,
+            sku: product.sku || allocation.sku || "",
+            slug: product.slug || allocation.slug,
+            delta: -allocation.qty,
+            balanceAfter: productUpdate.stock,
+            reason: "sale",
+            reference: input.orderNumber,
+            actor: "Checkout",
+          },
+        }),
+      );
+    }
+    await reservationQuery.update(withTransaction(trx, {
+      where: { documentId: reservation.documentId },
+      data: { status: "consumed", orderNumber: input.orderNumber },
+    }));
+    return { order, allocations };
+  });
+}
+
 function adminIdentity(ctx: any) {
   return {
     actor: asString(ctx.get("x-jamora-admin-actor"), "Jamora Admin"),
@@ -442,7 +604,12 @@ async function expireReservations() {
   }
 }
 
-async function createStockReservation(items: any[], email = "") {
+async function createStockReservation(
+  items: any[],
+  email = "",
+  shippingSelection?: unknown,
+  customerDocumentId?: string,
+) {
   await expireReservations();
   const activeReservations = await reservationDocuments().findMany({
     fields: ["allocations"],
@@ -465,6 +632,15 @@ async function createStockReservation(items: any[], email = "") {
     const slug = asString(item.slug);
     const qty = Math.max(0, Math.round(asNumber(item.qty)));
     if (!slug || qty <= 0) continue;
+    const products = await strapi.documents("api::product.product").findMany({
+      fields: ["documentId", "slug", "sku", "name", "stock"],
+      filters: { slug: { $eq: slug } },
+      limit: 2,
+    });
+    if (products.length !== 1 || !products[0]?.documentId) {
+      return { error: `Authoritative product ${slug} is unavailable.` };
+    }
+    const product = products[0] as any;
     const batches = await batchDocuments().findMany({
       filters: { slug: { $eq: slug } },
       sort: { expiryDate: "asc" },
@@ -482,10 +658,10 @@ async function createStockReservation(items: any[], email = "") {
         const take = Math.min(remaining, available);
         if (take <= 0) continue;
         allocations.push({
-          productDocumentId: item.productId,
+          productDocumentId: product.documentId,
           slug,
-          sku: item.sku,
-          name: item.name,
+          sku: product.sku,
+          name: product.name,
           batchDocumentId: batch.documentId,
           batchNumber: batch.batchNumber,
           productionDate: batch.productionDate,
@@ -499,12 +675,6 @@ async function createStockReservation(items: any[], email = "") {
       if (remaining === 0) continue;
     }
 
-    const products = await strapi.documents("api::product.product").findMany({
-      fields: ["documentId", "slug", "stock"],
-      filters: { slug: { $eq: slug } },
-      limit: 1,
-    });
-    const product = products[0] as any;
     const trackedBatchQuantity = batches.reduce(
       (sum: number, batch: any) => sum + asNumber(batch.quantity),
       0,
@@ -534,44 +704,24 @@ async function createStockReservation(items: any[], email = "") {
       data: { reservedQuantity },
     });
   }
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const expiresAt = reservationExpiryForSelection(
+    new Date(),
+    shippingSelection && typeof shippingSelection === "object"
+      ? shippingSelection as Record<string, unknown>
+      : undefined,
+  );
   const token = `rsv_${crypto.randomUUID()}`;
   const reservation = await reservationDocuments().create({
-    data: { token, status: "reserved", allocations, expiresAt, email },
+    data: {
+      token,
+      status: "reserved",
+      allocations,
+      expiresAt,
+      email,
+      customerDocumentId,
+    },
   });
   return { reservation };
-}
-
-async function consumeReservation(token: string, orderNumber: string) {
-  if (!token) return { allocations: [] };
-  await expireReservations();
-  const matches = await reservationDocuments().findMany({
-    filters: { token: { $eq: token }, status: { $eq: "reserved" } },
-    limit: 1,
-  });
-  const reservation = matches[0];
-  if (!reservation) return { error: "Stock reservation expired or was already used." };
-  const allocations = Array.isArray(reservation.allocations) ? reservation.allocations : [];
-  for (const allocation of allocations) {
-    if (!allocation.batchDocumentId) continue;
-    const batch = await batchDocuments().findOne({ documentId: allocation.batchDocumentId });
-    if (!batch) return { error: `Batch ${allocation.batchNumber} is unavailable.` };
-    const quantity = Math.max(0, asNumber(batch.quantity) - asNumber(allocation.qty));
-    const reservedQuantity = Math.max(0, asNumber(batch.reservedQuantity) - asNumber(allocation.qty));
-    await batchDocuments().update({
-      documentId: batch.documentId,
-      data: {
-        quantity,
-        reservedQuantity,
-        status: quantity === 0 ? "depleted" : batch.status,
-      },
-    });
-  }
-  await reservationDocuments().update({
-    documentId: reservation.documentId,
-    data: { status: "consumed", orderNumber },
-  });
-  return { allocations };
 }
 
 async function enrichBatchAllocations(value: unknown) {
@@ -597,39 +747,6 @@ async function enrichBatchAllocations(value: unknown) {
   );
 }
 
-async function decrementProductStock(items: any[], reference: string) {
-  for (const item of items) {
-    const slug = asString(item.slug);
-    const qty = Math.max(0, Math.round(asNumber(item.qty)));
-    if (!slug || qty <= 0) continue;
-
-    const products = await strapi.documents("api::product.product").findMany({
-      fields: ["documentId", "name", "sku", "slug", "stock"],
-      filters: { slug: { $eq: slug } },
-      limit: 1,
-    });
-    const product = products[0] as any;
-    if (!product?.documentId || typeof product.stock !== "number") continue;
-
-    const balanceAfter = Math.max(0, product.stock - qty);
-    await strapi.documents("api::product.product").update({
-      documentId: product.documentId,
-      data: {
-        stock: balanceAfter,
-      } as any,
-      status: "published",
-    } as any);
-    await recordInventoryMovement({
-      product,
-      delta: balanceAfter - product.stock,
-      balanceAfter,
-      reason: "sale",
-      reference,
-      actor: "Checkout",
-    });
-  }
-}
-
 const controller = {
   async visit(ctx) {
     const body = ctx.request.body ?? {};
@@ -650,13 +767,26 @@ const controller = {
 
   async reserveStock(ctx) {
     const body = ctx.request.body ?? {};
+    let customer;
+    try {
+      customer = await trustedCheckoutCustomer(ctx);
+    } catch {
+      ctx.status = 401;
+      ctx.body = { error: "Invalid session." };
+      return;
+    }
     const items = normalizeOrderItems(Array.isArray(body.items) ? body.items : []);
     if (items.length === 0) {
       ctx.status = 400;
       ctx.body = { error: "Cart is empty." };
       return;
     }
-    const result = await createStockReservation(items, asString(body.email));
+    const result = await createStockReservation(
+      items,
+      asString(customer?.email, asString(body.email)),
+      body.shippingSelection,
+      customer?.documentId,
+    );
     if ("error" in result) {
       ctx.status = 409;
       ctx.body = result;
@@ -678,25 +808,90 @@ const controller = {
       ctx.body = { error: "Not found." };
       return;
     }
+    if (!pendingPayment) {
+      try {
+        const customer = await trustedCheckoutCustomer(ctx);
+        if (customer) {
+          ctx.state ??= {};
+          ctx.state.jamoraCustomerDocumentId = customer.documentId;
+          ctx.state.jamoraCustomerEmail = customer.email;
+        }
+      } catch {
+        ctx.status = 401;
+        ctx.body = { error: "Invalid session." };
+        return;
+      }
+    }
+    if (ctx.state?.jamoraCustomerEmail) {
+      body.customer = {
+        ...(body.customer && typeof body.customer === "object"
+          ? body.customer
+          : {}),
+        email: ctx.state.jamoraCustomerEmail,
+      };
+    }
     const orderNumber = asString(body.orderNumber);
     if (!orderNumber) {
       ctx.status = 400;
       ctx.body = { error: "Order number is required." };
       return;
     }
+    const structuredCheckoutEnabled =
+      process.env.STRUCTURED_CHECKOUT_ENABLED === "true";
+    const shippingEnabled = process.env.SHIPPING_ENABLED === "true";
+    let reservationToken: string | undefined;
+    try {
+      reservationToken = requiredOrderReservationToken(body.reservationToken, {
+        shippingEnabled,
+        pendingPayment,
+      });
+    } catch (error) {
+      ctx.status = 409;
+      ctx.body = {
+        error: error instanceof Error
+          ? error.message
+          : "Stock reservation is required.",
+      };
+      return;
+    }
 
     const existing = await strapi.documents("api::order.order").findMany({
-      fields: ["documentId", "orderNumber", "status"],
       filters: { orderNumber: { $eq: orderNumber } },
       limit: 1,
     });
     if (existing[0]) {
-      ctx.body = { ok: true, order: existing[0], duplicate: true };
+      try {
+        if (!reservationToken) {
+          throw new Error("Order replay capability binding is invalid.");
+        }
+        const reservations = await reservationDocuments().findMany({
+          filters: { token: { $eq: reservationToken } },
+          limit: 2,
+        });
+        if (reservations.length !== 1) {
+          throw new Error("Order replay capability binding is invalid.");
+        }
+        assertExistingOrderReplay(existing[0], reservations[0], {
+          token: reservationToken,
+          email: asString(
+            body.customer?.email,
+            "customer@example.com",
+          ),
+          customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
+          now: new Date(),
+        });
+        ctx.body = {
+          ok: true,
+          order: safeCheckoutOrder(existing[0]),
+          duplicate: true,
+        };
+      } catch {
+        ctx.status = 409;
+        ctx.body = { error: "Authoritative order snapshot is unavailable." };
+      }
       return;
     }
 
-    const structuredCheckoutEnabled = process.env.STRUCTURED_CHECKOUT_ENABLED === "true";
-    const shippingEnabled = process.env.SHIPPING_ENABLED === "true";
     const authoritativeStructuredCheckout =
       structuredCheckoutEnabled || shippingEnabled;
     const authoritativePricing =
@@ -815,45 +1010,6 @@ const controller = {
       }
     }
     const { items, subtotalCents, shippingCents, discountCents, totalCents } = pricing;
-    let reservationToken;
-    try {
-      reservationToken = pendingPayment
-        ? pendingPaymentReservationToken(body.reservationToken)
-        : asString(body.reservationToken);
-    } catch (error) {
-      ctx.status = 409;
-      ctx.body = {
-        error: error instanceof Error ? error.message : "Stock reservation is required.",
-      };
-      return;
-    }
-    let reservedAllocations: any[] = [];
-    if (reservationToken) {
-      await expireReservations();
-      const reservations = await reservationDocuments().findMany({
-        fields: ["documentId", "allocations", "expiresAt"],
-        filters: { token: { $eq: reservationToken }, status: { $eq: "reserved" } },
-        limit: 1,
-      });
-      if (!reservations[0]) {
-        ctx.status = 409;
-        ctx.body = { error: "Stock reservation expired. Please try checkout again." };
-        return;
-      }
-      reservedAllocations = Array.isArray(reservations[0].allocations)
-        ? reservations[0].allocations
-        : [];
-      if (pendingPayment || shippingEnabled) {
-        try {
-          assertReservationAllocationBinding(reservedAllocations, items);
-        } catch {
-          ctx.status = 409;
-          ctx.body = { error: "Stock reservation does not match this order." };
-          return;
-        }
-      }
-    }
-
     const storefrontUrl = (
       process.env.JAMORA_STOREFRONT_URL ??
       process.env.PUBLIC_URL ??
@@ -874,8 +1030,7 @@ const controller = {
       : phase1MockPaidOrderFields(orderNumber);
     modeFields.statusHistory = (modeFields.statusHistory as any[])
       .map((event) => timelineEvent(event));
-    const order = await strapi.documents("api::order.order").create({
-      data: {
+    const orderData = {
         orderNumber,
         trackingNumber: asString(body.trackingNumber),
         carrier: shippingSnapshot?.quote?.carrier ??
@@ -891,8 +1046,9 @@ const controller = {
         estimatedProfitCents,
         items,
         ...modeFields,
+        customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
         reservationToken,
-        batchAllocations: reservedAllocations,
+        batchAllocations: [],
         fulfilmentChecklist: items.map((item) => ({
           productId: item.productId,
           sku: item.sku,
@@ -912,15 +1068,29 @@ const controller = {
         trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
         deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
         estimatedDelivery: shippingEnabled ? undefined : body.estimatedDelivery,
-      },
-    });
-
-    if (!pendingPayment) {
-      await decrementProductStock(items, orderNumber);
-      if (reservationToken) {
-        const consumed = await consumeReservation(reservationToken, orderNumber);
-        if ("error" in consumed) strapi.log.warn(consumed.error);
-      }
+    };
+    let order;
+    try {
+      order = reservationToken
+        ? (await createOrderWithLockedReservation({
+            token: reservationToken,
+            items,
+            email: asString(body.customer?.email, "customer@example.com"),
+            customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
+            shippingQuote: shippingSnapshot?.quote,
+            orderNumber,
+            pendingPayment,
+            data: orderData,
+          })).order
+        : await strapi.documents("api::order.order").create({ data: orderData });
+    } catch (error) {
+      ctx.status = 409;
+      ctx.body = {
+        error: error instanceof Error
+          ? error.message
+          : "Stock reservation could not be finalized.",
+      };
+      return;
     }
 
     if (!pendingPayment && promotionResult?.promotion?.documentId) {
@@ -942,7 +1112,12 @@ const controller = {
       });
     }
 
-    ctx.body = { ok: true, order };
+    try {
+      ctx.body = { ok: true, order: safeCheckoutOrder(order) };
+    } catch {
+      ctx.status = 409;
+      ctx.body = { error: "Authoritative order snapshot is unavailable." };
+    }
   },
 
   async pendingPaymentOrder(ctx) {
@@ -956,27 +1131,16 @@ const controller = {
       ctx.body = { error: boundary.error };
       return;
     }
-    let session;
     try {
-      session = pendingCustomerSessionInput(
-        ctx.get("x-jamora-customer-document-id"),
-        ctx.get("x-jamora-customer-session-version"),
-      );
+      const customer = await trustedCheckoutCustomer(ctx);
+      if (customer) {
+        ctx.state.jamoraCustomerDocumentId = customer.documentId;
+        ctx.state.jamoraCustomerEmail = customer.email;
+      }
     } catch {
       ctx.status = 401;
       ctx.body = { error: "Invalid session." };
       return;
-    }
-    if (session) {
-      const customer = await (
-        strapi.service("api::customer-auth.customer-auth") as any
-      ).findActiveSessionCustomer(session.documentId, session.sessionVersion);
-      if (!customer) {
-        ctx.status = 401;
-        ctx.body = { error: "Invalid session." };
-        return;
-      }
-      ctx.state.jamoraCustomerDocumentId = customer.documentId;
     }
     ctx.state.jamoraPendingPayment = true;
     return controller.mockPaidOrder(ctx);

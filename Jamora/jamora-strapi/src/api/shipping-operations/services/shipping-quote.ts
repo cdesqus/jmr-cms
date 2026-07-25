@@ -302,13 +302,24 @@ export default ({ strapi }: { strapi: any }) => {
         throw new Error("Shipping subject not found.");
       }
       const products = await productsFor(input.items);
+      const now = input.now ?? new Date();
+      const reservationExpiry = input.reservationExpiresAt
+        ? new Date(input.reservationExpiresAt)
+        : undefined;
+      const ttlMs = reservationExpiry
+        ? Math.min(
+            15 * 60 * 1000,
+            reservationExpiry.getTime() - new Date(now).getTime(),
+          )
+        : undefined;
       return createQuotes({
         address: input.address,
         items: input.items,
         products,
       }, {
         secret: quoteSecret(),
-        now: input.now ?? new Date(),
+        now,
+        ...(ttlMs !== undefined ? { ttlMs } : {}),
       });
     },
 

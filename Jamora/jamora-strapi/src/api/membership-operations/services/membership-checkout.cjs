@@ -226,6 +226,15 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           checkoutReference: input.checkoutReference,
           credits: creditsRequired,
         });
+        const configuredExpiry = new Date(
+          now.getTime() + ttlSeconds * 1000,
+        );
+        const quoteExpiry = shippingSnapshot.quote
+          ? new Date(shippingSnapshot.quote.expiresAt)
+          : configuredExpiry;
+        const checkoutExpiry = quoteExpiry > configuredExpiry
+          ? quoteExpiry
+          : configuredExpiry;
         return tx.createCheckout({
           checkoutReference: input.checkoutReference,
           idempotencyKey: input.idempotencyKey,
@@ -239,7 +248,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           },
           shippingSnapshot,
           status: "reserved",
-          expiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
+          expiresAt: checkoutExpiry.toISOString(),
         });
         });
       } catch (error) {
@@ -376,6 +385,26 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             totalCents: checkout.totals.shippingMinor,
             membershipDocumentId: membership.documentId,
             membershipSnapshot,
+            ...(checkout.shippingSnapshot?.quote
+              ? {
+                  priceSnapshot: {
+                    charge: {
+                      amountMinor: checkout.totals.shippingMinor,
+                      currency: "RON",
+                    },
+                    shipping: structuredClone(
+                      checkout.shippingSnapshot.quote,
+                    ),
+                    breakdown: {
+                      subtotalMinor: 0,
+                      shippingMinor: checkout.totals.shippingMinor,
+                      discountMinor: 0,
+                      totalMinor: checkout.totals.shippingMinor,
+                      currency: "RON",
+                    },
+                  },
+                }
+              : {}),
           });
           await tx.setCheckoutStatus(
             checkout.checkoutReference,

@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { formatEUR } from "@/lib/products";
 import {
   getLastMockOrder,
   getMockOrder,
@@ -49,6 +48,13 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function formatOrderMoney(order: MockOrder, amountMinor: number) {
+  return new Intl.NumberFormat("en-IE", {
+    style: "currency",
+    currency: order.currency,
+  }).format(amountMinor / 100);
 }
 
 function statusIndex(status: MockOrderStatus) {
@@ -212,7 +218,7 @@ export function OrderDetail({
                   <p className="text-sm text-stone">Qty {item.qty}</p>
                 </div>
                 <p className="font-semibold text-ink">
-                  {formatEUR(item.lineTotalCents)}
+                  {formatOrderMoney(order, item.lineTotalCents)}
                 </p>
               </li>
             ))}
@@ -229,26 +235,32 @@ export function OrderDetail({
             <div className="flex justify-between">
               <dt className="text-bark">Estimated delivery</dt>
               <dd className="text-right text-ink">
-                {new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(
-                  new Date(order.estimatedDelivery),
-                )}
+                {order.shippingEstimate
+                  ? `${order.shippingEstimate.minimumDays}–${order.shippingEstimate.maximumDays} business days`
+                  : new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(
+                      new Date(order.estimatedDelivery),
+                    )}
               </dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-bark">Shipping</dt>
               <dd className="text-ink">
-                {order.shippingCents === 0 ? "Free" : formatEUR(order.shippingCents)}
+                {order.shippingCents === 0
+                  ? "Free"
+                  : formatOrderMoney(order, order.shippingCents)}
               </dd>
             </div>
             {order.discountCents > 0 ? (
               <div className="flex justify-between text-herb-deep">
                 <dt>Discount {order.promotionCode ? `(${order.promotionCode})` : ""}</dt>
-                <dd>-{formatEUR(order.discountCents)}</dd>
+                <dd>-{formatOrderMoney(order, order.discountCents)}</dd>
               </div>
             ) : null}
             <div className="flex justify-between border-t border-clay/60 pt-2 font-semibold">
               <dt className="text-ink">Total paid</dt>
-              <dd className="text-ink">{formatEUR(order.totalCents)}</dd>
+              <dd className="text-ink">
+                {formatOrderMoney(order, order.totalCents)}
+              </dd>
             </div>
           </dl>
 

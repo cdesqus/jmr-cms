@@ -256,6 +256,10 @@ test("shipping-enabled membership checkout uses only the selected authoritative 
   assert.equal(checkout.totals.totalMinor, selection.amountMinor);
   assert.equal(checkout.shippingSnapshot.quote.quoteId, selection.quoteId);
   assert.equal(checkout.shippingSnapshot.quote.currency, "RON");
+  assert.equal(
+    new Date(checkout.expiresAt) >= new Date(selection.expiresAt),
+    true,
+  );
   assert.deepEqual(checkout.shippingSnapshot.shippingAddress, shippingAddress);
   assert.match(checkout.shippingSnapshot.shippingAddressText, /Strada Memorandumului 10/);
   assert.deepEqual(checkout.shippingSnapshot.estimatedDelivery, selection.estimate);

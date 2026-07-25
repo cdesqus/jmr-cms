@@ -9,6 +9,7 @@
     "allocations": { "type": "json", "required": true },
     "expiresAt": { "type": "datetime", "required": true },
     "orderNumber": { "type": "string" },
-    "email": { "type": "string" }
+    "email": { "type": "string" },
+    "customerDocumentId": { "type": "string" }
   }
 }

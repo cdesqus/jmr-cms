@@ -5,6 +5,7 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 
 import { CartProvider } from "./cart-context";
 import { CartView } from "./cart-view";
+import { OrderDetail } from "./order-detail";
 import { PRODUCTS } from "../lib/products";
 import {
   button,
@@ -48,6 +49,43 @@ const quote = {
   quotedAt: "2099-07-25T10:00:00.000Z",
   expiresAt: "2099-07-25T10:15:00.000Z",
 };
+
+function authoritativeOrder(member: boolean, shippingEnabled: boolean) {
+  const shippingCents = shippingEnabled ? 2_490 : 495;
+  const subtotalCents = member ? 0 : shippingEnabled ? 15_920 : 3_200;
+  return {
+    id: `server-${member ? "member" : "ordinary"}-${shippingEnabled ? "shipping" : "legacy"}`,
+    orderNumber: `JMR-2026-${member ? "M" : "O"}${shippingEnabled ? "S" : "L"}`,
+    trackingNumber: "TRACK-SERVER",
+    carrier: shippingEnabled ? "jamora-mock" : "Jamora EU Fulfilment",
+    ...(shippingEnabled ? { service: "standard" } : {}),
+    status: "paid",
+    currency: shippingEnabled ? "RON" : "EUR",
+    customer: {
+      name: "Ana",
+      email: "ana@example.com",
+      address: "Calea Victoriei 10",
+    },
+    shippingAddress: assessedAddress,
+    items: [{
+      productId: PRODUCTS[0].id,
+      slug: PRODUCTS[0].slug,
+      sku: PRODUCTS[0].sku,
+      name: PRODUCTS[0].name,
+      qty: 1,
+      unitPriceCents: PRODUCTS[0].priceCents,
+      lineTotalCents: PRODUCTS[0].priceCents,
+    }],
+    subtotalCents,
+    shippingCents,
+    discountCents: 0,
+    totalCents: subtotalCents + shippingCents,
+    createdAt: "2026-07-25T08:00:00.000Z",
+    ...(shippingEnabled
+      ? { shippingEstimate: quote.estimate }
+      : { estimatedDelivery: "2026-07-29T08:00:00.000Z" }),
+  };
+}
 
 function json(value: unknown, status = 200) {
   return {
@@ -98,11 +136,13 @@ for (const member of [false, true]) {
             expiresAt: "2099-07-25T10:10:00.000Z",
           });
         }
-        if (url.includes("/orders/mock-paid")) return json({ order: {} });
+        if (url.includes("/orders/mock-paid")) {
+          return json({ order: authoritativeOrder(false, shippingEnabled) });
+        }
         if (url.includes("/membership/checkout-finalize")) {
           const body = JSON.parse(String(init?.body ?? "{}"));
           assert.equal(body.checkoutReference.startsWith("mco_"), true);
-          return json({ order: {} });
+          return json({ order: authoritativeOrder(true, shippingEnabled) });
         }
         return json({ error: `Unexpected endpoint ${url}` }, 500);
       };
@@ -171,6 +211,33 @@ for (const member of [false, true]) {
         );
         assert.equal(pushes.length, 1);
         assert.match(pushes[0], /^\/checkout\/success\?order=/);
+        if (shippingEnabled) {
+          const [saved] = JSON.parse(
+            localStorage.getItem("jamora.mock-orders.v1") ?? "[]",
+          );
+          assert.equal(saved.currency, "RON");
+          assert.equal(saved.shippingCents, 2_490);
+          assert.equal(saved.totalCents, member ? 2_490 : 18_410);
+          assert.equal(
+            pushes[0],
+            `/checkout/success?order=${encodeURIComponent(saved.id)}`,
+          );
+          const detail = await mount(
+            <OrderDetail orderId={saved.id} mode="success" />,
+          );
+          try {
+            await flush();
+            const content = detail.container.textContent ?? "";
+            assert.match(content, /RON\s*24\.90/);
+            assert.match(
+              content,
+              member ? /RON\s*24\.90/ : /RON\s*184\.10/,
+            );
+            assert.match(content, /2–4 business days/);
+          } finally {
+            await detail.unmount();
+          }
+        }
       } finally {
         await mounted.unmount();
         globalThis.fetch = originalFetch;

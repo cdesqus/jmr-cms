@@ -116,6 +116,31 @@ test("derives item weight and Romanian zone on the server and returns safe RON q
   }
 });
 
+test("guest quotes may be shortened so they never outlive the stock reservation", () => {
+  const ttlMs = 7 * 60 * 1000;
+  const [quote] = quoteShipping(
+    { address, items, products },
+    { ...options, ttlMs },
+  );
+  assert.equal(quote.expiresAt, "2026-07-25T10:07:00.000Z");
+  assert.deepEqual(
+    selectShippingQuote({
+      selection: quote,
+      address,
+      items,
+      products,
+    }, options).snapshot.expiresAt,
+    quote.expiresAt,
+  );
+  assert.throws(
+    () => quoteShipping(
+      { address, items, products },
+      { ...options, ttlMs: 15 * 60 * 1000 + 1 },
+    ),
+    /TTL/i,
+  );
+});
+
 test("server-derived address zones change price and estimates without accepting a browser zone", () => {
   const bucharest = quoteShipping({
     address: {

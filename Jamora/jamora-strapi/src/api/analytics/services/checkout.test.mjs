@@ -61,6 +61,13 @@ test("authoritative RON shipping replaces fixed checkout delivery without browse
         source: "demo-config",
         capturedAt: "2026-07-25T10:00:00.000Z",
         shipping,
+        breakdown: {
+          subtotalMinor: 14926,
+          shippingMinor: 2090,
+          discountMinor: 2488,
+          totalMinor: 14528,
+          currency: "RON",
+        },
       },
     },
   );

@@ -149,8 +149,8 @@ function quoteShipping(input, options = {}) {
   const quoteSecret = secret(options.secret);
   const now = instant(options.now ?? new Date(), "now");
   const ttlMs = options.ttlMs ?? QUOTE_TTL_MS;
-  if (!Number.isSafeInteger(ttlMs) || ttlMs !== QUOTE_TTL_MS) {
-    throw new TypeError("Shipping quote TTL must be exactly 15 minutes.");
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > QUOTE_TTL_MS) {
+    throw new TypeError("Shipping quote TTL must be at most 15 minutes.");
   }
   const context = contextFor(input);
   const quotedAt = now.toISOString();
@@ -170,12 +170,13 @@ function selectedExpected(input, options) {
   }
   const quotedAt = instant(selection.quotedAt, "shipping quote time");
   const expiresAt = instant(selection.expiresAt, "shipping quote expiry");
-  if (expiresAt.getTime() - quotedAt.getTime() !== QUOTE_TTL_MS) {
+  const ttlMs = expiresAt.getTime() - quotedAt.getTime();
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > QUOTE_TTL_MS) {
     throw new Error("Shipping quote is invalid.");
   }
   const now = instant(options.now ?? new Date(), "now");
   if (now >= expiresAt) throw new Error("Shipping quote expired.");
-  const generated = quoteShipping(input, { ...options, now: quotedAt });
+  const generated = quoteShipping(input, { ...options, now: quotedAt, ttlMs });
   const expected = generated.find((quote) => quote.service === selection.service);
   if (!expected) throw new Error("Shipping quote is invalid.");
   const expectedId = Buffer.from(expected.quoteId, "utf8");

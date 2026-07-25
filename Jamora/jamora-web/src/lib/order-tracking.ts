@@ -10,6 +10,7 @@ interface StrapiTrackedOrder {
   customerName?: string;
   email?: string;
   status?: string;
+  currency?: string;
   totalCents?: number;
   subtotalCents?: number;
   shippingCents?: number;
@@ -67,6 +68,7 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
     status: isStatus(String(order.status).toLowerCase())
       ? (String(order.status).toLowerCase() as MockOrderStatus)
       : "pending",
+    currency: String(order.currency).toUpperCase() === "RON" ? "RON" : "EUR",
     customer: {
       name: order.customerName ?? "",
       email: order.email ?? "",

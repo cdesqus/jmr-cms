@@ -161,11 +161,15 @@ async function checkoutIdentity(ctx: any, body: Record<string, unknown>) {
     fail(ctx, 401, "Verified customer session required for membership checkout.");
     return null;
   }
-  if (!(await lockLiveGuestReservation(guestCheckoutCapability))) {
+  const reservation = await lockLiveGuestReservation(guestCheckoutCapability);
+  if (!reservation) {
     fail(ctx, 401, "Invalid or expired guest checkout capability.");
     return null;
   }
-  return { guestCheckoutCapability };
+  return {
+    guestCheckoutCapability,
+    reservationExpiresAt: reservation.expiresAt,
+  };
 }
 
 function hasRequiredMembershipCustomer(

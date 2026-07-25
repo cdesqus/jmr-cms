@@ -82,10 +82,38 @@ export async function POST(request: Request) {
       { status: finalized.status },
     );
   }
+  const secret = process.env.JAMORA_STOREFRONT_API_SECRET;
+  if (!secret) {
+    return NextResponse.json(
+      { error: "Checkout service unavailable." },
+      { status: 503 },
+    );
+  }
+  const customer = await getCurrentCustomer();
+  const headers = new Headers({
+    "content-type": "application/json",
+    "x-jamora-storefront-secret": secret,
+  });
+  let ordinaryBody = body;
+  if (customer) {
+    headers.set("x-jamora-customer-document-id", customer.documentId);
+    headers.set(
+      "x-jamora-customer-session-version",
+      String(customer.sessionVersion),
+    );
+    const parsed = JSON.parse(body);
+    parsed.customer = {
+      ...(parsed.customer && typeof parsed.customer === "object"
+        ? parsed.customer
+        : {}),
+      email: customer.email,
+    };
+    ordinaryBody = JSON.stringify(parsed);
+  }
   const response = await fetch(`${STRAPI_URL}/api/jamora/orders/mock-paid`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
+    headers,
+    body: ordinaryBody,
     cache: "no-store",
   });
   const json = await response.json().catch(() => ({ error: "Order service unavailable." }));
