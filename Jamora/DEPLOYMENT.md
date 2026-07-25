@@ -566,7 +566,7 @@ const payload = {
 const timestamp = new Date().toISOString();
 const body = JSON.stringify(payload);
 const signature = `sha256=${createHmac('sha256', process.env.ROPAY_CALLBACK_SECRET)
-  .update(`ropay-callback\\n${timestamp}\\n${body}`).digest('hex')}`;
+  .update(`ropay-callback\n${timestamp}\n${body}`).digest('hex')}`;
 console.log(JSON.stringify({ payload, timestamp, signature }));
 NODE
 # Copy the JSON values above; do not log or persist the real secret.
