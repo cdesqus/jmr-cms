@@ -10,7 +10,7 @@
   "attributes": {
     "name": { "type": "string", "required": true },
     "active": { "type": "boolean", "default": true, "required": true },
-    "durationMonths": { "type": "enumeration", "enum": ["3", "6", "12"], "required": true },
+    "durationMonths": { "type": "integer", "required": true, "min": 1 },
     "priceEurMinor": { "type": "integer", "required": true, "min": 1 },
     "priceRonMinor": { "type": "integer", "required": true, "min": 1 },
     "packageCredits": { "type": "integer", "required": true, "min": 1 },
