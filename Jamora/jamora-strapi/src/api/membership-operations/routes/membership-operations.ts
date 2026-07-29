@@ -1,0 +1,19 @@
+export default {
+  routes: [
+    { method: "GET", path: "/jamora/membership/plans", handler: "membership-operations.plans", config: { auth: false } },
+    { method: "GET", path: "/jamora/membership/me", handler: "membership-operations.me", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/purchase", handler: "membership-operations.purchase", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/checkout/reserve", handler: "membership-operations.checkoutReserve", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/checkout/order", handler: "membership-operations.checkoutOrder", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/checkout/finalize", handler: "membership-operations.checkoutFinalize", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/checkout/release", handler: "membership-operations.checkoutRelease", config: { auth: false } },
+    { method: "POST", path: "/jamora/membership/renew", handler: "membership-operations.renew", config: { auth: false } },
+    { method: "GET", path: "/jamora/admin/membership/plans", handler: "membership-operations.adminPlans", config: { auth: false } },
+    { method: "POST", path: "/jamora/admin/membership/plans", handler: "membership-operations.createPlan", config: { auth: false } },
+    { method: "PATCH", path: "/jamora/admin/membership/plans/:documentId", handler: "membership-operations.updatePlan", config: { auth: false } },
+    { method: "GET", path: "/jamora/admin/memberships", handler: "membership-operations.memberships", config: { auth: false } },
+    { method: "POST", path: "/jamora/admin/memberships/:documentId/adjust", handler: "membership-operations.adjust", config: { auth: false } },
+    { method: "POST", path: "/jamora/admin/memberships/expire-due", handler: "membership-operations.expireDue", config: { auth: false } },
+    { method: "POST", path: "/jamora/admin/membership-checkouts/expire-due", handler: "membership-operations.expireDueCheckouts", config: { auth: false } },
+  ],
+};

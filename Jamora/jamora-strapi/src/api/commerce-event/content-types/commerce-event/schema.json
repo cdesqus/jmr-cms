@@ -1,0 +1,21 @@
+{
+  "kind": "collectionType",
+  "collectionName": "commerce_events",
+  "info": {
+    "singularName": "commerce-event",
+    "pluralName": "commerce-events",
+    "displayName": "Commerce Event"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "eventId": { "type": "string", "required": true, "unique": true },
+    "eventType": { "type": "string", "required": true },
+    "aggregateType": { "type": "string", "required": true },
+    "aggregateId": { "type": "string", "required": true },
+    "payload": { "type": "json" },
+    "occurredAt": { "type": "datetime", "required": true },
+    "processedAt": { "type": "datetime" }
+  }
+}

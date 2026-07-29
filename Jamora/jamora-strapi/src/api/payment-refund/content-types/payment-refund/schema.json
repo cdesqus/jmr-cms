@@ -1,0 +1,22 @@
+{
+  "kind": "collectionType",
+  "collectionName": "payment_refunds",
+  "info": {
+    "singularName": "payment-refund",
+    "pluralName": "payment-refunds",
+    "displayName": "Payment Refund"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "refundNumber": { "type": "string", "required": true, "unique": true },
+    "paymentDocumentId": { "type": "string", "required": true },
+    "idempotencyKey": { "type": "string", "required": true, "unique": true },
+    "amountMinor": { "type": "integer", "required": true, "min": 1 },
+    "currency": { "type": "string", "required": true },
+    "reason": { "type": "text", "required": true },
+    "providerReference": { "type": "string" },
+    "refundedAt": { "type": "datetime", "required": true }
+  }
+}

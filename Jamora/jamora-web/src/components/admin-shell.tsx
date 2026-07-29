@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { AdminLogoutButton } from "@/components/admin-logout-button";
 import type { AdminIdentity, AdminRole } from "@/lib/admin-auth";
+import { visibleAdminNavigation } from "@/lib/membership-surface-policy.cjs";
 
 const NAV_GROUPS = [
   { label: "Overview", items: [
@@ -12,6 +13,7 @@ const NAV_GROUPS = [
   ] },
   { label: "Transactions", items: [
     { href: "/admin/orders", label: "Orders", icon: "orders", roles: ["owner", "warehouse", "support"] },
+    { href: "/admin/payments", label: "Payments", icon: "payments", roles: ["owner"], paymentsOnly: true },
     { href: "/admin/purchase-orders", label: "Purchase orders", icon: "purchase-orders", roles: ["owner", "warehouse"] },
     { href: "/admin/receiving", label: "Receiving", icon: "receiving", roles: ["owner", "warehouse"] },
     { href: "/admin/returns", label: "Returns", icon: "returns", roles: ["owner", "support"] },
@@ -25,6 +27,7 @@ const NAV_GROUPS = [
     { href: "/admin/customers", label: "Customers", icon: "customers", roles: ["owner", "support"] },
   ] },
   { label: "Storefront", items: [
+    { href: "/admin/membership", label: "Membership", icon: "membership", roles: ["owner"], membershipOnly: true },
     { href: "/admin/promotions", label: "Promotions", icon: "promotions", roles: ["owner", "content"] },
     { href: "/admin/content", label: "Content", icon: "content", roles: ["owner", "content"] },
   ] },
@@ -34,13 +37,11 @@ const NAV_GROUPS = [
   ] },
 ];
 
-export function AdminShell({ children, identity }: { children: React.ReactNode; identity: AdminIdentity | null }) {
+export function AdminShell({ children, identity, membershipEnabled = false, paymentsEnabled = false }: { children: React.ReactNode; identity: AdminIdentity | null; membershipEnabled?: boolean; paymentsEnabled?: boolean }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(true);
   const role: AdminRole = identity?.role ?? "owner";
-  const visibleGroups = NAV_GROUPS
-    .map((group) => ({ ...group, items: group.items.filter((item) => (item.roles as AdminRole[]).includes(role)) }))
-    .filter((group) => group.items.length > 0);
+  const visibleGroups = visibleAdminNavigation(NAV_GROUPS, role, membershipEnabled, paymentsEnabled);
   const visibleNav = visibleGroups.flatMap((group) => group.items);
 
   if (pathname === "/admin/login") return <>{children}</>;
@@ -182,6 +183,9 @@ function FlatIcon({ name }: { name: string }) {
       </svg>
     );
   }
+  if (name === "payments") {
+    return <svg {...common}><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M4 10h16M8 15h3" /><circle cx="16" cy="15" r="1" fill="currentColor" stroke="none" /></svg>;
+  }
   if (name === "products") {
     return (
       <svg {...common}>
@@ -232,6 +236,9 @@ function FlatIcon({ name }: { name: string }) {
         <circle cx="15" cy="15" r=".75" fill="currentColor" stroke="none" />
       </svg>
     );
+  }
+  if (name === "membership") {
+    return <svg {...common}><path d="M5 4h14v16H5z" /><path d="M8 8h8M8 12h8M8 16h5" /><path d="M16 14v4M14 16h4" /></svg>;
   }
   if (name === "returns") {
     return (

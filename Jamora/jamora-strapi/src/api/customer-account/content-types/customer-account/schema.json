@@ -1,0 +1,24 @@
+{
+  "kind": "collectionType",
+  "collectionName": "customer_accounts",
+  "info": {
+    "singularName": "customer-account",
+    "pluralName": "customer-accounts",
+    "displayName": "Customer Account"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "email": { "type": "email", "required": true, "unique": true },
+    "passwordHash": { "type": "text", "required": true, "private": true },
+    "name": { "type": "string", "required": true },
+    "emailVerifiedAt": { "type": "datetime" },
+    "active": { "type": "boolean", "default": true, "required": true },
+    "sessionVersion": { "type": "integer", "default": 0, "min": 0, "required": true },
+    "verificationTokenHash": { "type": "string", "private": true },
+    "verificationExpiresAt": { "type": "datetime", "private": true },
+    "resetTokenHash": { "type": "string", "private": true },
+    "resetExpiresAt": { "type": "datetime", "private": true }
+  }
+}

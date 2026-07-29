@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { formatEUR } from "@/lib/products";
 import {
   getLastMockOrder,
   getMockOrder,
@@ -10,6 +9,7 @@ import {
   type MockOrderStatus,
 } from "@/lib/mock-orders";
 import { fetchTrackedOrder } from "@/lib/order-tracking";
+import { trackingSurfacePolicy } from "@/lib/order-tracking-policy.cjs";
 
 const STEPS: { status: MockOrderStatus; label: string; description: string }[] = [
   {
@@ -51,6 +51,13 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function formatOrderMoney(order: MockOrder, amountMinor: number) {
+  return new Intl.NumberFormat("en-IE", {
+    style: "currency",
+    currency: order.currency,
+  }).format(amountMinor / 100);
+}
+
 function statusIndex(status: MockOrderStatus) {
   return STEPS.findIndex((step) => step.status === status);
 }
@@ -65,9 +72,11 @@ function humanStatus(status: MockOrderStatus) {
 export function OrderDetail({
   orderId,
   mode = "success",
+  trackingAccess,
 }: {
   orderId?: string | null;
   mode?: "success" | "tracking";
+  trackingAccess?: string;
 }) {
   const [order, setOrder] = useState<MockOrder | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -77,7 +86,9 @@ export function OrderDetail({
 
     async function load() {
       try {
-        const remote = orderId ? await fetchTrackedOrder(orderId) : null;
+        const remote = orderId
+          ? await fetchTrackedOrder(orderId, trackingAccess)
+          : null;
         if (!ignore) setOrder(remote ?? (orderId ? getMockOrder(orderId) : getLastMockOrder()));
       } catch {
         if (!ignore) setOrder(orderId ? getMockOrder(orderId) : getLastMockOrder());
@@ -90,7 +101,7 @@ export function OrderDetail({
     return () => {
       ignore = true;
     };
-  }, [orderId]);
+  }, [orderId, trackingAccess]);
 
   if (!loaded) {
     return <p className="text-stone">Loading order...</p>;
@@ -116,6 +127,7 @@ export function OrderDetail({
 
   const active = Math.max(0, statusIndex(order.status));
   const isTerminalException = order.status === "failed" || order.status === "refunded";
+  const surface = trackingSurfacePolicy(mode);
 
   return (
     <div className="space-y-8">
@@ -127,11 +139,23 @@ export function OrderDetail({
           <div>
             <h1 className="font-display text-4xl text-ink">{order.orderNumber}</h1>
             <p className="mt-2 text-stone">
-              Confirmation email simulated for {order.customer.email}.
+              {surface.showCustomer
+                ? `Confirmation email simulated for ${order.customer.email}.`
+                : "Carrier updates for your parcel."}
             </p>
             <p className="mt-3 inline-flex rounded-full border border-clay bg-cream px-3 py-1 text-sm font-semibold text-bark">
               Current status: {humanStatus(order.status)}
             </p>
+            {surface.showCustomer && order.trackingPreviewUrl ? (
+              <p className="mt-4">
+                <Link
+                  href={order.trackingPreviewUrl}
+                  className="text-sm font-semibold text-terracotta hover:text-terracotta-deep"
+                >
+                  Open secure shipment tracking
+                </Link>
+              </p>
+            ) : null}
           </div>
           <div className="rounded-lg border border-clay bg-cream px-4 py-3 text-sm">
             <p className="font-semibold text-ink">{order.carrier}</p>
@@ -201,8 +225,8 @@ export function OrderDetail({
         </section>
       ) : null}
 
-      <section className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-xl border border-clay/70 bg-white/40 p-6">
+      <section className={`grid gap-8 ${surface.showItems ? "lg:grid-cols-[1.2fr_0.8fr]" : ""}`}>
+        {surface.showItems ? <div className="rounded-xl border border-clay/70 bg-white/40 p-6">
           <h2 className="font-display text-2xl text-ink">Items</h2>
           <ul className="mt-4 divide-y divide-clay/50">
             {order.items.map((item) => (
@@ -212,15 +236,17 @@ export function OrderDetail({
                   <p className="text-sm text-stone">Qty {item.qty}</p>
                 </div>
                 <p className="font-semibold text-ink">
-                  {formatEUR(item.lineTotalCents)}
+                  {formatOrderMoney(order, item.lineTotalCents)}
                 </p>
               </li>
             ))}
           </ul>
-        </div>
+        </div> : null}
 
         <div className="rounded-xl border border-clay/70 bg-sand/30 p-6">
-          <h2 className="font-display text-2xl text-ink">Summary</h2>
+          <h2 className="font-display text-2xl text-ink">
+            {surface.showPrices ? "Summary" : "Delivery estimate"}
+          </h2>
           <dl className="mt-4 space-y-2 text-sm">
             <div className="flex justify-between">
               <dt className="text-bark">Created</dt>
@@ -229,36 +255,42 @@ export function OrderDetail({
             <div className="flex justify-between">
               <dt className="text-bark">Estimated delivery</dt>
               <dd className="text-right text-ink">
-                {new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(
-                  new Date(order.estimatedDelivery),
-                )}
+                {order.shippingEstimate
+                  ? `${order.shippingEstimate.minimumDays}–${order.shippingEstimate.maximumDays} business days`
+                  : new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(
+                      new Date(order.estimatedDelivery),
+                    )}
               </dd>
             </div>
-            <div className="flex justify-between">
+            {surface.showPrices ? <div className="flex justify-between">
               <dt className="text-bark">Shipping</dt>
               <dd className="text-ink">
-                {order.shippingCents === 0 ? "Free" : formatEUR(order.shippingCents)}
+                {order.shippingCents === 0
+                  ? "Free"
+                  : formatOrderMoney(order, order.shippingCents)}
               </dd>
-            </div>
-            {order.discountCents > 0 ? (
+            </div> : null}
+            {surface.showPrices && order.discountCents > 0 ? (
               <div className="flex justify-between text-herb-deep">
                 <dt>Discount {order.promotionCode ? `(${order.promotionCode})` : ""}</dt>
-                <dd>-{formatEUR(order.discountCents)}</dd>
+                <dd>-{formatOrderMoney(order, order.discountCents)}</dd>
               </div>
             ) : null}
-            <div className="flex justify-between border-t border-clay/60 pt-2 font-semibold">
+            {surface.showPrices ? <div className="flex justify-between border-t border-clay/60 pt-2 font-semibold">
               <dt className="text-ink">Total paid</dt>
-              <dd className="text-ink">{formatEUR(order.totalCents)}</dd>
-            </div>
+              <dd className="text-ink">
+                {formatOrderMoney(order, order.totalCents)}
+              </dd>
+            </div> : null}
           </dl>
 
-          <div className="mt-5 rounded-lg bg-cream px-4 py-3 text-sm text-bark">
+          {surface.showCustomer ? <div className="mt-5 rounded-lg bg-cream px-4 py-3 text-sm text-bark">
             <p className="font-semibold text-ink">Email confirmation</p>
             <p className="mt-1">
               Simulated confirmation sent to {order.customer.email}. Real email
               delivery can be wired later via Resend or Postmark.
             </p>
-          </div>
+          </div> : null}
         </div>
       </section>
     </div>

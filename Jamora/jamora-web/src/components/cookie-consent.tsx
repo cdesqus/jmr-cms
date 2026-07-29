@@ -1,18 +1,54 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CONSENT_VERSION, parseConsent, type Consent } from "@/lib/commerce/consent.cjs";
+import {
+  buildConsentDecision,
+  dispatchConsentPersistenceFailure,
+  parsePendingConsentQueue,
+  pendingConsentQueue,
+  type ConsentDecision,
+} from "@/lib/commerce/consent-persistence.cjs";
 
-const STORAGE_KEY = "jamora.consent.v1";
+const STORAGE_KEY = "jamora.consent.2026-07-24";
+const ANONYMOUS_KEY = "jamora.anonymous-session.v1";
+const PENDING_KEY = "jamora.consent.pending.v1";
 
-type Consent = {
-  necessary: true; // always on
-  analytics: boolean;
-  marketing: boolean;
-  ts: number;
-};
+async function postDecision(decision: ConsentDecision) {
+  try {
+    const response = await fetch("/api/jamora/consent", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(decision),
+      keepalive: true,
+    });
+    if (!response.ok) throw new Error(`Consent persistence returned ${response.status}.`);
+    const pending = parsePendingConsentQueue(localStorage.getItem(PENDING_KEY));
+    localStorage.setItem(
+      PENDING_KEY,
+      JSON.stringify(pending.filter((item) => item.decisionId !== decision.decisionId)),
+    );
+  } catch (error) {
+    try {
+      const queue = parsePendingConsentQueue(localStorage.getItem(PENDING_KEY));
+      if (!queue.some((item) => item.decisionId === decision.decisionId)) {
+        localStorage.setItem(
+          PENDING_KEY,
+          JSON.stringify(pendingConsentQueue(queue, decision)),
+        );
+      }
+    } catch (storageError) {
+      console.warn("Consent retry queue is unavailable.", storageError);
+    } finally {
+      console.warn("Consent decision queued for retry.", error);
+      dispatchConsentPersistenceFailure((eventName) =>
+        window.dispatchEvent(new CustomEvent(eventName)));
+    }
+  }
+}
 
 const CATEGORIES: {
-  key: "necessary" | "analytics" | "marketing";
+  key: "necessary" | "analytics" | "lifecycleEmail";
   label: string;
   description: string;
   locked?: boolean;
@@ -31,10 +67,10 @@ const CATEGORIES: {
       "Aggregate, cookieless visit statistics (Plausible/Matomo) to help us improve. No personal profiling.",
   },
   {
-    key: "marketing",
-    label: "Marketing",
+    key: "lifecycleEmail",
+    label: "Lifecycle email",
     description:
-      "Lets us measure campaigns and show relevant offers. Off unless you opt in.",
+      "Enables opted-in cart reminders and offers. Off unless you opt in.",
   },
 ];
 
@@ -42,7 +78,7 @@ export function CookieConsent() {
   const [visible, setVisible] = useState(false);
   const [customising, setCustomising] = useState(false);
   const [analytics, setAnalytics] = useState(false);
-  const [marketing, setMarketing] = useState(false);
+  const [lifecycleEmail, setLifecycleEmail] = useState(false);
 
   useEffect(() => {
     // Consent state lives in localStorage, unavailable during SSR — we default
@@ -50,12 +86,22 @@ export function CookieConsent() {
     /* eslint-disable react-hooks/set-state-in-effect */
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) setVisible(true);
+      if (!raw || !parseConsent(raw)) setVisible(true);
+      const pending = parsePendingConsentQueue(localStorage.getItem(PENDING_KEY));
+      for (const decision of pending) void postDecision(decision);
     } catch {
       setVisible(true);
     }
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
+
+  function anonymousSessionId() {
+    const existing = localStorage.getItem(ANONYMOUS_KEY);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    localStorage.setItem(ANONYMOUS_KEY, created);
+    return created;
+  }
 
   function persist(consent: Consent) {
     try {
@@ -63,19 +109,33 @@ export function CookieConsent() {
     } catch {
       // ignore
     }
+    window.dispatchEvent(
+      new CustomEvent("jamora:consent-changed", { detail: consent }),
+    );
+    void postDecision(buildConsentDecision(
+      consent,
+      anonymousSessionId(),
+      crypto.randomUUID(),
+    ));
     setVisible(false);
   }
 
-  const now = () => Date.parse(new Date().toISOString());
+  const consent = (analytics: boolean, lifecycleEmail: boolean): Consent => ({
+    version: CONSENT_VERSION,
+    necessary: true,
+    analytics,
+    lifecycleEmail,
+    decidedAt: new Date().toISOString(),
+  });
 
   function acceptAll() {
-    persist({ necessary: true, analytics: true, marketing: true, ts: now() });
+    persist(consent(true, true));
   }
   function rejectAll() {
-    persist({ necessary: true, analytics: false, marketing: false, ts: now() });
+    persist(consent(false, false));
   }
   function saveChoices() {
-    persist({ necessary: true, analytics, marketing, ts: now() });
+    persist(consent(analytics, lifecycleEmail));
   }
 
   if (!visible) return null;
@@ -97,10 +157,10 @@ export function CookieConsent() {
             {CATEGORIES.map((cat) => {
               const checked =
                 cat.key === "necessary"
-                  ? true
+                    ? true
                   : cat.key === "analytics"
                     ? analytics
-                    : marketing;
+                    : lifecycleEmail;
               return (
                 <li key={cat.key} className="flex items-start gap-3">
                   <input
@@ -110,7 +170,8 @@ export function CookieConsent() {
                     disabled={cat.locked}
                     onChange={(e) => {
                       if (cat.key === "analytics") setAnalytics(e.target.checked);
-                      if (cat.key === "marketing") setMarketing(e.target.checked);
+                      if (cat.key === "lifecycleEmail")
+                        setLifecycleEmail(e.target.checked);
                     }}
                     className="mt-1 h-4 w-4 accent-[var(--color-terracotta)] disabled:opacity-60"
                   />

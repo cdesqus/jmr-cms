@@ -1,4 +1,11 @@
 import type { MockOrder, MockOrderStatus } from "@/lib/mock-orders";
+import { normalizeOrderTimeline } from "@/lib/order-timeline.cjs";
+import {
+  publicTrackingSearchParams,
+  trackingFields,
+  trackingTimeline,
+  type SafeShipmentProjection,
+} from "@/lib/order-tracking-policy.cjs";
 
 interface StrapiTrackedOrder {
   documentId?: string;
@@ -9,6 +16,7 @@ interface StrapiTrackedOrder {
   customerName?: string;
   email?: string;
   status?: string;
+  currency?: string;
   totalCents?: number;
   subtotalCents?: number;
   shippingCents?: number;
@@ -22,6 +30,7 @@ interface StrapiTrackedOrder {
   shippingAddressText?: string;
   estimatedDelivery?: string;
   createdAt?: string;
+  shipment?: SafeShipmentProjection;
 }
 
 function isStatus(value: unknown): value is MockOrderStatus {
@@ -37,6 +46,7 @@ function isStatus(value: unknown): value is MockOrderStatus {
 }
 
 function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
+  const tracking = trackingFields(order);
   const shippingAddress = order.shippingAddress ?? {};
   const address =
     typeof order.shippingAddressText === "string"
@@ -61,11 +71,14 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
   return {
     id: String(order.documentId ?? order.id ?? order.orderNumber),
     orderNumber: order.orderNumber ?? "JMR-UNKNOWN",
-    trackingNumber: order.trackingNumber ?? "",
-    carrier: order.carrier ?? "Jamora EU Fulfilment",
+    trackingNumber: tracking.trackingNumber,
+    carrier: tracking.carrier,
+    service: tracking.service,
+    shipmentStatus: tracking.shipmentStatus,
     status: isStatus(String(order.status).toLowerCase())
       ? (String(order.status).toLowerCase() as MockOrderStatus)
       : "pending",
+    currency: String(order.currency).toUpperCase() === "RON" ? "RON" : "EUR",
     customer: {
       name: order.customerName ?? "",
       email: order.email ?? "",
@@ -83,13 +96,21 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
     createdAt: order.createdAt ?? new Date().toISOString(),
     estimatedDelivery: order.estimatedDelivery ?? new Date().toISOString(),
     emailConfirmationSent: true,
-    statusHistory: Array.isArray(order.statusHistory) ? order.statusHistory : [],
+    statusHistory: trackingTimeline({
+      statusHistory: normalizeOrderTimeline(order.statusHistory, order.createdAt),
+      shipment: order.shipment,
+    }),
   };
 }
 
-export async function fetchTrackedOrder(query: string): Promise<MockOrder | null> {
+export async function fetchTrackedOrder(
+  query: string,
+  access?: string,
+): Promise<MockOrder | null> {
+  const search = publicTrackingSearchParams(query, access);
+  if (!search) return null;
   const res = await fetch(
-    `/api/jamora/orders/track?q=${encodeURIComponent(query)}`,
+    `/api/jamora/orders/track?${search}`,
     { cache: "no-store" },
   );
   if (res.status === 404) return null;

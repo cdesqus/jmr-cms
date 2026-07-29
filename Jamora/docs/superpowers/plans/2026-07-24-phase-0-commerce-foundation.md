@@ -827,7 +827,8 @@ Start the stack and verify in order:
 5. Verified customer can log in and log out.
 6. Password reset invalidates the earlier customer session.
 7. Rejecting optional consent does not create optional consent/event records.
-8. Existing tracking finds the guest order.
+8. Existing tracking reveals a guest order only when the request carries its
+   valid order-bound capability; order/tracking number alone stays fail-closed.
 
 - [ ] **Step 3: Update documentation**
 

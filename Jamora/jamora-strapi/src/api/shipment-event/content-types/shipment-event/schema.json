@@ -1,0 +1,110 @@
+{
+  "kind": "collectionType",
+  "collectionName": "shipment_events",
+  "info": {
+    "singularName": "shipment-event",
+    "pluralName": "shipment-events",
+    "displayName": "Shipment Event"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {
+    "content-manager": {
+      "visible": false
+    },
+    "content-type-builder": {
+      "visible": false
+    }
+  },
+  "attributes": {
+    "providerEventId": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "shipmentDocumentId": {
+      "type": "string",
+      "required": true
+    },
+    "orderDocumentId": {
+      "type": "string",
+      "required": true
+    },
+    "provider": {
+      "type": "string",
+      "required": true
+    },
+    "awb": {
+      "type": "string",
+      "required": true
+    },
+    "source": {
+      "type": "enumeration",
+      "enum": ["webhook", "poll"],
+      "required": true
+    },
+    "status": {
+      "type": "enumeration",
+      "enum": [
+        "label_created",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered",
+        "exception",
+        "returned"
+      ],
+      "required": true
+    },
+    "previousStatus": {
+      "type": "enumeration",
+      "enum": [
+        "label_created",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered",
+        "exception",
+        "returned"
+      ],
+      "required": true
+    },
+    "effectiveStatus": {
+      "type": "enumeration",
+      "enum": [
+        "label_created",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered",
+        "exception",
+        "returned"
+      ],
+      "required": true
+    },
+    "outcome": {
+      "type": "enumeration",
+      "enum": [
+        "applied",
+        "ignored_duplicate",
+        "ignored_out_of_order",
+        "ignored_terminal"
+      ],
+      "required": true
+    },
+    "occurredAt": {
+      "type": "datetime",
+      "required": true
+    },
+    "receivedAt": {
+      "type": "datetime",
+      "required": true
+    },
+    "payloadDigest": {
+      "type": "string",
+      "required": true,
+      "private": true
+    }
+  }
+}

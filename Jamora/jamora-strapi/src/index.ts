@@ -1,4 +1,14 @@
 import { products } from "./seed/products";
+import { runMembershipStartupSweeps } from "./membership-bootstrap.cjs";
+import { createMockShippingProvider } from "./api/shipping-operations/services/shipment-transaction.cjs";
+import {
+  createStrapiTrackingAdapter,
+  createTrackingDomain,
+  runShippingTrackingStartupPoll,
+} from "./api/shipping-operations/services/tracking-domain.cjs";
+import {
+  assertShippingProviderMode,
+} from "./api/shipping-operations/services/shipping-provider-config.cjs";
 
 export default {
   async bootstrap({ strapi }) {
@@ -8,6 +18,22 @@ export default {
     await backfillProductSkus(strapi);
     await enablePublicProductRead(strapi);
     await configureOrderListView(strapi);
+    if (process.env.MEMBERSHIP_ENABLED === "true") {
+      await runMembershipStartupSweeps(
+        strapi.service("api::membership-operations.membership-operations"),
+        strapi.log,
+      );
+    }
+    if (process.env.SHIPPING_ENABLED === "true") {
+      assertShippingProviderMode(process.env);
+    }
+    await runShippingTrackingStartupPoll(
+      createTrackingDomain({
+        adapter: createStrapiTrackingAdapter(strapi),
+        provider: createMockShippingProvider(),
+      }),
+      strapi.log,
+    );
   },
 };
 
@@ -169,8 +195,7 @@ async function configureOrderListView(strapi: any) {
               { name: "status", size: 6 },
             ],
             [
-              { name: "trackingPreviewUrl", size: 6 },
-              { name: "deliveryLabelUrl", size: 6 },
+              { name: "deliveryLabelUrl", size: 12 },
             ],
             [
               { name: "trackingNumber", size: 6 },
@@ -209,7 +234,6 @@ async function configureOrderListView(strapi: any) {
               description: "Customer-facing order number.",
             },
           },
-          trackingPreviewUrl: fieldMeta(existing, "trackingPreviewUrl", "Tracking Preview URL", true),
           deliveryLabelUrl: fieldMeta(existing, "deliveryLabelUrl", "Delivery Label URL", true),
           trackingNumber: fieldMeta(existing, "trackingNumber", "Tracking Number", false),
           itemsSummary: fieldMeta(existing, "itemsSummary", "Items Summary", true),

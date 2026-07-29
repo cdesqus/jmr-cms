@@ -18,6 +18,12 @@ export default {
     },
     {
       method: "POST",
+      path: "/jamora/orders/pending-payment",
+      handler: "analytics.pendingPaymentOrder",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
       path: "/jamora/inventory/reserve",
       handler: "analytics.reserveStock",
       config: { auth: false },
@@ -54,6 +60,12 @@ export default {
       method: "PATCH",
       path: "/jamora/admin/content",
       handler: "analytics.adminUpdateContent",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
+      path: "/jamora/admin/analytics/visit-privacy-purge",
+      handler: "analytics.adminPurgeVisitPrivacy",
       config: { auth: false },
     },
     {

@@ -1,0 +1,107 @@
+{
+  "kind": "collectionType",
+  "collectionName": "shipments",
+  "info": {
+    "singularName": "shipment",
+    "pluralName": "shipments",
+    "displayName": "Shipment"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "orderDocumentId": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "orderNumber": {
+      "type": "string",
+      "required": true
+    },
+    "provider": {
+      "type": "string",
+      "required": true
+    },
+    "carrier": {
+      "type": "string",
+      "required": true
+    },
+    "service": {
+      "type": "string",
+      "required": true
+    },
+    "awb": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "labelReference": {
+      "type": "string",
+      "required": true,
+      "private": true
+    },
+    "labelFormats": {
+      "type": "json",
+      "required": true
+    },
+    "status": {
+      "type": "enumeration",
+      "enum": [
+        "label_created",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered",
+        "exception",
+        "returned"
+      ],
+      "default": "label_created",
+      "required": true
+    },
+    "trackingProgressStatus": {
+      "type": "enumeration",
+      "enum": [
+        "label_created",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered"
+      ],
+      "default": "label_created",
+      "required": true
+    },
+    "lastTrackingEventAt": {
+      "type": "datetime"
+    },
+    "lastTrackingObservedAt": {
+      "type": "datetime"
+    },
+    "lastTrackingAppliedAt": {
+      "type": "datetime"
+    },
+    "lastPollAttemptAt": {
+      "type": "datetime"
+    },
+    "createdByActor": {
+      "type": "string",
+      "required": true
+    },
+    "labelCapabilityHash": {
+      "type": "string",
+      "private": true
+    },
+    "labelCapabilityExpiresAt": {
+      "type": "datetime",
+      "private": true
+    },
+    "labelCapabilityUsedAt": {
+      "type": "datetime",
+      "private": true
+    },
+    "labelCapabilityIssuedBy": {
+      "type": "string",
+      "private": true
+    }
+  }
+}

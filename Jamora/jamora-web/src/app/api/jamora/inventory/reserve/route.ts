@@ -1,14 +1,145 @@
 import { NextResponse } from "next/server";
+import { getCurrentCustomer } from "@/lib/customer-api";
+import { membershipCustomerFetch } from "@/lib/membership-customer-api";
+import { opaqueCheckoutReference } from "@/lib/commerce/membership-checkout.cjs";
+import { membershipCheckoutMode } from "@/lib/membership-surface-policy.cjs";
+import { setGuestShippingCapabilityProof } from "@/lib/shipping-capability";
+import { shippingOperationEnabled } from "@/lib/shipping-customer-policy.cjs";
 
 const STRAPI_URL = process.env.STRAPI_URL ?? process.env.NEXT_PUBLIC_STRAPI_URL ?? "http://localhost:9014";
 
+type ReserveBody = {
+  email?: string;
+  reservationIdempotencyKey?: string;
+  customerName?: string;
+  shippingAddressText?: string;
+  shippingAddress?: unknown;
+  estimatedDelivery?: string;
+  items?: { slug?: string; qty?: number }[];
+  membershipCheckout?: {
+    membershipDocumentId?: string;
+    idempotencyKey?: string;
+    shippingSelection?: unknown;
+  };
+};
+
 export async function POST(request: Request) {
-  const response = await fetch(`${STRAPI_URL}/api/jamora/inventory/reserve`, {
+  const text = await request.text();
+  let body: ReserveBody;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+  const checkoutMode = membershipCheckoutMode(body, process.env);
+  if (checkoutMode === "ordinary") {
+    const reservationIdempotencyKey = String(
+      body.reservationIdempotencyKey ?? "",
+    ).trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(reservationIdempotencyKey)
+    ) {
+      return NextResponse.json(
+        { error: "Reservation idempotency key is required." },
+        { status: 400 },
+      );
+    }
+    const secret = process.env.JAMORA_STOREFRONT_API_SECRET;
+    if (!secret) {
+      return NextResponse.json(
+        { error: "Checkout service unavailable." },
+        { status: 503 },
+      );
+    }
+    const customer = await getCurrentCustomer();
+    const headers = new Headers({
+      "content-type": "application/json",
+      "x-jamora-storefront-secret": secret,
+    });
+    if (customer) {
+      headers.set("x-jamora-customer-document-id", customer.documentId);
+      headers.set(
+        "x-jamora-customer-session-version",
+        String(customer.sessionVersion),
+      );
+    }
+    const response = await fetch(`${STRAPI_URL}/api/jamora/inventory/reserve`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        ...body,
+        reservationIdempotencyKey,
+        email: customer?.email ?? body.email,
+      }),
+      cache: "no-store",
+    });
+    const json = await response.json().catch(() => ({ error: "Inventory service unavailable." }));
+    const shippingAssistanceEnabled =
+      shippingOperationEnabled("address/suggest", process.env) ||
+      shippingOperationEnabled("shipping/quotes", process.env);
+    if (
+      shippingAssistanceEnabled &&
+      response.ok &&
+      typeof json.reservationToken === "string"
+    ) {
+      await setGuestShippingCapabilityProof(json.reservationToken);
+    }
+    return NextResponse.json(json, { status: response.status });
+  }
+  if (checkoutMode === "membership-disabled") {
+    return NextResponse.json({ error: "Not found." }, { status: 404 });
+  }
+  const membershipCheckout = body.membershipCheckout;
+  if (!membershipCheckout) {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+  const customer = await getCurrentCustomer();
+  if (!customer) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  const idempotencyKey = String(membershipCheckout.idempotencyKey ?? "").trim();
+  if (!idempotencyKey) {
+    return NextResponse.json({ error: "Idempotency key is required." }, { status: 400 });
+  }
+  const secret = process.env.JAMORA_STOREFRONT_API_SECRET;
+  if (!secret) return NextResponse.json({ error: "Checkout service unavailable." }, { status: 503 });
+  const checkoutReference = opaqueCheckoutReference(
+    secret,
+    customer.documentId,
+    idempotencyKey,
+  );
+  const response = await membershipCustomerFetch<{
+    checkoutReference?: string;
+    totals?: {
+      creditsRequired: number;
+      coveredMerchandiseMinor: number;
+      shippingMinor: number;
+      totalMinor: number;
+    };
+    error?: string;
+  }>("/api/jamora/membership/checkout/reserve", customer, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: await request.text(),
-    cache: "no-store",
+    body: JSON.stringify({
+      membershipDocumentId: membershipCheckout.membershipDocumentId,
+      checkoutReference,
+      idempotencyKey,
+      items: body.items?.map((item) => ({ slug: item.slug, qty: item.qty })),
+      shippingSelection: membershipCheckout.shippingSelection,
+      customerName: body.customerName,
+      shippingAddressText: body.shippingAddressText,
+      shippingAddress: body.shippingAddress,
+      estimatedDelivery: body.estimatedDelivery,
+    }),
   });
-  const json = await response.json().catch(() => ({ error: "Inventory service unavailable." }));
-  return NextResponse.json(json, { status: response.status });
+  if (response.status >= 400 || !response.body.checkoutReference || !response.body.totals) {
+    return NextResponse.json(
+      { error: response.body.error ?? "Membership checkout could not be reserved." },
+      { status: response.status },
+    );
+  }
+  return NextResponse.json({
+    ok: true,
+    checkoutReference: response.body.checkoutReference,
+    reservationToken: response.body.checkoutReference,
+    membershipTotals: response.body.totals,
+  });
 }

@@ -1,0 +1,22 @@
+{
+  "kind": "collectionType",
+  "collectionName": "memberships",
+  "info": {
+    "singularName": "membership",
+    "pluralName": "memberships",
+    "displayName": "Membership"
+  },
+  "options": { "draftAndPublish": false },
+  "attributes": {
+    "membershipNumber": { "type": "string", "required": true, "unique": true },
+    "customerDocumentId": { "type": "string", "required": true },
+    "planDocumentId": { "type": "string", "required": true },
+    "planSnapshot": { "type": "json", "required": true },
+    "status": { "type": "enumeration", "enum": ["pending_payment", "active", "expired", "cancelled", "refunded"], "required": true },
+    "startsAt": { "type": "datetime" },
+    "endsAt": { "type": "datetime" },
+    "paymentDocumentId": { "type": "string", "unique": true },
+    "renewalOfMembershipDocumentId": { "type": "string" },
+    "cachedRemainingCredits": { "type": "integer", "default": 0 }
+  }
+}

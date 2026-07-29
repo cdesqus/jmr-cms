@@ -1,4 +1,62 @@
+import {
+  applyAuthoritativeRonShipping,
+  computePaymentOrderPricing,
+  createDemoPriceSnapshot,
+  legacyShippingAddressText,
+  normalizeShippingAddressPayload,
+} from "../services/checkout";
+import {
+  pendingPaymentOrderFields,
+  phase1MockPaidOrderFields,
+} from "../services/payment-order.cjs";
+import {
+  authoritativeShippingCheckoutAllowed,
+  pendingCustomerSessionInput,
+  pendingPaymentOrderBoundary,
+  phase1MockOrderAllowed,
+} from "../services/pending-payment-order-policy.cjs";
+import {
+  assertExistingOrderReplay,
+  assertLiveReservationBinding,
+  assertManualOrderStatusTransition,
+  exactAllocationUpdate,
+  normalisePackingChecklistInput,
+  requiredOrderReservationToken,
+} from "../services/shipping-order-finalization.cjs";
+import {
+  safeCheckoutOrder,
+} from "../services/checkout-order-response.cjs";
+import {
+  hasStorefrontSecret,
+} from "../../customer-auth/controllers/storefront-secret.cjs";
+import {
+  createStockReservationService,
+  createStrapiStockReservationAdapter,
+} from "../services/stock-reservation-transaction.cjs";
+import {
+  createStrapiVisitPrivacyAdapter,
+  createVisitPrivacyPurge,
+  sanitizeVisitPayload,
+} from "../services/visit-privacy.cjs";
+import {
+  createPublicOrderTrackingLimiter,
+  createPublicOrderTrackingPrivacyFloor,
+  createPublicOrderTrackingQuery,
+  issuePublicTrackingCapability,
+  verifyPublicTrackingClientIdentity,
+} from "../services/public-order-tracking.cjs";
+
 const DEFAULT_COST_RATIO = 0.42;
+const publicTrackingLimiter = createPublicOrderTrackingLimiter({
+  limit: process.env.PUBLIC_TRACKING_RATE_LIMIT,
+  clientLimit: process.env.PUBLIC_TRACKING_RATE_LIMIT,
+  capabilityLimit: process.env.PUBLIC_TRACKING_CAPABILITY_RATE_LIMIT,
+  windowMs: process.env.PUBLIC_TRACKING_RATE_WINDOW_MS,
+  maxBuckets: process.env.PUBLIC_TRACKING_RATE_MAX_BUCKETS,
+});
+const publicTrackingPrivacyFloor = createPublicOrderTrackingPrivacyFloor({
+  minimumMs: process.env.PUBLIC_TRACKING_PRIVACY_FLOOR_MS,
+});
 
 function startOfDay(date = new Date()) {
   const d = new Date(date);
@@ -26,6 +84,30 @@ function requireAdminSecret(ctx: any) {
   ctx.status = 401;
   ctx.body = { error: "Admin API secret required." };
   return false;
+}
+
+async function trustedCheckoutCustomer(ctx: any) {
+  let session;
+  try {
+    session = pendingCustomerSessionInput(
+      ctx.get("x-jamora-customer-document-id"),
+      ctx.get("x-jamora-customer-session-version"),
+    );
+  } catch {
+    throw new Error("Invalid session.");
+  }
+  if (!session) return undefined;
+  if (!hasStorefrontSecret(
+    ctx.get("x-jamora-storefront-secret"),
+    process.env.JAMORA_STOREFRONT_API_SECRET,
+  )) {
+    throw new Error("Invalid session.");
+  }
+  const customer = await (
+    strapi.service("api::customer-auth.customer-auth") as any
+  ).findActiveSessionCustomer(session.documentId, session.sessionVersion);
+  if (!customer) throw new Error("Invalid session.");
+  return customer;
 }
 
 function asOrderStatus(value: unknown) {
@@ -351,6 +433,143 @@ const reservationDocuments = () => (strapi.documents as any)("api::stock-reserva
 const returnDocuments = () => (strapi.documents as any)("api::return-request.return-request");
 const notificationDocuments = () => (strapi.documents as any)("api::notification-log.notification-log");
 
+function withTransaction(trx: any, value: any) {
+  return trx ? { ...value, transacting: trx } : value;
+}
+
+async function createOrderWithLockedReservation(input: {
+  token: string;
+  items: any[];
+  email: string;
+  customerDocumentId?: string;
+  shippingQuote?: any;
+  orderNumber: string;
+  pendingPayment: boolean;
+  data: Record<string, unknown>;
+}) {
+  return strapi.db.transaction(async ({ trx }: { trx: any }) => {
+    const reservationQuery = strapi.db.query(
+      "api::stock-reservation.stock-reservation",
+    );
+    const candidate = await reservationQuery.findOne(withTransaction(trx, {
+      where: { token: input.token },
+    }));
+    if (!candidate?.documentId) {
+      throw new Error("Stock reservation expired or was already used.");
+    }
+    await strapi.db.connection("stock_reservations")
+      .where({ document_id: candidate.documentId })
+      .transacting(trx)
+      .forUpdate()
+      .first();
+    const reservation = await reservationQuery.findOne(withTransaction(trx, {
+      where: { documentId: candidate.documentId },
+    }));
+    const allocations = assertLiveReservationBinding(reservation, {
+      token: input.token,
+      items: input.items,
+      email: input.email,
+      customerDocumentId: input.customerDocumentId,
+      orderNumber: input.orderNumber,
+      shippingQuote: input.shippingQuote,
+      now: new Date(),
+    }) as any[];
+
+    const order = await strapi.db.query("api::order.order").create(
+      withTransaction(trx, {
+        data: {
+          ...input.data,
+          batchAllocations: allocations,
+          reservationToken: input.token,
+        },
+      }),
+    );
+    if (input.pendingPayment) {
+      await reservationQuery.update(withTransaction(trx, {
+        where: { documentId: reservation.documentId },
+        data: { orderNumber: input.orderNumber },
+      }));
+      return { order, allocations };
+    }
+
+    const orderedBatchAllocations = [...allocations]
+      .filter((allocation) => allocation.batchDocumentId)
+      .sort((left, right) =>
+        String(left.batchDocumentId).localeCompare(
+          String(right.batchDocumentId),
+        ));
+    for (const allocation of orderedBatchAllocations) {
+      if (allocation.batchDocumentId) {
+        await strapi.db.connection("inventory_batches")
+          .where({ document_id: allocation.batchDocumentId })
+          .transacting(trx)
+          .forUpdate()
+          .first();
+        const batchQuery = strapi.db.query(
+          "api::inventory-batch.inventory-batch",
+        );
+        const batch = await batchQuery.findOne(withTransaction(trx, {
+          where: { documentId: allocation.batchDocumentId },
+        }));
+        const update = exactAllocationUpdate(allocation, batch) as any;
+        await batchQuery.update(withTransaction(trx, {
+          where: { documentId: update.documentId },
+          data: {
+            quantity: update.quantity,
+            reservedQuantity: update.reservedQuantity,
+            status: update.status,
+          },
+        }));
+      }
+    }
+
+    const orderedProductAllocations = [...allocations].sort((left, right) =>
+      `${left?.productDocumentId ?? ""}:${left?.batchDocumentId ?? ""}`
+        .localeCompare(
+          `${right?.productDocumentId ?? ""}:${right?.batchDocumentId ?? ""}`,
+        ));
+    for (const allocation of orderedProductAllocations) {
+      await strapi.db.connection("products")
+        .where({ document_id: allocation.productDocumentId })
+        .transacting(trx)
+        .forUpdate()
+        .first();
+      const productQuery = strapi.db.query("api::product.product");
+      const product = await productQuery.findOne(withTransaction(trx, {
+        where: { documentId: allocation.productDocumentId },
+      }));
+      const productUpdate = exactAllocationUpdate(
+        { ...allocation, batchDocumentId: null },
+        product,
+      ) as any;
+      await productQuery.update(withTransaction(trx, {
+        where: { documentId: productUpdate.documentId },
+        data: { stock: productUpdate.stock },
+      }));
+      await strapi.db.query("api::inventory-movement.inventory-movement").create(
+        withTransaction(trx, {
+          data: {
+            productDocumentId: product.documentId,
+            productName: product.name || allocation.name || allocation.slug,
+            sku: product.sku || allocation.sku || "",
+            slug: product.slug || allocation.slug,
+            delta: -allocation.qty,
+            balanceAfter: productUpdate.stock,
+            reason: "sale",
+            reference: input.orderNumber,
+            actor: "Checkout",
+          },
+        }),
+      );
+    }
+    await reservationQuery.update(withTransaction(trx, {
+      where: { documentId: reservation.documentId },
+      data: { status: "consumed", orderNumber: input.orderNumber },
+    }));
+    return { order, allocations };
+  });
+}
+
 function adminIdentity(ctx: any) {
   return {
     actor: asString(ctx.get("x-jamora-admin-actor"), "Jamora Admin"),
@@ -385,171 +604,41 @@ async function logNotification(input: {
   });
 }
 
-async function releaseReservationAllocations(reservation: any) {
-  const allocations = Array.isArray(reservation?.allocations) ? reservation.allocations : [];
-  for (const allocation of allocations) {
-    if (!allocation.batchDocumentId) continue;
-    const batch = await batchDocuments().findOne({ documentId: allocation.batchDocumentId });
-    if (!batch) continue;
-    await batchDocuments().update({
-      documentId: batch.documentId,
-      data: {
-        reservedQuantity: Math.max(
-          0,
-          asNumber(batch.reservedQuantity) - asNumber(allocation.qty),
-        ),
-      },
+let stockReservationTransactions: ReturnType<
+  typeof createStockReservationService
+> | undefined;
+let visitPrivacyPurge: ReturnType<typeof createVisitPrivacyPurge> | undefined;
+
+async function createStockReservation(
+  items: any[],
+  email = "",
+  shippingSelection?: unknown,
+  customerDocumentId?: string,
+  idempotencyKey?: string,
+) {
+  stockReservationTransactions ??= createStockReservationService(
+    createStrapiStockReservationAdapter(strapi),
+  );
+  await stockReservationTransactions.expireDue(new Date(), 500);
+  try {
+    const reservation = await stockReservationTransactions.reserve({
+      idempotencyKey: asString(idempotencyKey),
+      items: items.map((item) => ({
+        slug: asString(item.slug),
+        qty: Math.round(asNumber(item.qty)),
+      })),
+      email,
+      customerDocumentId,
+      shippingSelection,
     });
+    return { reservation };
+  } catch (error) {
+    return {
+      error: error instanceof Error
+        ? error.message
+        : "Stock could not be reserved.",
+    };
   }
-}
-
-async function expireReservations() {
-  const expired = await reservationDocuments().findMany({
-    filters: {
-      status: { $eq: "reserved" },
-      expiresAt: { $lt: new Date().toISOString() },
-    },
-    limit: 500,
-  });
-  for (const reservation of expired) {
-    await releaseReservationAllocations(reservation);
-    await reservationDocuments().update({
-      documentId: reservation.documentId,
-      data: { status: "expired" },
-    });
-  }
-}
-
-async function createStockReservation(items: any[], email = "") {
-  await expireReservations();
-  const activeReservations = await reservationDocuments().findMany({
-    fields: ["allocations"],
-    filters: { status: { $eq: "reserved" } },
-    limit: 1000,
-  });
-  const virtuallyReserved = new Map<string, number>();
-  for (const reservation of activeReservations) {
-    for (const allocation of Array.isArray(reservation.allocations) ? reservation.allocations : []) {
-      if (!allocation.batchDocumentId) {
-        const slug = asString(allocation.slug);
-        virtuallyReserved.set(slug, (virtuallyReserved.get(slug) ?? 0) + asNumber(allocation.qty));
-      }
-    }
-  }
-
-  const allocations: any[] = [];
-  const batchUpdates = new Map<string, { batch: any; reservedQuantity: number }>();
-  for (const item of items) {
-    const slug = asString(item.slug);
-    const qty = Math.max(0, Math.round(asNumber(item.qty)));
-    if (!slug || qty <= 0) continue;
-    const batches = await batchDocuments().findMany({
-      filters: { slug: { $eq: slug } },
-      sort: { expiryDate: "asc" },
-      limit: 200,
-    });
-    const usable = batches.filter((batch: any) => {
-      return batch.status === "active" && (!batch.expiryDate || new Date(batch.expiryDate).getTime() >= Date.now());
-    });
-
-    let remaining = qty;
-    if (usable.length > 0) {
-      for (const batch of usable) {
-        const planned = batchUpdates.get(batch.documentId)?.reservedQuantity ?? asNumber(batch.reservedQuantity);
-        const available = Math.max(0, asNumber(batch.quantity) - planned);
-        const take = Math.min(remaining, available);
-        if (take <= 0) continue;
-        allocations.push({
-          productDocumentId: item.productId,
-          slug,
-          sku: item.sku,
-          name: item.name,
-          batchDocumentId: batch.documentId,
-          batchNumber: batch.batchNumber,
-          productionDate: batch.productionDate,
-          expiryDate: batch.expiryDate,
-          qty: take,
-        });
-        batchUpdates.set(batch.documentId, { batch, reservedQuantity: planned + take });
-        remaining -= take;
-        if (remaining === 0) break;
-      }
-      if (remaining === 0) continue;
-    }
-
-    const products = await strapi.documents("api::product.product").findMany({
-      fields: ["documentId", "slug", "stock"],
-      filters: { slug: { $eq: slug } },
-      limit: 1,
-    });
-    const product = products[0] as any;
-    const trackedBatchQuantity = batches.reduce(
-      (sum: number, batch: any) => sum + asNumber(batch.quantity),
-      0,
-    );
-    const available = Math.max(
-      0,
-      asNumber(product?.stock) - trackedBatchQuantity - (virtuallyReserved.get(slug) ?? 0),
-    );
-    if (!product || available < remaining) {
-      return { error: `Only ${qty - remaining + available} unit(s) of ${item.name} are available.` };
-    }
-    virtuallyReserved.set(slug, (virtuallyReserved.get(slug) ?? 0) + remaining);
-    allocations.push({
-      productDocumentId: product.documentId,
-      slug,
-      sku: item.sku,
-      name: item.name,
-      batchDocumentId: null,
-      batchNumber: "LEGACY-STOCK",
-      qty: remaining,
-    });
-  }
-
-  for (const { batch, reservedQuantity } of batchUpdates.values()) {
-    await batchDocuments().update({
-      documentId: batch.documentId,
-      data: { reservedQuantity },
-    });
-  }
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  const token = `rsv_${crypto.randomUUID()}`;
-  const reservation = await reservationDocuments().create({
-    data: { token, status: "reserved", allocations, expiresAt, email },
-  });
-  return { reservation };
-}
-
-async function consumeReservation(token: string, orderNumber: string) {
-  if (!token) return { allocations: [] };
-  await expireReservations();
-  const matches = await reservationDocuments().findMany({
-    filters: { token: { $eq: token }, status: { $eq: "reserved" } },
-    limit: 1,
-  });
-  const reservation = matches[0];
-  if (!reservation) return { error: "Stock reservation expired or was already used." };
-  const allocations = Array.isArray(reservation.allocations) ? reservation.allocations : [];
-  for (const allocation of allocations) {
-    if (!allocation.batchDocumentId) continue;
-    const batch = await batchDocuments().findOne({ documentId: allocation.batchDocumentId });
-    if (!batch) return { error: `Batch ${allocation.batchNumber} is unavailable.` };
-    const quantity = Math.max(0, asNumber(batch.quantity) - asNumber(allocation.qty));
-    const reservedQuantity = Math.max(0, asNumber(batch.reservedQuantity) - asNumber(allocation.qty));
-    await batchDocuments().update({
-      documentId: batch.documentId,
-      data: {
-        quantity,
-        reservedQuantity,
-        status: quantity === 0 ? "depleted" : batch.status,
-      },
-    });
-  }
-  await reservationDocuments().update({
-    documentId: reservation.documentId,
-    data: { status: "consumed", orderNumber },
-  });
-  return { allocations };
 }
 
 async function enrichBatchAllocations(value: unknown) {
@@ -575,50 +664,21 @@ async function enrichBatchAllocations(value: unknown) {
   );
 }
 
-async function decrementProductStock(items: any[], reference: string) {
-  for (const item of items) {
-    const slug = asString(item.slug);
-    const qty = Math.max(0, Math.round(asNumber(item.qty)));
-    if (!slug || qty <= 0) continue;
-
-    const products = await strapi.documents("api::product.product").findMany({
-      fields: ["documentId", "name", "sku", "slug", "stock"],
-      filters: { slug: { $eq: slug } },
-      limit: 1,
-    });
-    const product = products[0] as any;
-    if (!product?.documentId || typeof product.stock !== "number") continue;
-
-    const balanceAfter = Math.max(0, product.stock - qty);
-    await strapi.documents("api::product.product").update({
-      documentId: product.documentId,
-      data: {
-        stock: balanceAfter,
-      } as any,
-      status: "published",
-    } as any);
-    await recordInventoryMovement({
-      product,
-      delta: balanceAfter - product.stock,
-      balanceAfter,
-      reason: "sale",
-      reference,
-      actor: "Checkout",
-    });
-  }
-}
-
-export default {
+const controller = {
   async visit(ctx) {
-    const body = ctx.request.body ?? {};
-    const path = asString(body.path, "/").slice(0, 500);
+    if (!hasStorefrontSecret(
+      ctx.get("x-jamora-storefront-secret"),
+      process.env.JAMORA_STOREFRONT_API_SECRET,
+    )) {
+      ctx.status = 404;
+      ctx.body = { error: "Not found." };
+      return;
+    }
+    const payload = sanitizeVisitPayload(ctx.request.body ?? {});
 
     await strapi.documents("api::visit-event.visit-event").create({
       data: {
-        visitorId: asString(body.visitorId).slice(0, 120),
-        path,
-        referrer: asString(body.referrer).slice(0, 1000),
-        userAgent: asString(body.userAgent).slice(0, 1000),
+        ...payload,
         source: "storefront",
       },
     });
@@ -626,15 +686,49 @@ export default {
     ctx.body = { ok: true };
   },
 
+  async adminPurgeVisitPrivacy(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+    visitPrivacyPurge ??= createVisitPrivacyPurge(
+      createStrapiVisitPrivacyAdapter(strapi),
+    );
+    const body = ctx.request.body ?? {};
+    const result = await visitPrivacyPurge.run({
+      cursor: asString(body.cursor),
+      limit: Math.round(asNumber(body.limit, 100)),
+      actor: adminIdentity(ctx).actor,
+    });
+    ctx.body = { ok: true, ...result };
+  },
+
   async reserveStock(ctx) {
     const body = ctx.request.body ?? {};
+    let customer;
+    try {
+      customer = await trustedCheckoutCustomer(ctx);
+    } catch {
+      ctx.status = 401;
+      ctx.body = { error: "Invalid session." };
+      return;
+    }
     const items = normalizeOrderItems(Array.isArray(body.items) ? body.items : []);
     if (items.length === 0) {
       ctx.status = 400;
       ctx.body = { error: "Cart is empty." };
       return;
     }
-    const result = await createStockReservation(items, asString(body.email));
+    const idempotencyKey = asString(body.reservationIdempotencyKey);
+    if (!idempotencyKey || idempotencyKey.length > 200) {
+      ctx.status = 400;
+      ctx.body = { error: "Reservation idempotency key is required." };
+      return;
+    }
+    const result = await createStockReservation(
+      items,
+      asString(customer?.email, asString(body.email)),
+      body.shippingSelection,
+      customer?.documentId,
+      idempotencyKey,
+    );
     if ("error" in result) {
       ctx.status = 409;
       ctx.body = result;
@@ -650,31 +744,133 @@ export default {
 
   async mockPaidOrder(ctx) {
     const body = ctx.request.body ?? {};
-    const items = normalizeOrderItems(Array.isArray(body.items) ? body.items : []);
-    const subtotalCents = Math.max(0, asNumber(body.subtotalCents));
-    const shippingCents = Math.max(0, asNumber(body.shippingCents));
+    const pendingPayment = ctx.state?.jamoraPendingPayment === true;
+    if (!phase1MockOrderAllowed(process.env, pendingPayment)) {
+      ctx.status = 404;
+      ctx.body = { error: "Not found." };
+      return;
+    }
+    if (!pendingPayment) {
+      try {
+        const customer = await trustedCheckoutCustomer(ctx);
+        if (customer) {
+          ctx.state ??= {};
+          ctx.state.jamoraCustomerDocumentId = customer.documentId;
+          ctx.state.jamoraCustomerEmail = customer.email;
+        }
+      } catch {
+        ctx.status = 401;
+        ctx.body = { error: "Invalid session." };
+        return;
+      }
+    }
+    if (ctx.state?.jamoraCustomerEmail) {
+      body.customer = {
+        ...(body.customer && typeof body.customer === "object"
+          ? body.customer
+          : {}),
+        email: ctx.state.jamoraCustomerEmail,
+      };
+    }
     const orderNumber = asString(body.orderNumber);
     if (!orderNumber) {
       ctx.status = 400;
       ctx.body = { error: "Order number is required." };
       return;
     }
+    const structuredCheckoutEnabled =
+      process.env.STRUCTURED_CHECKOUT_ENABLED === "true";
+    const shippingEnabled = process.env.SHIPPING_ENABLED === "true";
+    let reservationToken: string | undefined;
+    try {
+      reservationToken = requiredOrderReservationToken(body.reservationToken, {
+        shippingEnabled,
+        pendingPayment,
+      });
+    } catch (error) {
+      ctx.status = 409;
+      ctx.body = {
+        error: error instanceof Error
+          ? error.message
+          : "Stock reservation is required.",
+      };
+      return;
+    }
 
     const existing = await strapi.documents("api::order.order").findMany({
-      fields: ["documentId", "orderNumber"],
       filters: { orderNumber: { $eq: orderNumber } },
       limit: 1,
     });
     if (existing[0]) {
-      ctx.body = { ok: true, order: existing[0], duplicate: true };
+      try {
+        if (!reservationToken) {
+          throw new Error("Order replay capability binding is invalid.");
+        }
+        const reservations = await reservationDocuments().findMany({
+          filters: { token: { $eq: reservationToken } },
+          limit: 2,
+        });
+        if (reservations.length !== 1) {
+          throw new Error("Order replay capability binding is invalid.");
+        }
+        assertExistingOrderReplay(existing[0], reservations[0], {
+          token: reservationToken,
+          email: asString(
+            body.customer?.email,
+            "customer@example.com",
+          ),
+          customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
+          now: new Date(),
+        });
+        ctx.body = {
+          ok: true,
+          order: safeCheckoutOrder(existing[0]),
+          duplicate: true,
+        };
+      } catch {
+        ctx.status = 409;
+        ctx.body = { error: "Authoritative order snapshot is unavailable." };
+      }
+      return;
+    }
+
+    const authoritativeStructuredCheckout =
+      structuredCheckoutEnabled || shippingEnabled;
+    const authoritativePricing =
+      pendingPayment || authoritativeStructuredCheckout;
+    let products: any[] = [];
+    let pricing;
+    if (authoritativePricing) {
+      const requestedSlugs = Array.isArray(body.items)
+        ? [...new Set(body.items.map((item: any) => asString(item?.slug)).filter(Boolean))]
+        : [];
+      products = requestedSlugs.length
+        ? await strapi.documents("api::product.product").findMany({
+            fields: ["documentId", "slug", "sku", "name", "priceCents", "netWeight"],
+            filters: { slug: { $in: requestedSlugs } },
+            limit: requestedSlugs.length,
+          })
+        : [];
+    }
+    try {
+      pricing = computePaymentOrderPricing({
+        body,
+        products,
+        discountCents: 0,
+        pendingPayment,
+        structuredCheckoutEnabled: authoritativeStructuredCheckout,
+      });
+    } catch (error) {
+      ctx.status = 400;
+      ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
       return;
     }
 
     const promotionResult = body.promotionCode
       ? await evaluatePromotion({
           code: body.promotionCode,
-          items,
-          subtotalCents,
+          items: pricing.items,
+          subtotalCents: pricing.subtotalCents,
           email: body.customer?.email,
         })
       : null;
@@ -683,27 +879,79 @@ export default {
       ctx.body = { error: promotionResult.error };
       return;
     }
-    const discountCents = promotionResult?.discountCents ?? 0;
-    const totalCents = Math.max(0, subtotalCents - discountCents + shippingCents);
-    const reservationToken = asString(body.reservationToken);
-    let reservedAllocations: any[] = [];
-    if (reservationToken) {
-      await expireReservations();
-      const reservations = await reservationDocuments().findMany({
-        fields: ["documentId", "allocations", "expiresAt"],
-        filters: { token: { $eq: reservationToken }, status: { $eq: "reserved" } },
-        limit: 1,
+    try {
+      pricing = computePaymentOrderPricing({
+        body,
+        products,
+        discountCents: promotionResult?.discountCents ?? 0,
+        pendingPayment,
+        structuredCheckoutEnabled: authoritativeStructuredCheckout,
       });
-      if (!reservations[0]) {
-        ctx.status = 409;
-        ctx.body = { error: "Stock reservation expired. Please try checkout again." };
+    } catch (error) {
+      ctx.status = 400;
+      ctx.body = { error: error instanceof Error ? error.message : "Invalid checkout totals." };
+      return;
+    }
+    let addressResult;
+    if (structuredCheckoutEnabled || shippingEnabled) {
+      try {
+        addressResult = normalizeShippingAddressPayload(
+          body.shippingAddress,
+          body.customer?.address,
+        );
+      } catch (error) {
+        ctx.status = 400;
+        ctx.body = { error: error instanceof Error ? error.message : "Invalid shipping address." };
         return;
       }
-      reservedAllocations = Array.isArray(reservations[0].allocations)
-        ? reservations[0].allocations
-        : [];
+    } else {
+      addressResult = {
+        shippingAddress: undefined,
+        shippingAddressText: legacyShippingAddressText(
+          body.shippingAddress,
+          body.customer?.address,
+        ),
+      };
     }
-
+    let shippingSnapshot;
+    let priceSnapshot;
+    if (shippingEnabled) {
+      if (!authoritativeShippingCheckoutAllowed(process.env, pendingPayment)) {
+        ctx.status = 409;
+        ctx.body = { error: "Authoritative shipping checkout is unavailable." };
+        return;
+      }
+      try {
+        const selected = await (
+          strapi.service("api::shipping-operations.shipping-quote") as any
+        ).validateSelection({
+          selection: body.shippingSelection,
+          address: addressResult.shippingAddress,
+          items: pricing.items,
+          products,
+          now: new Date(),
+        });
+        const authoritative = applyAuthoritativeRonShipping(
+          pricing,
+          selected.snapshot,
+        );
+        pricing = authoritative.pricing;
+        priceSnapshot = authoritative.priceSnapshot;
+        shippingSnapshot = {
+          shippingAddress: addressResult.shippingAddress,
+          shippingAddressText: addressResult.shippingAddressText,
+          estimatedDelivery: selected.snapshot.estimate,
+          quote: selected.snapshot,
+        };
+      } catch (error) {
+        ctx.status = 409;
+        ctx.body = {
+          error: error instanceof Error ? error.message : "Invalid shipping quote.",
+        };
+        return;
+      }
+    }
+    const { items, subtotalCents, shippingCents, discountCents, totalCents } = pricing;
     const storefrontUrl = (
       process.env.JAMORA_STOREFRONT_URL ??
       process.env.PUBLIC_URL ??
@@ -715,14 +963,26 @@ export default {
       Math.round(totalCents * (1 - (Number.isFinite(costRatio) ? costRatio : DEFAULT_COST_RATIO))),
     );
 
-    const order = await strapi.documents("api::order.order").create({
-      data: {
+    priceSnapshot ??= createDemoPriceSnapshot(totalCents);
+    const modeFields: any = pendingPayment
+      ? pendingPaymentOrderFields({
+          customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
+          priceSnapshot,
+        })
+      : phase1MockPaidOrderFields(orderNumber);
+    modeFields.statusHistory = (modeFields.statusHistory as any[])
+      .map((event) => timelineEvent(event));
+    const trackingCapability = issuePublicTrackingCapability({
+      storefrontUrl,
+      orderNumber,
+    });
+    const orderData = {
         orderNumber,
         trackingNumber: asString(body.trackingNumber),
-        carrier: asString(body.carrier, "Jamora EU Fulfilment"),
+        carrier: shippingSnapshot?.quote?.carrier ??
+          asString(body.carrier, "Jamora EU Fulfilment"),
         customerName: asString(body.customer?.name),
         email: asString(body.customer?.email, "customer@example.com"),
-        status: "paid",
         currency: "eur",
         subtotalCents,
         shippingCents,
@@ -730,19 +990,11 @@ export default {
         promotionCode: promotionResult?.promotion?.code,
         totalCents,
         estimatedProfitCents,
-        stripeSessionId: asString(body.stripeSessionId, "mock-paid-checkout"),
-        invoiceNumber: orderNumber.replace(/^JMR-/, "INV-"),
         items,
-        statusHistory: [
-          timelineEvent({
-            type: "status",
-            status: "paid",
-            note: "Payment confirmed in test mode.",
-            actor: "Checkout",
-          }),
-        ],
+        ...modeFields,
+        customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
         reservationToken,
-        batchAllocations: reservedAllocations,
+        batchAllocations: [],
         fulfilmentChecklist: items.map((item) => ({
           productId: item.productId,
           sku: item.sku,
@@ -751,23 +1003,45 @@ export default {
           checked: false,
         })),
         itemsSummary: JSON.stringify(items, null, 2),
-        shippingAddressText: asString(
-          body.customer?.address,
-          asString(body.shippingAddress?.address),
-        ),
-        trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
+        shippingAddressText: addressResult.shippingAddressText,
+        ...(shippingSnapshot ? { shippingSnapshot } : {}),
+        ...(structuredCheckoutEnabled || shippingEnabled
+          ? {
+              shippingAddress: addressResult.shippingAddress,
+              anonymousSessionId: asString(body.anonymousSessionId) || undefined,
+            }
+          : {}),
+        trackingCapabilityHash: trackingCapability.digest,
+        trackingCapabilityStatus: "active",
+        trackingCapabilityVersion: 0,
         deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
-        estimatedDelivery: body.estimatedDelivery,
-      },
-    });
-
-    await decrementProductStock(items, orderNumber);
-    if (reservationToken) {
-      const consumed = await consumeReservation(reservationToken, orderNumber);
-      if ("error" in consumed) strapi.log.warn(consumed.error);
+        estimatedDelivery: shippingEnabled ? undefined : body.estimatedDelivery,
+    };
+    let order;
+    try {
+      order = reservationToken
+        ? (await createOrderWithLockedReservation({
+            token: reservationToken,
+            items,
+            email: asString(body.customer?.email, "customer@example.com"),
+            customerDocumentId: ctx.state?.jamoraCustomerDocumentId,
+            shippingQuote: shippingSnapshot?.quote,
+            orderNumber,
+            pendingPayment,
+            data: orderData,
+          })).order
+        : await strapi.documents("api::order.order").create({ data: orderData });
+    } catch (error) {
+      ctx.status = 409;
+      ctx.body = {
+        error: error instanceof Error
+          ? error.message
+          : "Stock reservation could not be finalized.",
+      };
+      return;
     }
 
-    if (promotionResult?.promotion?.documentId) {
+    if (!pendingPayment && promotionResult?.promotion?.documentId) {
       await (strapi.documents as any)("api::promotion.promotion").update({
         documentId: promotionResult.promotion.documentId,
         data: {
@@ -776,15 +1050,56 @@ export default {
       });
     }
 
-    await logNotification({
-      recipient: asString(body.customer?.email, "customer@example.com"),
-      template: "order_confirmed",
-      subject: `Jamora order ${orderNumber} confirmed`,
-      orderNumber,
-      payload: { status: "paid", totalCents },
-    });
+    if (!pendingPayment) {
+      await logNotification({
+        recipient: asString(body.customer?.email, "customer@example.com"),
+        template: "order_confirmed",
+        subject: `Jamora order ${orderNumber} confirmed`,
+        orderNumber,
+        payload: { status: "paid", totalCents },
+      });
+    }
 
-    ctx.body = { ok: true, order };
+    try {
+      ctx.body = {
+        ok: true,
+        order: safeCheckoutOrder({
+          ...order,
+          // One-time delivery in this authenticated checkout response only.
+          // The raw capability is never persisted on the order.
+          trackingPreviewUrl: trackingCapability.previewUrl,
+        }),
+      };
+    } catch {
+      ctx.status = 409;
+      ctx.body = { error: "Authoritative order snapshot is unavailable." };
+    }
+  },
+
+  async pendingPaymentOrder(ctx) {
+    ctx.state ??= {};
+    const boundary = pendingPaymentOrderBoundary(
+      process.env,
+      ctx.get("x-jamora-storefront-secret"),
+    );
+    if (boundary) {
+      ctx.status = boundary.status;
+      ctx.body = { error: boundary.error };
+      return;
+    }
+    try {
+      const customer = await trustedCheckoutCustomer(ctx);
+      if (customer) {
+        ctx.state.jamoraCustomerDocumentId = customer.documentId;
+        ctx.state.jamoraCustomerEmail = customer.email;
+      }
+    } catch {
+      ctx.status = 401;
+      ctx.body = { error: "Invalid session." };
+      return;
+    }
+    ctx.state.jamoraPendingPayment = true;
+    return controller.mockPaidOrder(ctx);
   },
 
   async validatePromotion(ctx) {
@@ -817,69 +1132,56 @@ export default {
   },
 
   async trackOrder(ctx) {
-    const query = asString(ctx.query.q).trim();
-    if (!query) {
-      ctx.status = 400;
-      ctx.body = { error: "Missing tracking query." };
+    const startedAt = Date.now();
+    const access = asString(ctx.query.access).trim();
+    const trustedClient = verifyPublicTrackingClientIdentity({
+      headers: (name: string) => ctx.get(name),
+      secret: process.env.JAMORA_STOREFRONT_API_SECRET,
+      now: new Date(),
+    });
+    const rate = publicTrackingLimiter.check(
+      trustedClient ?? ctx.ip ?? ctx.request?.ip,
+      access,
+    );
+    if (!rate.allowed) {
+      if (rate.retryAfter) ctx.set?.("Retry-After", String(rate.retryAfter));
+      await publicTrackingPrivacyFloor(startedAt);
+      ctx.status = 429;
+      ctx.body = { error: "Request could not be completed." };
       return;
     }
-
-    const orders = await strapi.documents("api::order.order").findMany({
-      fields: [
-        "documentId",
-        "orderNumber",
-        "trackingNumber",
-        "carrier",
-        "customerName",
-        "email",
-        "status",
-        "currency",
-        "subtotalCents",
-        "shippingCents",
-        "discountCents",
-        "promotionCode",
-        "totalCents",
-        "invoiceNumber",
-        "items",
-        "statusHistory",
-        "batchAllocations",
-        "fulfilmentChecklist",
-        "packedBy",
-        "packedAt",
-        "itemsSummary",
-        "shippingAddressText",
-        "trackingPreviewUrl",
-        "deliveryLabelUrl",
-        "estimatedDelivery",
-        "createdAt",
-      ],
-      filters: {
-        $or: [
-          { orderNumber: { $eqi: query } },
-          { trackingNumber: { $eqi: query } },
-        ],
-      },
-      limit: 1,
-    });
-
-    const order = orders[0];
-    if (!order) {
+    const query = asString(ctx.query.q).trim();
+    if (!query || query.length > 255) {
+      await publicTrackingPrivacyFloor(startedAt);
       ctx.status = 404;
       ctx.body = { error: "Order not found." };
       return;
     }
 
-    const batchAllocations = await enrichBatchAllocations(
-      (order as any).batchAllocations,
-    );
+    let order;
+    try {
+      order = await createPublicOrderTrackingQuery({
+        documents: (uid: string) => strapi.documents(uid as any),
+      })(query, access);
+    } catch (caught) {
+      if (caught instanceof TypeError) {
+        await publicTrackingPrivacyFloor(startedAt);
+        ctx.status = 404;
+        ctx.body = { error: "Order not found." };
+        return;
+      }
+      throw caught;
+    }
+    if (!order) {
+      await publicTrackingPrivacyFloor(startedAt);
+      ctx.status = 404;
+      ctx.body = { error: "Order not found." };
+      return;
+    }
+
+    await publicTrackingPrivacyFloor(startedAt);
     ctx.body = {
-      order: {
-        ...order,
-        batchAllocations,
-        statusHistory: parseHistory((order as any).statusHistory).filter(
-          (event: any) => event?.type === "status",
-        ),
-      },
+      order,
     };
   },
 
@@ -961,7 +1263,6 @@ export default {
         "packedAt",
         "itemsSummary",
         "shippingAddressText",
-        "trackingPreviewUrl",
         "deliveryLabelUrl",
         "estimatedDelivery",
         "createdAt",
@@ -1042,6 +1343,15 @@ export default {
       ctx.body = { error: "Order not found." };
       return;
     }
+    try {
+      assertManualOrderStatusTransition((existing as any).status, status);
+    } catch {
+      ctx.status = 400;
+      ctx.body = {
+        error: "Use the shipment workflow to move an order to shipped.",
+      };
+      return;
+    }
 
     const existingHistory = parseHistory((existing as any).statusHistory);
     const history = [...existingHistory];
@@ -1067,15 +1377,15 @@ export default {
     if (typeof body.carrier === "string") data.carrier = body.carrier.trim();
     if (typeof body.estimatedDelivery === "string") data.estimatedDelivery = body.estimatedDelivery;
     if (Array.isArray(body.fulfilmentChecklist)) {
-      data.fulfilmentChecklist = body.fulfilmentChecklist.map((item: any) => ({
-        productId: asString(item.productId),
-        sku: asString(item.sku),
-        name: asString(item.name),
-        qty: Math.max(0, asNumber(item.qty)),
-        scannedQty: Math.max(0, asNumber(item.scannedQty)),
-        checked: Boolean(item.checked),
-      }));
-      const allChecked = (data.fulfilmentChecklist as any[]).length > 0 && (data.fulfilmentChecklist as any[]).every((item) => item.checked);
+      data.fulfilmentChecklist = normalisePackingChecklistInput(
+        body.fulfilmentChecklist,
+      );
+      const allChecked = (data.fulfilmentChecklist as any[]).length > 0 &&
+        (data.fulfilmentChecklist as any[]).every((item) =>
+          item.checked === true &&
+          item.qty > 0 &&
+          item.scannedQty === item.qty,
+        );
       data.packedAt = allChecked && asString(body.packedBy, asString((existing as any).packedBy)).trim()
         ? new Date().toISOString()
         : null;
@@ -1573,3 +1883,5 @@ export default {
     ctx.body = { ok: true, content };
   },
 };
+
+export default controller;

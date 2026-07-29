@@ -1,339 +1,385 @@
-# Jamora - Business Flow & Flowcharts
+# Jamora - Business Flow & Flowchart
 
-Dokumen ini menjelaskan alur bisnis Jamora untuk fase demo, mulai dari pengadaan
-barang ke pabrik pihak ketiga, penerimaan stok, penjualan, packing, pengiriman,
-hingga traceability batch.
-
-> **Batas fase demo:** checkout dianggap berhasil dibayar melalui mock-paid
-> checkout. Integrasi pembayaran Stripe nyata dan webhook otomatis belum aktif.
-
-## 1. System Overview
+Dokumen ini menjelaskan alur bisnis Jamora dari sisi customer, admin, sistem,
+payment, dan fulfillment. Stack saat ini:
 
 | Layer | Tool | Fungsi |
 | --- | --- | --- |
-| Storefront | Next.js | Katalog, cart, mock checkout, tracking customer |
-| Jamora Admin | Next.js `/admin` | Operasional produk, order, supplier, PO, receiving, inventory, dan analytics |
-| Backend / CMS | Strapi | API dan penyimpanan data bisnis |
-| Database | PostgreSQL | Produk, order, supplier, PO, receipt, batch, dan audit log |
-| Reverse proxy | Nginx | Satu domain untuk storefront, admin, dan API |
-| Payment fase berikutnya | Stripe Checkout | Pembayaran nyata dan konfirmasi webhook |
+| Storefront | Next.js | Website customer, katalog, cart, checkout trigger |
+| CMS / Admin | Strapi | Kelola produk, stok, konten, dan order |
+| Database | Postgres | Simpan data CMS, produk, order |
+| Payment | Bank transfer + RoPay mock adapter | Menyiapkan payment, mencatat receipt/callback terverifikasi, dan menyelesaikan order secara idempotent |
+| Reverse Proxy | Nginx | Routing domain ke storefront dan Strapi |
+| Analytics | Strapi + visit events | Visit, sales, omzet, estimated profit dashboard |
 
-## 2. Actors and Responsibilities
+---
 
-| Actor | Tanggung jawab |
-| --- | --- |
-| Store Owner / Admin | Produk, supplier, promosi, content, analytics, dan konfigurasi |
-| Procurement | Membuat PO dan mengirim dokumen serta label logistik ke supplier |
-| Third-party Factory | Produksi, memberi batch aktual, production date, expiry date, CoA, dan menempel label |
-| Warehouse / Receiving | Memilih PO, scan carton, verifikasi barang, lalu menerima stok |
-| Packing Team | Mengambil order paid, scan SKU/batch, packing, dan membuat delivery label |
-| Customer | Belanja, checkout, dan melacak order |
+## 1. Business Flow Summary
 
-## 3. End-to-End Business Flow
+1. Admin mengelola produk di Strapi.
+2. Storefront mengambil data produk dari Strapi.
+3. Customer browsing produk di website Jamora.
+4. Customer menambahkan produk ke cart.
+5. Customer klik checkout.
+6. Storefront memvalidasi harga terkini dan alamat checkout.
+7. Flow mock-paid membuat payment snapshot dan order demo.
+8. Sistem menyimpan order dengan alamat Romania dan snapshot EUR/RON.
+9. Guest tetap guest; account hanya dibuat melalui registrasi eksplisit.
+10. Admin memproses order, packing, shipping, lalu update status.
+11. Customer menerima konfirmasi order dan pengiriman.
 
-1. Admin membuat supplier dan menghubungkan produk yang dapat diproduksi supplier tersebut.
-2. Procurement membuat purchase order untuk satu supplier dengan satu atau beberapa produk.
-3. Jamora membuat dokumen PO dan label logistik generik untuk setiap carton.
-4. PO dan file label dikirim ke pabrik pihak ketiga.
-5. Pabrik memproduksi barang, mencetak/menempel label Jamora, dan mencatat data batch aktual.
-6. Pabrik mengirim barang beserta packing list atau CoA.
-7. Warehouse membuka menu **Receiving**, memilih PO, lalu scan label carton atau input manual.
-8. Data batch aktual diverifikasi dari label pabrik, packing list, atau CoA.
-9. Receipt disimpan; stok dan batch inventory bertambah sesuai jumlah yang benar-benar diterima.
-10. Produk aktif dan stok tersedia ditampilkan di storefront.
-11. Customer membuat order melalui mock-paid checkout selama fase demo.
-12. Tim warehouse memproses order, scan item, packing, membuat delivery label, lalu mengirimnya.
-13. Customer melacak order menggunakan order number atau tracking number.
-14. Batch yang bermasalah dapat di-trace, dikarantina, atau di-recall dari Jamora Admin.
+---
 
-```mermaid
-flowchart LR
-    A[Admin manages products and suppliers] --> B[Procurement creates PO]
-    B --> C[Jamora generates PO and generic carton labels]
-    C --> D[Third-party factory produces goods]
-    D --> E[Factory supplies actual batch data and CoA]
-    E --> F[Warehouse selects PO in Receiving]
-    F --> G[Scan carton label or enter quantity manually]
-    G --> H[Verify batch, production date, and expiry date]
-    H --> I[Post goods receipt]
-    I --> J[Stock and batch inventory increase]
-    J --> K[Product available on storefront]
-    K --> L[Customer places paid demo order]
-    L --> M[Warehouse scans and packs order]
-    M --> N[Generate delivery label and ship]
-    N --> O[Customer tracks and receives order]
-```
+## 2. Customer Flow
 
-## 4. Procurement and Factory Flow
-
-### 4.1 Purchase Order
-
-Satu PO hanya memiliki satu supplier, tetapi dapat berisi beberapa produk dan
-beberapa line item. Informasi utama PO:
-
-- PO number
-- supplier
-- expected delivery date
-- product / SKU
-- ordered quantity
-- units per carton
-- notes atau dokumen pendukung
-
-Status PO:
-
-| Status | Arti |
-| --- | --- |
-| `draft` | PO masih disiapkan |
-| `ordered` | PO sudah dikirim ke supplier |
-| `in_transit` | Opsional; supplier menyatakan barang sedang dikirim |
-| `partially_received` | Sebagian barang sudah diterima |
-| `received` | Seluruh kuantitas PO sudah diterima |
-| `cancelled` | PO dibatalkan |
-
-Status `in_transit` bukan syarat receiving. Warehouse dapat menerima langsung
-dari PO berstatus `ordered` apabila barang sudah datang.
-
-### 4.2 Two-label Model
-
-Jamora menggunakan dua label dengan fungsi yang berbeda:
-
-| Label | Dibuat oleh | Isi | Fungsi |
+| Step | Actor | Action | System Result |
 | --- | --- | --- | --- |
-| Jamora logistics label | Jamora | PO, SKU/product ID, carton number, quantity, QR | Identifikasi carton dan scan receiving |
-| Factory batch label | Pabrik | Batch aktual, production date, expiry date, informasi legal | Identitas produksi dan kepatuhan produk |
+| 1 | Customer | Buka website Jamora | Next.js render halaman storefront |
+| 2 | Customer | Lihat katalog / detail produk | Storefront fetch produk dari Strapi |
+| 3 | Customer | Add to cart | Cart tersimpan di browser |
+| 4 | Customer | Buka cart | Total dihitung dari item cart |
+| 5 | Customer | Proceed to checkout | Storefront validasi cart dan alamat |
+| 6 | Customer | Konfirmasi demo checkout | Mock payment diproses tanpa transaksi uang |
+| 7 | System | Simpan hasil mock-paid | Sistem mencatat payment dan order paid di Strapi |
+| 8 | Customer | Redirect ke success page | Customer melihat status order |
 
-Dalam flow operasional yang disepakati, **label logistik generik Jamora tidak
-memuat production date dan expiry date**. Tanggal tersebut harus berasal dari
-hasil produksi aktual pabrik, bukan estimasi saat PO dibuat. QR Jamora berfungsi
-sebagai identitas logistik dan penghubung carton ke PO.
+---
 
-> **Catatan implementasi demo saat ini:** payload QR carton hanya membawa PO,
-> product ID, batch, carton, dan quantity. Namun form PO dan tampilan label cetak
-> masih meminta serta menampilkan batch, production date, dan expiry date yang
-> direncanakan. Nilai tersebut wajib diverifikasi terhadap label/CoA pabrik saat
-> receiving. Pemisahan penuh menjadi label logistik generik dan label batch
-> pabrik adalah penyelarasan berikutnya.
+## 3. Admin Flow
 
-```mermaid
-sequenceDiagram
-    participant Admin as Jamora Procurement
-    participant System as Jamora
-    participant Factory as Third-party Factory
-    participant Warehouse
+| Step | Actor | Action | System Result |
+| --- | --- | --- | --- |
+| 1 | Admin | Login ke Strapi Admin | Admin masuk dashboard CMS |
+| 2 | Admin | Kelola produk | Product data tersimpan di Postgres |
+| 3 | Admin | Cek order baru | Order paid tampil di Strapi |
+| 4 | Admin | Packing order | Status bisa diubah menjadi processing |
+| 5 | Admin | Input shipment/tracking | Order siap dikirim |
+| 6 | Admin | Mark fulfilled | Order selesai |
 
-    Admin->>System: Create PO with supplier and products
-    System-->>Admin: Generate PO document and generic carton labels
-    Admin->>Factory: Send PO and printable labels
-    Factory->>Factory: Produce, pack, and attach labels
-    Factory->>Admin: Send actual batch data, packing list, or CoA
-    Factory->>Warehouse: Deliver cartons
-    Warehouse->>System: Select PO and scan carton QR
-    System-->>Warehouse: Match PO, product, carton, and expected quantity
-    Warehouse->>System: Confirm actual batch data and received quantity
-    System->>System: Create goods receipt and update stock
-```
+---
 
-## 5. Receiving Flow
+## 4. System Flow
 
-Receiving dilakukan dari menu **Receiving**, bukan dari Batches & Expiry.
+### Current State
 
-1. Cari dan pilih PO yang barangnya datang.
-2. Cocokkan supplier, produk, dan outstanding quantity.
-3. Scan QR carton dengan USB scanner/kamera, atau pilih input manual.
-4. Sistem mencocokkan kode dengan PO dan mencegah carton yang tidak sesuai.
-5. Verifikasi quantity received dan damaged quantity.
-6. Verifikasi batch number, production date, dan expiry date berdasarkan data aktual pabrik.
-7. Isi nama penerima dan catatan jika diperlukan.
-8. Submit receipt.
-9. Sistem membuat goods receipt, memperbarui status PO, dan menambah batch inventory.
+- Strapi sudah menjadi CMS utama.
+- Storefront sudah fetch katalog dari Strapi.
+- Cart sudah jalan di browser.
+- Checkout Phase 0 memakai payment mock; tidak ada uang yang dipindahkan.
+- Order demo tersimpan di Strapi. Payment live, callback provider, dan
+  rekonsiliasi baru dijadwalkan pada Phase 2.
 
-Untuk barang dalam jumlah besar, data aktual pabrik dapat disiapkan melalui CSV.
-Jika file tidak tersedia, data batch cukup dimasukkan satu kali untuk carton dalam
-batch yang sama lalu diterapkan ke carton terkait.
+### Phase 0 Commerce Foundation
 
-```mermaid
-flowchart TD
-    A[Goods arrive at warehouse] --> B[Open Receiving]
-    B --> C[Select purchase order]
-    C --> D{Receiving method}
-    D -->|Scanner| E[Scan Jamora carton QR]
-    D -->|Manual| F[Select product and enter quantity]
-    E --> G{Code matches selected PO?}
-    G -->|No| H[Reject scan and show mismatch]
-    G -->|Yes| I[Load product, carton, and quantity]
-    F --> I
-    I --> J[Verify actual batch and dates]
-    J --> K[Record received and damaged quantity]
-    K --> L{All PO units received?}
-    L -->|No| M[Set PO partially_received]
-    L -->|Yes| N[Set PO received]
-    M --> O[Create goods receipt and increase stock]
-    N --> O
-```
+- Guest checkout memakai `anonymousSessionId` opaque dan tidak membuat customer
+  account secara implisit.
+- Customer account dibuat hanya dari registrasi. Email harus diverifikasi
+  sebelum login; logout menghapus session; password reset menaikkan
+  `sessionVersion` sehingga session sebelumnya tidak berlaku.
+- Route account storefront: `/account/register`, `/account/verify`,
+  `/account/login`, `/account`, `/account/forgot-password`, dan
+  `/account/reset-password`.
+- Consent dibedakan menjadi `necessary`, `analytics`, dan `lifecycle_email`.
+  Setiap keputusan eksplisit dikirim melalui route browser-safe dan disimpan
+  append-only sebagai satu row per purpose, lengkap dengan policy version,
+  source, dan waktu keputusan. Penolakan/withdrawal menambah row `granted=false`
+  baru; optional tracking tetap off.
+- Checkout terstruktur menyimpan recipient, phone, ISO country code, county,
+  locality, postal code, street, building, unit, instructions, serta formatted
+  snapshot. Phase 0 menerima Romania (`RO`) saja.
+- Nilai uang memakai integer minor units. Order menyimpan snapshot immutable:
+  nilai referensi EUR, nilai checkout RON, rate, source, dan timestamp.
+- Field order Phase 0 bersifat additive: `customerDocumentId`,
+  `anonymousSessionId`, `shippingAddress`, `priceSnapshot`, dan
+  `paymentDocumentId`; field legacy tetap dapat dibaca.
+- `CUSTOMER_ACCOUNTS_ENABLED` dan `STRUCTURED_CHECKOUT_ENABLED` dapat dimatikan
+  secara independen untuk kembali ke pengalaman lama.
+- Di production, account customer tetap unavailable sampai Phase 6 menyediakan
+  delivery verifikasi/recovery; kedua flag account dan delivery harus `true`.
+- Proteksi abuse account saat ini memakai limiter IP + normalized account
+  in-memory untuk satu proses Strapi. Deployment multi-instance memerlukan
+  limiter distributed (misalnya Redis).
 
-## 6. Inventory and Batch Flow
+### Current Demo Checkout Flow
 
-Menu **Inventory** menampilkan posisi stok operasional:
+1. `POST /api/checkout` menerima cart items dari frontend.
+2. API memvalidasi item dan harga dari Strapi, bukan percaya harga dari browser.
+3. API menormalisasi alamat Romania dan membuat snapshot EUR/RON.
+4. Mock payment dan order demo dibuat dengan status `paid`.
+5. Customer diarahkan ke success page dan dapat mencari order yang sama dari
+   halaman tracking.
 
-| Metric | Perhitungan / arti |
-| --- | --- |
-| On Hand | Seluruh unit fisik yang sudah diterima |
-| Allocated | Unit yang sudah dialokasikan ke order aktif |
-| Available | `On Hand - Allocated` |
-| Incoming | Sisa unit dari PO aktif yang belum diterima |
-| Projected | `Available + Incoming` |
+Payment provider live dan webhook/callback terverifikasi belum tersedia di
+Phase 0. Implementasi payment live dijadwalkan pada Phase 2.
 
-Menu **Batches & Expiry** dipakai setelah receiving untuk:
+---
 
-- melihat stok per batch;
-- menjalankan FEFO, yaitu mengambil batch aktif dengan expiry terdekat lebih dulu;
-- melihat production dan expiry date;
-- melihat jumlah available dan reserved;
-- quarantine dan release batch;
-- trace order/customer yang menerima suatu batch;
-- recall batch bermasalah.
-
-```mermaid
-flowchart LR
-    A[Open PO quantity] -->|not yet received| B[Incoming]
-    C[Goods receipt] --> D[On Hand batch stock]
-    D --> E[Available]
-    E -->|order allocation| F[Reserved or Allocated]
-    F -->|packed and shipped| G[Stock consumed]
-    D -->|quality issue| H[Quarantine]
-    H -->|approved| E
-    H -->|unsafe| I[Recall and trace impacted orders]
-```
-
-## 7. Customer Order and Fulfilment Flow
-
-Status order customer tidak sama dengan status PO supplier:
-
-| Status | Arti | Tindakan berikutnya |
-| --- | --- | --- |
-| `pending` | Checkout dibuat, pembayaran belum dikonfirmasi | Tunggu pembayaran |
-| `paid` | Pembayaran berhasil atau disimulasikan berhasil | Mulai packing |
-| `processing` | Order sedang di-pick dan di-pack | Selesaikan checklist |
-| `shipped` | Paket sudah diserahkan ke carrier | Customer tracking |
-| `fulfilled` | Pengiriman/order selesai | Tidak ada tindakan gudang |
-| `failed` | Pembayaran gagal | Review atau checkout ulang |
-| `refunded` | Dana order dikembalikan | Tutup order/refund stock sesuai proses |
-
-Packing scan memverifikasi SKU atau barcode batch terhadap item order. Scan ini
-berbeda dari scan Receiving: Receiving memasukkan barang dari supplier, sedangkan
-packing scan mengeluarkan barang untuk customer.
+## 5. Flowchart - End-to-End Business Flow
 
 ```mermaid
 flowchart TD
-    A[Customer adds products to cart] --> B[Mock-paid checkout]
-    B --> C[Create paid order]
-    C --> D[Allocate available stock using FEFO]
-    D --> E[Warehouse opens Pack order]
-    E --> F[Scan SKU or batch barcode]
-    F --> G{All required items verified?}
-    G -->|No| F
-    G -->|Yes| H[Confirm packed by]
-    H --> I[Generate delivery label with tracking QR]
-    I --> J[Set order shipped]
-    J --> K[Customer tracks shipment]
-    K --> L[Set order fulfilled]
+    A[Admin login Strapi] --> B[Create or update products]
+    B --> C[(Postgres stores CMS data)]
+    C --> D[Next.js storefront fetches products]
+    D --> E[Customer browses Jamora website]
+    E --> F[Customer opens product detail]
+    F --> G[Add product to cart]
+    G --> H[Cart calculates subtotal and shipping message]
+    H --> I[Customer clicks Proceed to checkout]
+    I --> J[Next.js API validates cart with Strapi product data]
+    J --> K[Normalize Romania address and EUR/RON snapshot]
+    K --> L[Create mock payment]
+    L --> M{Demo result}
+    M -->|Success| Q[Create order in Strapi]
+    M -->|Canceled| O[Customer returns to cart]
+    Q --> R[Admin sees paid order in Strapi]
+    R --> S[Pack and ship order]
+    S --> T[Mark order fulfilled]
+    T --> U[Customer receives order]
 ```
 
-## 8. Traceability and Recall
+---
 
-Setiap shipment menyimpan alokasi batch. Karena itu sistem dapat menelusuri:
-
-`Supplier -> PO -> Goods Receipt -> Batch -> Customer Order -> Customer`
+## 6. Flowchart - Technical Request Routing
 
 ```mermaid
 flowchart LR
-    A[Supplier] --> B[Purchase Order]
-    B --> C[Goods Receipt]
-    C --> D[Inventory Batch]
-    D --> E[Order Batch Allocation]
-    E --> F[Customer Order]
-    F --> G[Customer]
-    D -->|quality problem| H[Quarantine or Recall]
-    H --> I[List impacted orders and customers]
+    A[Browser] --> B[Cloudflare / DNS]
+    B --> C[Nginx HTTPS reverse proxy]
+    C -->|/| D[Next.js Storefront :3095]
+    C -->|/admin| E[Strapi Admin :9014]
+    C -->|/api| E
+    C -->|/content-manager| E
+    C -->|/uploads| E
+    D -->|Server-side fetch| E
+    E --> F[(Postgres :5439)]
 ```
 
-## 9. Storefront Content and Product Flow
+---
 
-1. Admin memperbarui produk, stok, foto, harga, atau content EN/RO di Jamora Admin.
-2. Data disimpan melalui Strapi ke PostgreSQL.
-3. Storefront mengambil data terbaru dan melakukan cache/revalidation.
-4. Produk nonaktif atau tanpa stok tidak dapat dibeli sesuai aturan storefront.
-5. Perubahan content dapat terlihat setelah refresh atau cache direvalidasi.
-
-## 10. Technical Request Routing
-
-```mermaid
-flowchart LR
-    A[Browser] --> B[DNS or Cloudflare]
-    B --> C[Nginx reverse proxy]
-    C -->|Storefront and Jamora Admin| D[Next.js :3095]
-    C -->|API and uploads| E[Strapi :9014]
-    D -->|Docker internal URL| E
-    E --> F[(PostgreSQL :5439 host mapping)]
-```
-
-## 11. Demo Versus Production Payment
-
-### Active Demo Flow
+## 7. Flowchart - Phase 0 Checkout Sequence
 
 ```mermaid
 sequenceDiagram
     participant Customer
-    participant Storefront
+    participant Storefront as Next.js Storefront
     participant Strapi
+    participant Payment as Mock Payment
 
-    Customer->>Storefront: Submit checkout
-    Storefront->>Strapi: Validate products and stock
-    Storefront->>Strapi: Create mock-paid order
-    Strapi->>Strapi: Reserve/decrement inventory
-    Strapi-->>Storefront: Return order and tracking number
-    Storefront-->>Customer: Show success page
+    Customer->>Storefront: Click Proceed to checkout
+    Storefront->>Storefront: Read cart from browser state
+    Storefront->>Strapi: Fetch latest product prices
+    Strapi-->>Storefront: Product data
+    Storefront->>Storefront: Normalize address and snapshot EUR/RON
+    Storefront->>Payment: Create mock payment
+    Payment-->>Storefront: Demo paid result
+    Storefront->>Strapi: Create order with status paid
+    Strapi-->>Storefront: Order saved
+    Storefront-->>Customer: Redirect to success URL
 ```
 
-### Future Stripe Flow
+---
 
-Stripe production integration must validate prices server-side, create Checkout
-Session, verify webhook signatures, and make order creation idempotent. Secret
-keys must remain server-side.
+## 8. Order Status Lifecycle
 
-```mermaid
-sequenceDiagram
-    participant Customer
-    participant Storefront
-    participant Stripe
-    participant Strapi
+| Status | Meaning | Current Phase 0 trigger | Future live-payment trigger |
+| --- | --- | --- | --- |
+| `pending` | Order intent created but not paid | Demo checkout starts | Payment request is created |
+| `paid` | Payment accepted for order processing | Mock-paid flow marks the demo order paid | Verified provider callback or server-to-server status check |
+| `failed` | Payment attempt failed | Manual admin update where needed | Verified provider failure/status result |
+| `fulfilled` | Order shipped / completed | Manual admin update | Manual fulfilment or future shipping workflow |
+| `refunded` | Refund recorded | Manual admin update only | Verified refund result plus immutable refund entry |
 
-    Customer->>Storefront: Proceed to checkout
-    Storefront->>Strapi: Validate latest price and stock
-    Storefront->>Stripe: Create Checkout Session
-    Stripe-->>Customer: Hosted payment page
-    Stripe->>Storefront: Signed payment webhook
-    Storefront->>Stripe: Verify signature
-    Storefront->>Strapi: Idempotently create paid order
-    Strapi-->>Customer: Order available for tracking
+Phase 0 does not receive live payment callbacks or move real funds. A browser
+redirect is never sufficient evidence for a future live payment.
+
+---
+
+## 9. Analytics Flow
+
+1. Storefront loads a page.
+2. `VisitTracker` sends a lightweight visit event to Strapi.
+3. Mock paid checkout sends paid order data to Strapi.
+4. Strapi aggregates visit events and paid/fulfilled orders.
+5. Strapi Admin homepage widget displays:
+   - total visits
+   - visits today
+   - sales count
+   - omzet
+   - today omzet
+   - estimated profit
+   - estimated margin
+
+Estimated profit uses `JAMORA_COST_RATIO`. Example: `0.42` means estimated cost
+is 42% of omzet, so estimated gross profit is 58%.
+
+---
+
+## 10. Phase 0 Checkout Environment
+
+```bash
+STRAPI_URL=http://strapi:1337
+JAMORA_STOREFRONT_API_SECRET=change_me_storefront_to_strapi_secret
+CUSTOMER_SESSION_TOKEN=change_me_customer_session_token
+CUSTOMER_ACCOUNTS_ENABLED=false
+STRUCTURED_CHECKOUT_ENABLED=false
+JAMORA_COST_RATIO=0.42
 ```
 
-## 12. Current Feature Status
+Notes:
 
-| Capability | Status |
+- `STRAPI_URL=http://strapi:1337` dipakai oleh storefront container untuk akses
+  Strapi di jaringan Docker internal.
+- Payment credential belum diperlukan karena Phase 0 tetap mock.
+- Phase 2 akan menambahkan konfigurasi provider-neutral untuk manual bank
+  transfer/RoPay dan callback terverifikasi. Provider lain dapat ditambahkan
+  kemudian melalui interface payment yang sama.
+
+---
+
+## 11. Implementation Checklist
+
+| Item | Status |
 | --- | --- |
-| Jamora Admin authentication and role-ready navigation | Demo ready |
-| Product, stock, photo, supplier assignment, EN/RO content | Demo ready |
-| Supplier master and multi-item purchase order | Demo ready |
-| Carton QR for PO/product/carton/quantity matching | Demo ready |
-| Fully generic printed label without production/expiry data | Design agreed; implementation pending |
-| PO receiving by scan, camera, simulation, or manual input | Demo ready |
-| Partial receipt and damaged quantity | Demo ready |
-| Goods receipt audit record | Demo ready |
-| Inventory projection and low-stock alerts | Demo ready |
-| Batch, expiry, FEFO, quarantine, trace, and recall | Demo ready |
-| Mock-paid customer checkout | Demo ready |
-| Pick/pack scan, delivery label, and tracking | Demo ready |
-| Visit, sales, omzet, and estimated profit analytics | Demo ready |
-| Stripe Checkout and webhook | Future phase |
-| Automated supplier ASN/EDI integration | Future phase |
+| Strapi CMS | Done |
+| Product content type | Done |
+| Product seed | Done |
+| Storefront product fetch from Strapi | Done |
+| Cart UI and local cart state | Done |
+| Public product API access | Done |
+| Mock paid checkout for testing | Done |
+| Success / cancel pages | Done |
+| Browser-based order tracking | Done |
+| Strapi-backed order tracking | Done |
+| Inventory stock field | Done |
+| Stock decrement on mock paid checkout | Done |
+| Simulated email confirmation | Done |
+| Visit analytics capture | Done |
+| Sales / omzet / profit Strapi widget | Done |
+| Bank transfer + RoPay mock payment adapter | Done; flag-gated |
+| Verified RoPay callback/status handling | Done for mock adapter; signed authority only |
+| Finalize paid order from receipt/callback | Done; idempotent |
+| Shipping/tracking fields | Later |
+
+---
+
+## 12. Phase 1 Membership Business Flow
+
+Phase 1 adds prepaid memberships for verified customers while preserving the
+ordinary guest and one-time checkout path.
+
+1. An owner creates or updates a 3, 6, or 12 month plan, including integer EUR
+   and RON prices, package-credit quantity, active state, and eligible products.
+2. A verified customer purchases a plan. The Phase 1 payment boundary is a mock
+   confirmation: it creates a pending membership, idempotently activates it,
+   and posts exactly one `grant`. No real money moves in Phase 1.
+3. The dashboard calculates remaining credits from the append-only ledger.
+   `cachedRemainingCredits` is a repairable cache, never authoritative.
+4. Redemption reserves stock and credits under one opaque checkout reference.
+   Price, eligibility, stock, credit cost, and shipping are server-derived.
+5. Credits cover eligible merchandise only. Shipping is always positive and
+   customer-paid; free membership shipping is outside Phase 1.
+6. Mock payment success creates the order and redeems the reservation.
+   Payment/order or redemption failure releases stock and credits. Abandoned
+   reservations are released by the bounded checkout expiry sweep.
+7. At membership end, one idempotent expiry entry removes unused credits.
+   Manual renewal creates a new period and grant without editing history.
+8. Owner adjustments are append-only and require a signed delta, owner actor,
+   and non-empty audit reason.
+
+The additive schema includes `membership-plan`, `membership`,
+`membership-credit-entry`, and `membership-checkout`; product membership fields
+and order membership snapshots are additive too. Generated public ledger CRUD
+is unavailable, and ledger update/delete is guarded.
+
+`MEMBERSHIP_ENABLED` accepts only the exact string `true`. Any other value
+returns 404 from storefront, owner BFF, controller, and direct service
+boundaries. Disabling it is the rollback path: membership surfaces disappear,
+ordinary guest/one-time checkout continues unchanged, and persisted membership
+history remains intact for a later safe re-enable.
+
+## 13. Phase 2 Payment Flow and Boundaries
+
+Phase 2 adds manual bank transfer and a RoPay **mock adapter** behind a
+provider-neutral payment interface. `ROPAY_PROVIDER_MODE=live` intentionally
+fails closed: a real RoPay adapter has not yet been implemented or approved.
+
+1. Storefront requests a payment using the shared storefront secret and either
+   a validated customer session or the exact guest checkout capability.
+2. Bank transfer persists a beneficiary snapshot, safe minor-unit amount,
+   reference, and expiry. An owner records the receipt. Underpayment,
+   overpayment, or currency mismatch is recorded but never settles anything.
+3. Only an owner may resolve a mismatch as `accept` or `cancel`; the action
+   requires an audit reason and idempotency key. An exact receipt settles once.
+4. RoPay intent returns an ephemeral mock QR/deep link. Its callback or
+   server-to-server status must carry a valid HMAC, fresh timestamp, matching
+   provider reference, amount, currency, and immutable event identity. Replay
+   of that event is idempotent.
+5. A `paid` payment carries one settlement key: membership purchase/renewal
+   activates and grants once; an ordinary order consumes its reservation and
+   stock once. The resulting order timeline entry has `type: status` for
+   tracking/admin consumers.
+6. Browser RoPay return and payment-status endpoints are owner-bound reads;
+   they do not open a transaction or mutate payment state. A late receipt or
+   provider event cannot settle an expired payment.
+
+`PAYMENTS_ENABLED` and `ROPAY_ENABLED` both require exact lowercase `true`.
+When payments are disabled, public, owner, controller, and direct-service
+payment boundaries fail closed. Disabling only RoPay preserves bank transfer.
+These flags are the rollback: retain additive payment, payment-event,
+membership, and order data; do not delete tables or immutable history.
+
+Before enabling either flag, back up PostgreSQL and deploy the additive Strapi
+schemas (`payment`, immutable `payment-event`, and additive order/membership
+links). Money remains the stored safe integer minor-unit value plus currency
+and immutable price snapshot; operators must never recalculate historical rows.
+
+## 14. Phase 3 Address-Assisted Checkout and Shipping
+
+Phase 3 replaces fixed delivery with one server-authoritative flow shared by
+guest checkout, verified customers, and membership redemption:
+
+1. The five checkout steps are exactly `contact -> address -> delivery ->
+   payment -> review`. Going backward preserves the entered state.
+2. Romanian suggestions can populate county, locality, six-digit postal code,
+   street, and building, but every field remains editable. Required-field
+   errors and consistency warnings remain visible; provider confidence never
+   silently marks an address as valid.
+3. Strapi derives product weight and Romanian delivery zone from published
+   product/address data, then issues opaque 15-minute `standard` and `express`
+   quotes in integer RON minor units. Browser-supplied carrier, service, price,
+   weight, and zone are not authoritative.
+4. Quote selection binds the address/items digest to the pending ordinary
+   order or membership checkout. Membership credits cover eligible merchandise
+   only; delivery remains customer-paid.
+5. Guest, customer, and member orders remain pending until a bank receipt or
+   signed provider settlement is verified. Payment settlement revalidates the
+   stored shipping snapshot before consuming stock/credits.
+6. A warehouse user can create exactly one shipment only after verified
+   payment and completion of the packing checklist. Jamora persists AWB and an
+   opaque label reference, never a provider credential or unrestricted label
+   URL.
+7. PDF/ZPL labels are streamed through the backend with a shipment-bound,
+   short-lived, single-use capability. Capabilities can be rotated by issuing a
+   new one; prior unused capabilities become invalid.
+8. Carrier webhooks use a canonical HMAC envelope. Webhooks and fallback
+   polling enter the same row-locked transition path and append every accepted
+   observation. Duplicate, stale, out-of-order, and terminal observations
+   cannot regress shipment state.
+9. Public tracking requires an independent 32-byte `trk_` capability bound to
+   the order. Order number or AWB alone never grants access.
+
+`ADDRESS_ASSIST_ENABLED` and `SHIPPING_ENABLED` accept only exact lowercase
+`true`. With address assistance off, the structured Romanian form remains
+manual. With shipping off, Phase 2 payment/checkout behavior remains available
+and every Phase 3 provider/admin surface returns not found. The current
+address/shipping adapters are deliberately `mock` only; non-`mock` provider
+modes fail closed until a reviewed carrier adapter is installed.
+
+Legacy orders without a tracking capability remain fail-closed. An owner may
+run the bounded reissue operation; it selects only missing digests, issues
+independent random capabilities atomically, records per-order and aggregate
+audits without raw tokens, and skips orders without an active verified
+customer account. A verified account can retrieve its own link through the
+customer BFF. Guest legacy orders require a future verified-email delivery
+workflow and cannot fall back to order-number/AWB access.

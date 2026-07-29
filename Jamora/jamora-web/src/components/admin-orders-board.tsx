@@ -82,9 +82,7 @@ function OrderRow({ order, updating, onPack, onStatus }: { order: AdminOrder; up
 
 function PrimaryAction({ order, updating, readyToShip, onPack, onStatus }: { order: AdminOrder; updating: boolean; readyToShip: boolean; onPack: () => void; onStatus: (status: AdminOrderStatus) => void }) {
   if (order.status === "paid") return <button type="button" onClick={onPack} disabled={updating} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">{updating ? "Starting..." : "Pack order"}</button>;
-  if (order.status === "processing") return readyToShip
-    ? <button type="button" onClick={() => onStatus("shipped")} disabled={updating} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">{updating ? "Updating..." : "Mark shipped"}</button>
-    : <button type="button" onClick={onPack} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">Continue packing</button>;
-  if (order.status === "shipped") return <div className="flex gap-2">{order.trackingPreviewUrl ? <Link href={order.trackingPreviewUrl} target="_blank" className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">Track shipment</Link> : null}<button type="button" onClick={() => { if (window.confirm("Confirm that this order was delivered?")) onStatus("fulfilled"); }} disabled={updating} className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-700">Delivered</button></div>;
+  if (order.status === "processing") return <button type="button" onClick={onPack} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">{readyToShip ? "Create shipment & label" : "Continue packing"}</button>;
+  if (order.status === "shipped") return <button type="button" onClick={() => { if (window.confirm("Confirm that this order was delivered?")) onStatus("fulfilled"); }} disabled={updating} className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-700">Delivered</button>;
   return <Link href={`/admin/orders/${order.documentId}`} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">{order.status === "fulfilled" ? "View order" : "Review"}</Link>;
 }

@@ -17,6 +17,8 @@ export function LanguageSwitcher({ className = "" }: { className?: string }) {
       ?.split("=")[1];
     const detected = cookieLocale ?? (navigator.language.toLowerCase().startsWith("ro") ? "ro" : "en");
     const safe = asLocale(detected);
+    // Locale sources are browser-only, so hydrate the SSR-safe default after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocale(safe);
     if (!cookieLocale) setLocaleCookie(safe);
   }, []);

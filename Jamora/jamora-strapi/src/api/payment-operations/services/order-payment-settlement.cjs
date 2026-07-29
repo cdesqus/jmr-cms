@@ -1,0 +1,125 @@
+"use strict";
+
+function itemQuantities(items, label) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error(`Payment order ${label} is invalid.`);
+  }
+  const quantities = new Map();
+  for (const item of items) {
+    const slug = typeof item?.slug === "string" ? item.slug.trim() : "";
+    const quantity = Number(item?.qty);
+    if (!slug || !Number.isSafeInteger(quantity) || quantity <= 0) {
+      throw new Error(`Payment order ${label} is invalid.`);
+    }
+    const total = (quantities.get(slug) ?? 0) + quantity;
+    if (!Number.isSafeInteger(total)) {
+      throw new Error(`Payment order ${label} is invalid.`);
+    }
+    quantities.set(slug, total);
+  }
+  return quantities;
+}
+
+function assertReservationAllocationBinding(allocations, orderItems) {
+  const reserved = itemQuantities(allocations, "reservation allocation");
+  const ordered = itemQuantities(orderItems, "inventory binding");
+  if (reserved.size !== ordered.size) {
+    throw new Error("Payment order reservation does not match its inventory.");
+  }
+  for (const [slug, quantity] of ordered) {
+    if (reserved.get(slug) !== quantity) {
+      throw new Error("Payment order reservation does not match its inventory.");
+    }
+  }
+}
+
+function assertReservationProductBinding(allocations, orderItems) {
+  const products = new Map();
+  for (const item of orderItems) {
+    const slug = typeof item?.slug === "string" ? item.slug.trim() : "";
+    const productDocumentId =
+      typeof (item?.productId ?? item?.productDocumentId) === "string"
+        ? (item.productId ?? item.productDocumentId).trim()
+        : "";
+    if (!slug || !productDocumentId) {
+      throw new Error("Payment order reservation product binding is invalid.");
+    }
+    products.set(slug, productDocumentId);
+  }
+  for (const allocation of allocations) {
+    if (products.get(allocation?.slug) !== allocation?.productDocumentId) {
+      throw new Error("Payment order reservation product binding is invalid.");
+    }
+  }
+}
+
+function nextPromotionUsage(promotion) {
+  const usageCount = Number(promotion?.usageCount ?? 0);
+  const usageLimit = Number(promotion?.usageLimit ?? 0);
+  if (
+    !Number.isSafeInteger(usageCount)
+    || usageCount < 0
+    || !Number.isSafeInteger(usageLimit)
+    || usageLimit < 0
+  ) {
+    throw new Error("Payment order promotion usage is invalid.");
+  }
+  if (usageLimit > 0 && usageCount >= usageLimit) {
+    throw new Error("Payment order promotion usage limit was reached.");
+  }
+  return usageCount + 1;
+}
+
+async function settleOrdinaryOrder(adapter, payment) {
+  const documentId = payment.orderDocumentId || payment.subjectId;
+  const order = await adapter.lockOrder(documentId);
+  if (!order) throw new Error("Payment order not found.");
+  adapter.assertBinding(order, payment);
+  if (order.status === "paid" && order.paymentDocumentId === payment.documentId) {
+    return { order, idempotent: true };
+  }
+  if (order.status !== "pending") throw new Error("Payment order is not pending.");
+  if (typeof order.reservationToken !== "string" || !order.reservationToken) {
+    throw new Error("Payment order reservation binding is missing.");
+  }
+  if (!Array.isArray(order.items) || order.items.length === 0) {
+    throw new Error("Payment order inventory binding is missing.");
+  }
+
+  const allocations = await adapter.consumeReservation(
+    order.reservationToken,
+    order.orderNumber,
+    order.items,
+  );
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    throw new Error("Payment order reservation allocation is invalid.");
+  }
+  await adapter.decrementProductStock(allocations, order.orderNumber);
+  if (order.promotionCode) {
+    await adapter.incrementPromotionUse(order.promotionCode);
+  }
+  const statusHistory = Array.isArray(order.statusHistory)
+    ? [...order.statusHistory]
+    : [];
+  statusHistory.push({
+    id: `evt-${payment.documentId}-paid`,
+    type: "status",
+    status: "paid",
+    note: "Payment confirmed by verified settlement.",
+    createdAt: payment.paidAt,
+  });
+  const updated = await adapter.updateOrder(documentId, {
+    status: "paid",
+    paymentDocumentId: payment.documentId,
+    invoiceNumber: order.orderNumber.replace(/^JMR-/, "INV-"),
+    statusHistory,
+  });
+  return { order: updated, idempotent: false };
+}
+
+module.exports = {
+  assertReservationAllocationBinding,
+  assertReservationProductBinding,
+  nextPromotionUsage,
+  settleOrdinaryOrder,
+};

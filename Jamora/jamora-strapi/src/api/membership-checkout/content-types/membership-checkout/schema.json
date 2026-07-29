@@ -1,0 +1,35 @@
+{
+  "kind": "collectionType",
+  "collectionName": "membership_checkouts",
+  "info": {
+    "singularName": "membership-checkout",
+    "pluralName": "membership-checkouts",
+    "displayName": "Membership Checkout"
+  },
+  "options": { "draftAndPublish": false },
+  "attributes": {
+    "checkoutReference": { "type": "string", "required": true, "unique": true },
+    "idempotencyKey": { "type": "string", "required": true },
+    "customerDocumentId": { "type": "string", "required": true },
+    "membershipDocumentId": { "type": "string", "required": true },
+    "currency": {
+      "type": "enumeration",
+      "enum": ["EUR", "RON"],
+      "default": "EUR",
+      "required": true
+    },
+    "items": { "type": "json", "required": true },
+    "batchAllocations": { "type": "json" },
+    "totals": { "type": "json", "required": true },
+    "shippingSnapshot": { "type": "json" },
+    "status": {
+      "type": "enumeration",
+      "enum": ["reserved", "paid", "failed", "released", "expired"],
+      "default": "reserved",
+      "required": true
+    },
+    "expiresAt": { "type": "datetime", "required": true },
+    "orderDocumentId": { "type": "string" },
+    "settlementKey": { "type": "string" }
+  }
+}
