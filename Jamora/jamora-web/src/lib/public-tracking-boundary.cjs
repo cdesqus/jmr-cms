@@ -13,6 +13,11 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function getHeader(headers, name) {
   if (typeof headers?.get === "function") return text(headers.get(name));
   const target = name.toLowerCase();
@@ -37,6 +42,45 @@ function derivePublicTrackingClientKey(headers, env = process.env) {
     if (isIP(trustedProxyIp)) source = `proxy:${trustedProxyIp.toLowerCase()}`;
   }
   return createHash("sha256").update(source, "utf8").digest("base64url");
+}
+
+function createPublicTrackingBrowserLimiter(options = {}) {
+  const limit = positiveInteger(options.limit, 30);
+  const windowMs = positiveInteger(options.windowMs, 60_000);
+  const maxBuckets = positiveInteger(options.maxBuckets, 10_000);
+  const now = options.now ?? Date.now;
+  const buckets = new Map();
+  return {
+    check(headers, env = process.env) {
+      const timestamp = now();
+      const key = derivePublicTrackingClientKey(headers, env);
+      const current = buckets.get(key);
+      if (!current || timestamp >= current.resetAt) {
+        if (!current && buckets.size >= maxBuckets) {
+          for (const [candidate, bucket] of buckets) {
+            if (timestamp >= bucket.resetAt) buckets.delete(candidate);
+          }
+          while (buckets.size >= maxBuckets) {
+            buckets.delete(buckets.keys().next().value);
+          }
+        }
+        buckets.set(key, { count: 1, resetAt: timestamp + windowMs });
+        return { allowed: true };
+      }
+      if (current.count >= limit) {
+        return {
+          allowed: false,
+          retryAfter: Math.max(
+            1,
+            Math.ceil((current.resetAt - timestamp) / 1_000),
+          ),
+        };
+      }
+      current.count += 1;
+      return { allowed: true };
+    },
+    bucketCount: () => buckets.size,
+  };
 }
 
 function trackingClientSignature({ clientKey, timestamp, secret }) {
@@ -74,6 +118,7 @@ module.exports = {
   CLIENT_KEY_HEADER,
   CLIENT_SIGNATURE_HEADER,
   CLIENT_TIMESTAMP_HEADER,
+  createPublicTrackingBrowserLimiter,
   derivePublicTrackingClientKey,
   trackingClientSignature,
   trustedPublicTrackingHeaders,

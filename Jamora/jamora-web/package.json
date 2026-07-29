@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "test": "node --test && npm run test:integration",
-    "test:integration": "tsx --test --test-concurrency=1 src/components/address-assist-step.integration.test.tsx src/components/cart-view.integration.test.tsx src/components/checkout-wizard.integration.test.tsx src/lib/bounded-json-request.integration.ts src/lib/packing.integration.ts",
+    "test:integration": "tsx --test --test-concurrency=1 src/components/address-assist-step.integration.test.tsx src/components/cart-view.integration.test.tsx src/components/checkout-wizard.integration.test.tsx src/lib/bounded-json-request.integration.ts src/lib/packing.integration.ts src/lib/public-tracking-route.integration.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

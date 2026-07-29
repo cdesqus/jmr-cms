@@ -1,13 +1,33 @@
 import { NextResponse } from "next/server";
 import { publicTrackingSearchParams } from "@/lib/order-tracking-policy.cjs";
-import { trustedPublicTrackingHeaders } from "@/lib/public-tracking-boundary.cjs";
+import {
+  createPublicTrackingBrowserLimiter,
+  trustedPublicTrackingHeaders,
+} from "@/lib/public-tracking-boundary.cjs";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
   process.env.NEXT_PUBLIC_STRAPI_URL ??
   "http://localhost:9014";
+const browserTrackingLimiter = createPublicTrackingBrowserLimiter({
+  limit: process.env.PUBLIC_TRACKING_BFF_RATE_LIMIT,
+  windowMs: process.env.PUBLIC_TRACKING_BFF_RATE_WINDOW_MS,
+  maxBuckets: process.env.PUBLIC_TRACKING_BFF_RATE_MAX_BUCKETS,
+});
 
 export async function GET(request: Request) {
+  const rate = browserTrackingLimiter.check(request.headers, process.env);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: "Request could not be completed." },
+      {
+        status: 429,
+        headers: rate.retryAfter
+          ? { "Retry-After": String(rate.retryAfter) }
+          : undefined,
+      },
+    );
+  }
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q")?.trim();
   const access = searchParams.get("access")?.trim();
