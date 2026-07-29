@@ -39,7 +39,8 @@ function shippingAdminOperation(method, segments, input) {
     if (!Array.isArray(orderDocumentIds) ||
         orderDocumentIds.length < 1 ||
         orderDocumentIds.length > 100 ||
-        orderDocumentIds.some((id) => !safeSegment(id)) ||
+        orderDocumentIds.some((id) =>
+          !safeSegment(id) || !/^[A-Za-z0-9_-]{1,255}$/.test(id)) ||
         new Set(orderDocumentIds).size !== orderDocumentIds.length) {
       throw new TypeError("Tracking capability order document IDs are invalid.");
     }

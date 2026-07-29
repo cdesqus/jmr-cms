@@ -219,6 +219,79 @@ test("owner rotation and revocation are bounded, conditional, and audited withou
   );
 });
 
+test("mixed management records one attributable safe audit per requested order", async () => {
+  const fixture = eligibleFixture({
+    trackingCapabilityHash: "a".repeat(64),
+    trackingCapabilityStatus: "active",
+    trackingCapabilityVersion: 3,
+  });
+  fixture.orders.push({
+    ...fixture.orders[0],
+    documentId: "order-race",
+    orderNumber: "JMR-RACE",
+  });
+  const adapter = createMemoryTrackingCapabilityAdapter({
+    ...fixture,
+    beforeConditionalUpdate(order) {
+      if (order?.documentId === "order-race") {
+        order.trackingCapabilityVersion += 1;
+      }
+    },
+  });
+
+  const result = await manageTrackingCapabilities({
+    adapter,
+    actor: "owner@example.test",
+    action: "rotate",
+    orderDocumentIds: [
+      "order-verified",
+      "order-race",
+      "order-missing",
+    ],
+    now,
+  });
+
+  assert.deepEqual(result, {
+    selected: 3,
+    updated: 1,
+    skippedConcurrent: 2,
+  });
+  assert.deepEqual(adapter.audits.map((entry) => ({
+    action: entry.action,
+    entityId: entry.entityId,
+    requestedAction: entry.details.action,
+    outcome: entry.details.outcome,
+  })), [
+    {
+      action: "shipping.tracking-capability.rotated",
+      entityId: "order-verified",
+      requestedAction: "rotate",
+      outcome: "rotated",
+    },
+    {
+      action: "shipping.tracking-capability.management-skipped",
+      entityId: "order-race",
+      requestedAction: "rotate",
+      outcome: "version_raced",
+    },
+    {
+      action: "shipping.tracking-capability.management-skipped",
+      entityId: "order-missing",
+      requestedAction: "rotate",
+      outcome: "not_found",
+    },
+    {
+      action: "shipping.tracking-capability.management-batch",
+      entityId: undefined,
+      requestedAction: "rotate",
+      outcome: "completed",
+    },
+  ]);
+  assert.equal(adapter.audits.length, result.selected + 1);
+  assert.equal(JSON.stringify(adapter.audits).includes("trk_"), false);
+  assert.equal(JSON.stringify(adapter.audits).includes("ana@example.test"), false);
+});
+
 test("management bounds and malformed inputs fail closed", async () => {
   assert.equal(trackingCapabilityReissueLimit(undefined), 25);
   assert.equal(trackingCapabilityReissueLimit(100), 100);
@@ -245,4 +318,15 @@ test("management bounds and malformed inputs fail closed", async () => {
     }),
     /action is invalid/i,
   );
+  await assert.rejects(
+    manageTrackingCapabilities({
+      adapter,
+      actor: "owner@example.test",
+      action: "revoke",
+      orderDocumentIds: ["ana@example.test"],
+      now,
+    }),
+    /order document ids are invalid/i,
+  );
+  assert.deepEqual(adapter.audits, []);
 });

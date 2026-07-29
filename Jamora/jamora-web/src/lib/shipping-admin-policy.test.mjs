@@ -107,6 +107,14 @@ test("BFF permits only explicit shipment, label, and bounded capability-reissue 
     ),
     /action/i,
   );
+  assert.throws(
+    () => shippingAdminOperation(
+      "POST",
+      ["tracking", "capabilities", "manage"],
+      { action: "revoke", orderDocumentIds: ["ana@example.test"] },
+    ),
+    /document ids/i,
+  );
 
   for (const [method, path] of [
     ["GET", ["shipments", "order-1"]],

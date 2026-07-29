@@ -215,7 +215,7 @@ async function claimCustomerTrackingCapability({
 
 function managedIds(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_LIMIT ||
-      value.some((item) => !text(item) || text(item).length > 255) ||
+      value.some((item) => !/^[A-Za-z0-9_-]{1,255}$/.test(text(item))) ||
       new Set(value.map(text)).size !== value.length) {
     throw new TypeError("Tracking capability order document IDs are invalid.");
   }
@@ -247,7 +247,16 @@ async function manageTrackingCapabilities({
   for (const documentId of orderDocumentIds) {
     const outcome = await adapter.transaction(async (tx) => {
       const order = safeOrder(await tx.lockOrder(documentId));
-      if (!order.documentId) return "concurrent";
+      if (!order.documentId) {
+        await tx.createAudit(auditData({
+          action: "shipping.tracking-capability.management-skipped",
+          actor,
+          order: safeOrder({ documentId }),
+          now,
+          details: { action, outcome: "not_found" },
+        }));
+        return "concurrent";
+      }
       const next = {
         trackingPreviewUrl: null,
         trackingCapabilityHash: null,
@@ -261,13 +270,23 @@ async function manageTrackingCapabilities({
         order.trackingCapabilityVersion,
         next,
       );
-      if (!updated) return "concurrent";
+      if (!updated) {
+        await tx.createAudit(auditData({
+          action: "shipping.tracking-capability.management-skipped",
+          actor,
+          order,
+          now,
+          details: { action, outcome: "version_raced" },
+        }));
+        return "concurrent";
+      }
       await tx.createAudit(auditData({
         action: `shipping.tracking-capability.${action}d`,
         actor,
         order,
         now,
         details: {
+          action,
           outcome: `${action}d`,
           fromVersion: order.trackingCapabilityVersion,
           toVersion: next.trackingCapabilityVersion,

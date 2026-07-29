@@ -272,11 +272,11 @@ Run the repository gate before deployment:
 
 ```bash
 cd jamora-web
-node --test src/lib/commerce/*.test.mjs
+npm test
 npm run lint
 npm run build
 cd ../jamora-strapi
-node --test src/api/customer-auth/services/customer-credentials.test.mjs
+node --test --test-force-exit src/api/**/*.test.mjs src/middlewares/*.test.mjs scripts/package-runtime-cjs.test.mjs
 npm run build
 ```
 
@@ -293,7 +293,9 @@ rollout flags and manually verify:
 7. Every explicit consent choice creates one append-only row per purpose.
    Rejecting or withdrawing optional consent records `granted=false`; it does
    not enable optional analytics or lifecycle processing.
-8. `/track` finds the guest order by order/tracking number.
+8. `/track` returns the same generic not-found surface for order-number-only,
+   tracking-number-only, AWB-only, missing, or malformed capability requests.
+   A guest order is visible only with its valid order-bound `trk_` capability.
 
 Never expect raw verification/reset tokens in production responses. Configure a
 transactional email delivery path before enabling customer accounts in
@@ -422,7 +424,7 @@ Run these exact repository gates on the server checkout before rollout:
 
 ```bash
 cd jamora-web
-node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
+npm test
 npm run lint
 npm run build
 cd ../jamora-strapi
@@ -619,7 +621,7 @@ Run this non-Docker gate from a clean checkout:
 
 ```bash
 cd jamora-web
-node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
+npm test
 npm run lint
 npm run build
 cd ../jamora-strapi
@@ -839,8 +841,10 @@ increments the version, and returns the order to `pending_delivery`; the
 verified customer must claim a newly random capability. `revoke` atomically
 clears the digest/legacy preview, increments the version, and leaves the order
 unclaimable. Both actions accept 1–100 unique document IDs and write per-order
-and batch audits without raw capabilities. Never derive entropy from order
-number, AWB, email, or another secret.
+success, `not_found`, or `version_raced` outcomes plus one batch audit. Missing
+IDs are recorded only as the requested opaque document ID; audits contain no raw
+capability or customer PII. Never derive entropy from order number, AWB, email,
+or another secret.
 
 ### Romanian privacy and retention
 
@@ -888,7 +892,7 @@ Run the repository gate first from a clean checkout (no Docker required):
 
 ```bash
 cd jamora-web
-node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
+npm test
 npm run lint
 npm run build
 cd ../jamora-strapi
