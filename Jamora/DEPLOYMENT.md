@@ -650,3 +650,290 @@ configuration must complete the following before production promotion:
    ordinary checkout available.
 
 The PostgreSQL/provider smoke is a release blocker, not an optional checklist.
+
+## Phase 3 Address and Shipping Deployment
+
+Phase 3 was verified without Docker. Do not promote it directly from unit/build
+results: the PostgreSQL/provider/proxy smoke below is mandatory on the dev
+server before production.
+
+### Additive migration and configuration
+
+1. Back up PostgreSQL and record the restore command and backup checksum.
+2. Deploy Strapi/storefront with `ADDRESS_ASSIST_ENABLED=false` and
+   `SHIPPING_ENABLED=false`.
+3. Start one Strapi instance and let Strapi apply the additive order,
+   membership-checkout, product, `shipment`, `shipment-event`, and
+   `shipment-compensation` schema changes. Never delete/recreate order/payment
+   tables or recalculate historical money.
+4. Confirm the unique provider event/shipment constraints and private tracking
+   fields exist, then run the non-Docker gates.
+5. Enable address assistance first. Enable shipping only after quote,
+   payment-settlement, warehouse-label, callback, polling, and proxy smokes
+   pass.
+
+Generate independent secrets; never reuse a session, admin, payment, quote,
+tracking, or label secret:
+
+```dotenv
+ADDRESS_ASSIST_ENABLED=false
+ADDRESS_PROVIDER_MODE=mock
+SHIPPING_ENABLED=false
+SHIPPING_PROVIDER_MODE=mock
+SHIPPING_PRODUCT_LOCALE=en
+DEMO_EUR_RON_RATE=4.975000
+SHIPPING_QUOTE_SECRET=<openssl-rand-base64-48>
+SHIPMENT_LABEL_CAPABILITY_SECRET=<different-openssl-rand-base64-48>
+SHIPMENT_LABEL_CAPABILITY_TTL_SECONDS=60
+SHIPPING_TRACKING_WEBHOOK_SECRET=<different-openssl-rand-base64-48>
+
+SHIPPING_WEBHOOK_IP_RATE_LIMIT=60
+SHIPPING_WEBHOOK_PROVIDER_RATE_LIMIT=1000
+SHIPPING_WEBHOOK_EVENT_RATE_LIMIT=10
+SHIPPING_WEBHOOK_RATE_WINDOW_MS=60000
+SHIPPING_WEBHOOK_RATE_MAX_BUCKETS=10000
+SHIPPING_TRACKING_STARTUP_POLL_LIMIT=25
+SHIPPING_TRACKING_STARTUP_TIMEOUT_MS=10000
+
+PUBLIC_TRACKING_RATE_LIMIT=30
+PUBLIC_TRACKING_CAPABILITY_RATE_LIMIT=30
+PUBLIC_TRACKING_RATE_WINDOW_MS=60000
+PUBLIC_TRACKING_RATE_MAX_BUCKETS=10000
+PUBLIC_TRACKING_PRIVACY_FLOOR_MS=150
+PUBLIC_TRACKING_BFF_RATE_LIMIT=30
+PUBLIC_TRACKING_BFF_RATE_WINDOW_MS=60000
+PUBLIC_TRACKING_BFF_RATE_MAX_BUCKETS=10000
+```
+
+Only `mock` address/shipping provider modes exist in this release. Any other
+exact value fails closed. A live provider adapter must pass review and preserve
+these contracts:
+
+- address suggestions return only structured Romanian fields and advisory
+  confidence; they never convert a warning into validation;
+- quote input uses server product weight/address data, while output contains an
+  opaque quote ID, carrier, service, RON minor-unit price, estimate, and expiry;
+- selection revalidates the immutable address/items binding;
+- shipment creation is idempotent and supports provider cancellation/
+  compensation if local persistence fails;
+- label download returns only allowlisted PDF/ZPL bytes from an opaque private
+  label reference;
+- tracking polling returns the same closed observation schema used by the
+  signed webhook path;
+- provider credentials, raw label locations, unrestricted URLs, and full
+  provider payloads never enter a browser, audit log, or public response.
+
+### Private labels and key rotation
+
+Persist only the carrier AWB, provider name, service, private label reference,
+and allowlisted formats. Provider label content remains at the provider or in
+private storage; do not put it under public uploads. Jamora streams it with
+`Cache-Control: no-store, private`, `X-Content-Type-Options: nosniff`, and a
+shipment-bound single-use capability.
+
+`SHIPMENT_LABEL_CAPABILITY_TTL_SECONDS` should remain short (60 seconds by
+default). Issuing another capability supersedes the previous unused one.
+Rotating `SHIPMENT_LABEL_CAPABILITY_SECRET` invalidates every outstanding
+capability; schedule the restart, let warehouse staff finish active downloads,
+rotate, restart all Strapi instances together, and issue fresh capabilities.
+Never log a capability or include it in analytics.
+
+### Tracking webhook HMAC and polling
+
+Register:
+
+```text
+POST https://<public-domain>/api/jamora/shipping/tracking/webhook
+```
+
+Required headers are `content-type: application/json`,
+`x-jamora-shipping-provider`, `x-jamora-shipping-timestamp` (ten-digit Unix
+seconds), and `x-jamora-shipping-signature`. The signature is:
+
+```text
+sha256=HMAC-SHA256(
+  SHIPPING_TRACKING_WEBHOOK_SECRET,
+  <unix-seconds> + "." + <canonical-json>
+)
+```
+
+Canonical JSON recursively sorts object keys and emits compact UTF-8 JSON. The
+closed payload fields are exactly `awb`, `occurredAt`, `provider`,
+`providerEventId`, and `status`; no extra fields are accepted. The timestamp
+has a five-minute tolerance, and `occurredAt` must remain within the authenticated
+envelope window. Provider event IDs are immutable: exact replay is idempotent,
+but changed replay is a conflict.
+
+Strapi runs one bounded, failure-isolated poll sweep on startup when shipping
+is enabled. Schedule additional polling from a private operations runner:
+
+```bash
+curl --fail-with-body -X POST \
+  https://<strapi-private-host>/api/jamora/admin/shipping/tracking/poll \
+  -H 'content-type: application/json' \
+  -H "x-jamora-admin-secret: $JAMORA_ADMIN_API_SECRET" \
+  -H 'x-jamora-admin-actor: tracking-cron@jamora' \
+  -H 'x-jamora-admin-role: owner' \
+  --data '{"limit":25}'
+```
+
+Run one job at a time, keep the limit at or below 100, and alert on nonzero
+failure counts. Selection is oldest-attempt-first and every attempt records its
+time, including timeout/failure. Webhook and poll observations use the same
+row-locked monotonic transition service.
+
+### Reverse proxy and public tracking rate limits
+
+Set `TRUST_PROXY=true` only when the controlled reverse proxy is the sole path
+to both Next and Strapi, direct public ports are blocked, and the proxy
+overwrites (does not append browser values for) `X-Real-IP`,
+`X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host`.
+
+With `TRUST_PROXY=true`, the browser-facing tracking limiter isolates clients
+using proxy-overwritten `X-Real-IP`. With `TRUST_PROXY=false`, spoofed forwarded
+headers are ignored and direct clients intentionally share one secure bounded
+BFF bucket. The BFF consumes the bucket before parsing `q` or `access`; missing
+or malformed spray therefore cannot reach Strapi. A `429` must include
+`Retry-After`. All limiter stores are single-process/in-memory; use a reviewed
+shared limiter before scaling either service horizontally.
+
+### Legacy tracking capability reissue
+
+Legacy order-number/AWB links stay unavailable until an explicit reissue. There
+is no compatibility switch. The owner-only operation:
+
+```bash
+curl --fail-with-body -X POST \
+  https://<storefront-private-host>/admin/api/shipping/tracking/capabilities/reissue \
+  -H 'content-type: application/json' \
+  -H '<authenticated-owner-session-cookie>' \
+  --data '{"limit":25}'
+```
+
+The result contains counts only: `selected`, `reissued`,
+`skippedIneligible`, `skippedConcurrent`, and `remainingMissing`. Internally
+each eligible order receives independent 32-byte random `trk_` entropy; Strapi
+atomically stores its SHA-256 digest and same-origin private preview URL only if
+the digest is still absent. The job records actor/order/time/outcome plus a
+batch aggregate, never the raw capability.
+
+Only active, email-verified accounts whose account/email binding matches the
+order are eligible. Their authenticated customer BFF can read their own links
+from `GET /api/jamora/shipping/tracking/links`. Guest legacy orders remain
+fail-closed until a reviewed verified-email delivery workflow exists. Rotation/
+revocation means issuing a new independent capability and replacing the stored
+digest/URL; never derive it from order number, AWB, email, or another secret.
+Run bounded batches until the before/after missing count is understood, review
+all skip/concurrent audits, and retry only skipped rows.
+
+### Romanian privacy and retention
+
+Shipping addresses and phone numbers are fulfillment personal data. Collect
+only recipient, phone, county, locality, postal code, street/building/unit, and
+necessary delivery instructions. Do not store suggestion search text,
+confidence/provider payloads, raw webhook bodies, capabilities, label bytes, or
+carrier credentials in analytics/logs. Restrict full addresses and labels to
+owner/warehouse operational roles; public tracking contains no customer,
+address, item, or price data.
+
+Define and enforce a Romanian/EU retention schedule with the data controller:
+retain order/invoice fields required by law, but delete/anonymize optional
+delivery instructions and operational payloads once no longer necessary.
+Handle access/deletion requests without altering immutable financial,
+membership-credit, payment-event, shipment-event, or audit records that must be
+retained; use documented redaction where legally permitted.
+
+### Rollout and rollback
+
+Recommended order:
+
+```dotenv
+ADDRESS_ASSIST_ENABLED=true
+SHIPPING_ENABLED=false
+```
+
+After address smoke, quote/payment/warehouse/provider smoke, and backup
+verification:
+
+```dotenv
+ADDRESS_ASSIST_ENABLED=true
+SHIPPING_ENABLED=true
+```
+
+Rollback shipping by setting `SHIPPING_ENABLED=false` in Strapi and storefront
+and restarting both. Manual structured Romanian address and Phase 2 payments
+remain available. Disable suggestions separately with
+`ADDRESS_ASSIST_ENABLED=false`. Do not delete shipments/events, clear
+capability hashes, roll back immutable ledgers, or reuse provider event IDs.
+
+### Mandatory Phase 3 dev-server smoke
+
+Run the repository gate first from a clean checkout (no Docker required):
+
+```bash
+cd jamora-web
+npm test
+npm run lint
+npm run build
+cd ../jamora-strapi
+npm test
+npm run build
+```
+
+Then use the deployed dev server with real PostgreSQL and its HTTPS proxy. This
+checklist is a production release blocker:
+
+1. **Migration and flags:** record missing-capability counts and schema/index
+   checks. With both Phase 3 flags false, verify address suggestion, quote,
+   shipment, label, webhook, poll, customer-link, and reissue routes are hidden;
+   complete an ordinary Phase 2/manual structured-address checkout.
+2. **Address:** enable address assistance. Using both a verified customer and a
+   live guest reservation, request `Memorandumului`; confirm at most eight safe
+   suggestions. Select one, manually change street/building, and assess a
+   mismatched locality. Confirm edits persist and warnings remain visible.
+   Reject non-JSON, oversized, control-character, and missing/expired guest
+   capability requests.
+3. **Quote/select:** enable shipping, request standard/express quotes for a
+   published weighted product, and select one for guest, customer, and
+   membership checkout. Confirm RON minor units, 15-minute expiry,
+   address/items binding, customer-paid member shipping, idempotent replay, and
+   rejection of forged/expired carrier/service/price/weight/zone.
+4. **Payment settlement:** prepare guest, customer, and membership orders.
+   Before a verified receipt/callback they must remain pending and create no
+   shipment. Settle each through the Phase 2 verified path; confirm the stored
+   shipping snapshot is revalidated and stock/credits settle exactly once.
+5. **Warehouse/label:** verify unpaid, unpacked, foreign-order, and duplicate
+   shipment requests fail. As warehouse, complete the checklist, create one
+   shipment, issue PDF and ZPL capabilities, and download through the BFF.
+   Confirm forged, foreign-shipment, expired, superseded, and replayed
+   capabilities fail; responses contain no provider URL/reference/credential.
+6. **Webhook:** send a freshly signed canonical `picked_up`, then
+   `in_transit`, duplicate, stale regression, `exception`, recovery, and
+   terminal event. Confirm append-only events, exact replay idempotency,
+   changed replay conflict, foreign AWB failure, bad/old HMAC rejection, and no
+   state regression. Inspect logs to confirm no raw body/secret/capability.
+7. **Polling:** make the mock/staging adapter return unchanged, applied,
+   replayed, failed, and timed-out observations. Trigger an owner batch at
+   limits 1 and 100; confirm fairness, bounds, attempt timestamps, failure
+   isolation, sanitized startup logs, and the same state semantics as webhook.
+8. **Public tracking:** missing/malformed capability, order-only, and AWB-only
+   requests return the same generic not-found surface. A valid secure link
+   exposes only order status plus the minimal shipment timeline. Run the legacy
+   reissue at limit 1, verify aggregate/per-order audits contain no `trk_`,
+   confirm verified customer retrieval, and confirm ineligible guest rows stay
+   unavailable.
+9. **BFF ingress limit:** with a temporary 30/minute limit, send 31
+   missing/malformed requests to
+   `/api/jamora/orders/track?q=&access=bad`; request 31 must be `429` with
+   `Retry-After` and Strapi must show zero upstream tracking calls. With
+   `TRUST_PROXY=true`, send separate proxy-overwritten `X-Real-IP` values and
+   confirm two clients have isolated buckets. With `TRUST_PROXY=false`, spoof
+   `X-Real-IP`/`X-Forwarded-For` values and confirm they cannot split the shared
+   direct-mode bucket.
+10. **Rollback:** disable shipping and restart both applications. Confirm all
+    provider/admin shipping surfaces disappear while manual structured address,
+    Phase 2 payment, existing order data, and immutable shipment/event history
+    remain intact. Re-enable only after the smoke evidence and rollback restore
+    point are attached to the release record.
+
+Do not promote Phase 3 without dated evidence for all ten items.

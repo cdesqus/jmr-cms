@@ -333,3 +333,53 @@ Before enabling either flag, back up PostgreSQL and deploy the additive Strapi
 schemas (`payment`, immutable `payment-event`, and additive order/membership
 links). Money remains the stored safe integer minor-unit value plus currency
 and immutable price snapshot; operators must never recalculate historical rows.
+
+## 14. Phase 3 Address-Assisted Checkout and Shipping
+
+Phase 3 replaces fixed delivery with one server-authoritative flow shared by
+guest checkout, verified customers, and membership redemption:
+
+1. The five checkout steps are exactly `contact -> address -> delivery ->
+   payment -> review`. Going backward preserves the entered state.
+2. Romanian suggestions can populate county, locality, six-digit postal code,
+   street, and building, but every field remains editable. Required-field
+   errors and consistency warnings remain visible; provider confidence never
+   silently marks an address as valid.
+3. Strapi derives product weight and Romanian delivery zone from published
+   product/address data, then issues opaque 15-minute `standard` and `express`
+   quotes in integer RON minor units. Browser-supplied carrier, service, price,
+   weight, and zone are not authoritative.
+4. Quote selection binds the address/items digest to the pending ordinary
+   order or membership checkout. Membership credits cover eligible merchandise
+   only; delivery remains customer-paid.
+5. Guest, customer, and member orders remain pending until a bank receipt or
+   signed provider settlement is verified. Payment settlement revalidates the
+   stored shipping snapshot before consuming stock/credits.
+6. A warehouse user can create exactly one shipment only after verified
+   payment and completion of the packing checklist. Jamora persists AWB and an
+   opaque label reference, never a provider credential or unrestricted label
+   URL.
+7. PDF/ZPL labels are streamed through the backend with a shipment-bound,
+   short-lived, single-use capability. Capabilities can be rotated by issuing a
+   new one; prior unused capabilities become invalid.
+8. Carrier webhooks use a canonical HMAC envelope. Webhooks and fallback
+   polling enter the same row-locked transition path and append every accepted
+   observation. Duplicate, stale, out-of-order, and terminal observations
+   cannot regress shipment state.
+9. Public tracking requires an independent 32-byte `trk_` capability bound to
+   the order. Order number or AWB alone never grants access.
+
+`ADDRESS_ASSIST_ENABLED` and `SHIPPING_ENABLED` accept only exact lowercase
+`true`. With address assistance off, the structured Romanian form remains
+manual. With shipping off, Phase 2 payment/checkout behavior remains available
+and every Phase 3 provider/admin surface returns not found. The current
+address/shipping adapters are deliberately `mock` only; non-`mock` provider
+modes fail closed until a reviewed carrier adapter is installed.
+
+Legacy orders without a tracking capability remain fail-closed. An owner may
+run the bounded reissue operation; it selects only missing digests, issues
+independent random capabilities atomically, records per-order and aggregate
+audits without raw tokens, and skips orders without an active verified
+customer account. A verified account can retrieve its own link through the
+customer BFF. Guest legacy orders require a future verified-email delivery
+workflow and cannot fall back to order-number/AWB access.

@@ -244,6 +244,44 @@ documented dev-server smoke against PostgreSQL and the actual provider callback
 configuration. A real provider adapter must preserve these verification and
 idempotency contracts before `ROPAY_PROVIDER_MODE=live` is ever supported.
 
+## 14. Phase 3 Delivery Readiness
+
+Phase 3 provides one accessible five-step checkout for guest, customer, and
+membership orders. Romanian address suggestions reduce typing without
+overriding manual edits or hiding postal/county/locality warnings. Delivery
+prices, currency, carrier, service, weight, zone, estimate, and quote expiry are
+owned and revalidated by Strapi.
+
+Warehouse fulfillment is payment-bound and checklist-bound. A paid, packed
+order receives one idempotent shipment, private PDF/ZPL label streaming, and an
+AWB. Label capabilities are short-lived, shipment-specific, single-use, and
+rotatable; browsers never receive provider credentials or permanent label
+locations.
+
+Tracking uses signed callbacks plus bounded fallback polling. The event ledger
+is append-only, provider event IDs are replay-safe, and the explicit transition
+table prevents status regression. Public tracking exposes a minimal projection
+only after an order-bound random capability is presented. Missing/forged
+capabilities, order-number-only queries, and AWB-only queries share the generic
+not-found privacy surface.
+
+| Phase 3 area | Readiness |
+| --- | --- |
+| Five-step guest/customer/member checkout | Automated verification complete |
+| Romanian address suggestions + manual warnings | Automated verification complete |
+| Authoritative RON quote/select snapshot | Automated verification complete |
+| Paid/packed shipment creation | Automated verification complete |
+| Private PDF/ZPL label capability | Automated verification complete |
+| Signed, monotonic tracking + bounded polling | Automated verification complete |
+| Legacy tracking capability reissue | Owner-only, bounded and audited; verified accounts only |
+| Live carrier/PostgreSQL integration | Mandatory dev-server smoke pending |
+
+`ADDRESS_PROVIDER_MODE=mock` and `SHIPPING_PROVIDER_MODE=mock` are the only
+implemented adapter modes. Exact feature flags support immediate rollback
+without deleting additive shipment/event fields. Docker was not used for the
+local gate; the PostgreSQL, proxy, callback, label, polling, rate-limit, and
+legacy-reissue runbook in `DEPLOYMENT.md` remains a production release blocker.
+
 # JAMORA
 
 ### Indonesian Heritage. European Standard. Modern Commerce.
