@@ -19,6 +19,15 @@ import {
   createAuthenticatedTrackingLimiter,
   verifyTrackingWebhook,
 } from "../../../middlewares/shipping-webhook-guard.cjs";
+import {
+  createStrapiTrackingCapabilityAdapter,
+  listCustomerTrackingLinks,
+  reissueLegacyTrackingCapabilities,
+} from "../services/tracking-capability-reissue.cjs";
+import {
+  assertAddressProviderMode,
+  assertShippingProviderMode,
+} from "../services/shipping-provider-config.cjs";
 
 const MAX_BODY_BYTES = 4_096;
 const RATE_WINDOW_MS = 60_000;
@@ -194,6 +203,35 @@ async function checkoutIdentity(ctx: any, body: Record<string, unknown>) {
   };
 }
 
+async function verifiedCustomerIdentity(ctx: any) {
+  if (!hasStorefrontSecret(
+    ctx.get("x-jamora-storefront-secret"),
+    process.env.JAMORA_STOREFRONT_API_SECRET,
+  )) {
+    fail(ctx, 401, "Storefront API secret required.");
+    return null;
+  }
+  const documentId = text(ctx.get("x-jamora-customer-document-id"));
+  const sessionVersionText = text(ctx.get("x-jamora-customer-session-version"));
+  if (!documentId || !/^\d+$/.test(sessionVersionText)) {
+    fail(ctx, 401, "Invalid session.");
+    return null;
+  }
+  const sessionVersion = Number(sessionVersionText);
+  if (!Number.isSafeInteger(sessionVersion)) {
+    fail(ctx, 401, "Invalid session.");
+    return null;
+  }
+  const customer = await (
+    strapi.service("api::customer-auth.customer-auth") as any
+  ).findActiveSessionCustomer(documentId, sessionVersion);
+  if (!customer?.documentId) {
+    fail(ctx, 401, "Invalid session.");
+    return null;
+  }
+  return { customerDocumentId: customer.documentId };
+}
+
 function hasRequiredMembershipCustomer(
   ctx: any,
   body: Record<string, unknown>,
@@ -312,6 +350,7 @@ function capabilityTtlSeconds() {
 }
 
 function defaultShipmentTransactions() {
+  assertShippingProviderMode(process.env);
   return createShipmentTransactions({
     adapter: createStrapiShipmentAdapter(strapi),
     provider: createMockShippingProvider(),
@@ -321,10 +360,35 @@ function defaultShipmentTransactions() {
 }
 
 function defaultTrackingDomain() {
+  assertShippingProviderMode(process.env);
   return createTrackingDomain({
     adapter: createStrapiTrackingAdapter(strapi),
     provider: createMockShippingProvider(),
   });
+}
+
+function defaultTrackingCapabilityOperations() {
+  const adapter = createStrapiTrackingCapabilityAdapter(strapi);
+  return {
+    reissue: (input: any) =>
+      reissueLegacyTrackingCapabilities({ adapter, ...input }),
+    customerLinks: (input: any) =>
+      listCustomerTrackingLinks({ adapter, ...input }),
+  };
+}
+
+function safeReissueSummary(value: any) {
+  const field = (name: string) => {
+    const result = Number(value?.[name]);
+    return Number.isSafeInteger(result) && result >= 0 ? result : 0;
+  };
+  return {
+    selected: field("selected"),
+    reissued: field("reissued"),
+    skippedIneligible: field("skippedIneligible"),
+    skippedConcurrent: field("skippedConcurrent"),
+    remainingMissing: field("remainingMissing"),
+  };
 }
 
 function safeCapability(value: any) {
@@ -379,6 +443,7 @@ const publicController = {
     const query = text(body.query);
     if (!query) return fail(ctx, 400, "Invalid address query.");
     try {
+      assertAddressProviderMode(process.env);
       ctx.body = { suggestions: suggestRomanianAddresses(query).map(safeSuggestion) };
     } catch (caught) {
       if (caught instanceof TypeError) return fail(ctx, 400, "Invalid address query.");
@@ -445,6 +510,7 @@ export function createShippingOperationsController({
   trackingDomain = defaultTrackingDomain,
   verifyWebhook = verifyTrackingWebhook,
   authenticatedTrackingLimiter = defaultAuthenticatedTrackingLimiter,
+  trackingCapabilityOperations = defaultTrackingCapabilityOperations,
 }: {
   shipmentTransactions?: () => any;
   trackingDomain?: () => any;
@@ -452,6 +518,7 @@ export function createShippingOperationsController({
   authenticatedTrackingLimiter?: {
     check: (event: any) => { allowed: boolean; retryAfter?: number };
   };
+  trackingCapabilityOperations?: () => any;
 } = {}) {
   return {
     ...publicController,
@@ -526,6 +593,47 @@ export function createShippingOperationsController({
       }
       await runShipment(ctx, async () =>
         trackingDomain().pollOpenShipments({ limit }));
+    },
+
+    async customerTrackingLinks(ctx: any) {
+      if (!shippingEnabled(ctx)) return;
+      const identity = await verifiedCustomerIdentity(ctx);
+      if (!identity) return;
+      await runShipment(ctx, async () => ({
+        links: await trackingCapabilityOperations().customerLinks({
+          ...identity,
+          storefrontUrl:
+            process.env.JAMORA_STOREFRONT_URL ??
+            process.env.PUBLIC_URL ??
+            "http://localhost:3095",
+        }),
+      }));
+    },
+
+    async reissueTrackingCapabilities(ctx: any) {
+      const identity = shipmentAdmin(ctx);
+      if (!identity || !isJsonRequest(ctx)) return;
+      if (identity.role !== "owner") {
+        return fail(ctx, 403, "Owner credentials required.");
+      }
+      const body = requestBody(ctx);
+      if (!body) return;
+      try {
+        const result = await trackingCapabilityOperations().reissue({
+          actor: identity.actor,
+          limit: body.limit,
+          storefrontUrl:
+            process.env.JAMORA_STOREFRONT_URL ??
+            process.env.PUBLIC_URL ??
+            "http://localhost:3095",
+        });
+        ctx.body = safeReissueSummary(result);
+      } catch (caught) {
+        if (caught instanceof TypeError) {
+          return fail(ctx, 400, caught.message);
+        }
+        return fail(ctx, 502, "Shipping service unavailable.");
+      }
     },
 
     async createShipment(ctx: any) {

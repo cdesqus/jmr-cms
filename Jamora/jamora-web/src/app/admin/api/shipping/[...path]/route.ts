@@ -46,6 +46,12 @@ async function forward(
       { status },
     );
   }
+  if (operation.ownerOnly && identity?.role !== "owner") {
+    return Response.json(
+      { error: "Owner access required." },
+      { status: 403 },
+    );
+  }
 
   let target = `${STRAPI_URL}${operation.targetPath}`;
   if (operation.kind === "download") {

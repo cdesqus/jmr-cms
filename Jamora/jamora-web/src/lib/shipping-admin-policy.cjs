@@ -27,6 +27,23 @@ function safeSegment(value) {
 function shippingAdminOperation(method, segments, input) {
   const path = Array.isArray(segments) ? segments : [];
   if (method === "POST" &&
+      path.length === 3 &&
+      path[0] === "tracking" &&
+      path[1] === "capabilities" &&
+      path[2] === "reissue") {
+    const limit = Number(input?.limit ?? 25);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new TypeError("Tracking capability reissue limit is invalid.");
+    }
+    return {
+      kind: "reissue",
+      ownerOnly: true,
+      targetPath:
+        "/api/jamora/admin/shipping/tracking/capabilities/reissue",
+      body: JSON.stringify({ limit }),
+    };
+  }
+  if (method === "POST" &&
       path.length === 2 &&
       path[0] === "shipments" &&
       safeSegment(path[1])) {
@@ -75,6 +92,22 @@ function assertLabelCapability(value) {
 }
 
 function safeShipmentMutationResponse(value, kind) {
+  if (kind === "reissue") {
+    const count = (field) => {
+      const result = Number(value?.[field]);
+      if (!Number.isSafeInteger(result) || result < 0) {
+        throw new TypeError("Invalid tracking capability reissue response.");
+      }
+      return result;
+    };
+    return {
+      selected: count("selected"),
+      reissued: count("reissued"),
+      skippedIneligible: count("skippedIneligible"),
+      skippedConcurrent: count("skippedConcurrent"),
+      remainingMissing: count("remainingMissing"),
+    };
+  }
   if (kind === "capability") {
     const format = text(value?.format).toLowerCase();
     return {

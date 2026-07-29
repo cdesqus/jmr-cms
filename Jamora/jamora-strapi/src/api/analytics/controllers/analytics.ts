@@ -1345,7 +1345,6 @@ const controller = {
         "packedAt",
         "itemsSummary",
         "shippingAddressText",
-        "trackingPreviewUrl",
         "deliveryLabelUrl",
         "estimatedDelivery",
         "createdAt",

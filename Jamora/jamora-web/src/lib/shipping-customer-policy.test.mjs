@@ -10,6 +10,7 @@ import {
   safeAddressSuggestions,
   safeShippingQuotes,
   safeShippingSelection,
+  safeTrackingLinks,
   shippingOperationEnabled,
   shippingOperationBody,
   trustedShippingHeaders,
@@ -82,19 +83,53 @@ test("shipping and address BFF features require their exact true flag", () => {
   }), false);
 });
 
-test("shipping BFF has an exact POST-only operation allowlist", () => {
+test("shipping BFF has an exact mutation allowlist plus verified-customer tracking links", () => {
   assert.equal(customerShippingPath("POST", ["address", "suggest"]), "/api/jamora/address/suggest");
   assert.equal(customerShippingPath("POST", ["address", "assess"]), "/api/jamora/address/assess");
   assert.equal(customerShippingPath("POST", ["shipping", "quotes"]), "/api/jamora/shipping/quotes");
   assert.equal(customerShippingPath("POST", ["shipping", "select"]), "/api/jamora/shipping/select");
+  assert.equal(
+    customerShippingPath("GET", ["shipping", "tracking", "links"]),
+    "/api/jamora/shipping/tracking/links",
+  );
   for (const rejected of [
     ["GET", ["shipping", "quotes"]],
+    ["POST", ["shipping", "tracking", "links"]],
     ["POST", ["shipping", "labels"]],
     ["POST", ["address", "provider"]],
     ["POST", ["shipping", "select", "extra"]],
   ]) {
     assert.throws(() => customerShippingPath(...rejected), /not found/i);
   }
+});
+
+test("customer tracking link DTO strips metadata and rejects foreign or malformed URLs", () => {
+  const access = `trk_${"A".repeat(43)}`;
+  assert.deepEqual(safeTrackingLinks({
+    links: [{
+      orderNumber: "JMR-1001",
+      trackingUrl:
+        `https://shop.example.test/track?order=JMR-1001&access=${access}`,
+      customerEmail: "never@example.test",
+      capabilityHash: "never",
+    }],
+  }, "https://shop.example.test"), {
+    links: [{
+      orderNumber: "JMR-1001",
+      trackingUrl:
+        `https://shop.example.test/track?order=JMR-1001&access=${access}`,
+    }],
+  });
+  assert.throws(
+    () => safeTrackingLinks({
+      links: [{
+        orderNumber: "JMR-1001",
+        trackingUrl:
+          `https://foreign.example/track?order=JMR-1001&access=${access}`,
+      }],
+    }, "https://shop.example.test"),
+    /tracking link response/i,
+  );
 });
 
 test("trusted shipping headers overwrite browser identity, capability, and provider headers", () => {

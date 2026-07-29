@@ -37,15 +37,6 @@ export default async function AdminOrderDetailPage({
           <p className="mt-1 text-slate-500">{order.email}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {order.trackingPreviewUrl && (
-            <Link
-              href={order.trackingPreviewUrl}
-              target="_blank"
-              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
-            >
-              Preview tracking
-            </Link>
-          )}
           {order.deliveryLabelUrl && (
             <Link
               href={order.deliveryLabelUrl}

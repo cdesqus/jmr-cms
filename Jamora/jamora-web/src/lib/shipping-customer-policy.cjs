@@ -81,15 +81,17 @@ function record(value, message = "Invalid request.") {
 function customerShippingPath(method, path) {
   const key = Array.isArray(path) ? path.join("/") : "";
   const targets = {
-    "address/suggest": "/api/jamora/address/suggest",
-    "address/assess": "/api/jamora/address/assess",
-    "shipping/quotes": "/api/jamora/shipping/quotes",
-    "shipping/select": "/api/jamora/shipping/select",
+    "POST address/suggest": "/api/jamora/address/suggest",
+    "POST address/assess": "/api/jamora/address/assess",
+    "POST shipping/quotes": "/api/jamora/shipping/quotes",
+    "POST shipping/select": "/api/jamora/shipping/select",
+    "GET shipping/tracking/links": "/api/jamora/shipping/tracking/links",
   };
-  if (method !== "POST" || !Object.hasOwn(targets, key)) {
+  const operation = `${method} ${key}`;
+  if (!Object.hasOwn(targets, operation)) {
     throw new Error("Not found.");
   }
-  return targets[key];
+  return targets[operation];
 }
 
 function shippingOperationEnabled(operation, env) {
@@ -216,6 +218,44 @@ function safeShippingSelection(value) {
   };
 }
 
+function safeTrackingLinks(value, storefrontUrl) {
+  const input = record(value, "Invalid tracking link response.");
+  if (!Array.isArray(input.links) || input.links.length > 100) {
+    throw new Error("Invalid tracking link response.");
+  }
+  let trustedOrigin;
+  try {
+    trustedOrigin = new URL(text(storefrontUrl)).origin;
+  } catch {
+    throw new Error("Invalid tracking link response.");
+  }
+  return {
+    links: input.links.map((link) => {
+      const candidate = record(link, "Invalid tracking link response.");
+      const orderNumber = text(candidate.orderNumber);
+      let url;
+      try {
+        url = new URL(text(candidate.trackingUrl));
+      } catch {
+        throw new Error("Invalid tracking link response.");
+      }
+      const access = text(url.searchParams.get("access"));
+      const parameters = [...url.searchParams.keys()].sort();
+      if (!orderNumber ||
+          url.origin !== trustedOrigin ||
+          url.pathname !== "/track" ||
+          url.searchParams.get("order") !== orderNumber ||
+          !/^trk_[A-Za-z0-9_-]{43}$/.test(access) ||
+          parameters.length !== 2 ||
+          parameters[0] !== "access" ||
+          parameters[1] !== "order") {
+        throw new Error("Invalid tracking link response.");
+      }
+      return { orderNumber, trackingUrl: url.toString() };
+    }),
+  };
+}
+
 function quoteInput(value) {
   return safeQuote(value);
 }
@@ -285,6 +325,7 @@ module.exports = {
   safeShippingQuotes,
   safeShippingResponse,
   safeShippingSelection,
+  safeTrackingLinks,
   shippingOperationEnabled,
   shippingOperationBody,
   trustedShippingHeaders,

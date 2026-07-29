@@ -75,7 +75,9 @@ test("shipping operations expose only explicit address, quote, shipment, trackin
     { method: "POST", path: "/jamora/shipping/quotes", handler: "shipping-operations.quoteShipping" },
     { method: "POST", path: "/jamora/shipping/select", handler: "shipping-operations.selectShippingQuote" },
     { method: "POST", path: "/jamora/shipping/tracking/webhook", handler: "shipping-operations.trackingWebhook" },
+    { method: "GET", path: "/jamora/shipping/tracking/links", handler: "shipping-operations.customerTrackingLinks" },
     { method: "POST", path: "/jamora/admin/shipping/tracking/poll", handler: "shipping-operations.pollTracking" },
+    { method: "POST", path: "/jamora/admin/shipping/tracking/capabilities/reissue", handler: "shipping-operations.reissueTrackingCapabilities" },
     { method: "POST", path: "/jamora/admin/shipping/shipments/:orderDocumentId", handler: "shipping-operations.createShipment" },
     { method: "POST", path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels/capability", handler: "shipping-operations.createLabelCapability" },
     { method: "GET", path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels", handler: "shipping-operations.downloadLabel" },
@@ -722,4 +724,128 @@ test("shipment mutations reject oversized JSON before transaction service access
     assert.equal(capability.status, 413);
   });
   assert.equal(calls, 0);
+});
+
+test("owner-only legacy tracking reissue returns aggregate counts without raw capabilities", async () => {
+  const calls = [];
+  const shippingController = createShippingOperationsController({
+    trackingCapabilityOperations: () => ({
+      async reissue(input) {
+        calls.push(input);
+        return {
+          selected: 3,
+          reissued: 2,
+          skippedIneligible: 1,
+          skippedConcurrent: 0,
+          remainingMissing: 4,
+          trackingPreviewUrl:
+            "https://shop.example.test/track?order=secret&access=trk_must_not_leak",
+        };
+      },
+    }),
+  });
+  const baseHeaders = {
+    "x-jamora-admin-secret": "admin-secret",
+    "x-jamora-admin-actor": "owner@example.test",
+  };
+  await withEnvironment({
+    SHIPPING_ENABLED: "true",
+    JAMORA_ADMIN_API_SECRET: "admin-secret",
+    JAMORA_STOREFRONT_URL: "https://shop.example.test",
+  }, async () => {
+    const warehouse = context({
+      body: { limit: 3 },
+      headers: { ...baseHeaders, "x-jamora-admin-role": "warehouse" },
+    });
+    await shippingController.reissueTrackingCapabilities(warehouse);
+    assert.equal(warehouse.status, 403);
+    assert.equal(calls.length, 0);
+
+    const owner = context({
+      body: { limit: 3 },
+      headers: { ...baseHeaders, "x-jamora-admin-role": "owner" },
+    });
+    await shippingController.reissueTrackingCapabilities(owner);
+    assert.deepEqual(owner.body, {
+      selected: 3,
+      reissued: 2,
+      skippedIneligible: 1,
+      skippedConcurrent: 0,
+      remainingMissing: 4,
+    });
+    assert.equal(JSON.stringify(owner.body).includes("trk_"), false);
+    assert.deepEqual(calls, [{
+      actor: "owner@example.test",
+      limit: 3,
+      storefrontUrl: "https://shop.example.test",
+    }]);
+  });
+});
+
+test("tracking links are revealed only to a verified customer session", async () => {
+  const calls = [];
+  const shippingController = createShippingOperationsController({
+    trackingCapabilityOperations: () => ({
+      async customerLinks(input) {
+        calls.push(input);
+        return [{
+          orderNumber: "JMR-1001",
+          trackingUrl:
+            `https://shop.example.test/track?order=JMR-1001&access=trk_${"A".repeat(43)}`,
+        }];
+      },
+    }),
+  });
+  const originalStrapi = globalThis.strapi;
+  globalThis.strapi = {
+    service(uid) {
+      assert.equal(uid, "api::customer-auth.customer-auth");
+      return {
+        findActiveSessionCustomer: async (documentId, version) =>
+          documentId === "customer-1" && version === 2
+            ? { documentId: "customer-1" }
+            : null,
+      };
+    },
+  };
+  try {
+    await withEnvironment({
+      SHIPPING_ENABLED: "true",
+      JAMORA_STOREFRONT_API_SECRET: "storefront-secret",
+      JAMORA_STOREFRONT_URL: "https://shop.example.test",
+    }, async () => {
+      const invalid = context({
+        headers: {
+          "x-jamora-storefront-secret": "storefront-secret",
+          "x-jamora-customer-document-id": "customer-1",
+          "x-jamora-customer-session-version": "1",
+        },
+      });
+      await shippingController.customerTrackingLinks(invalid);
+      assert.equal(invalid.status, 401);
+      assert.equal(calls.length, 0);
+
+      const verified = context({
+        headers: {
+          "x-jamora-storefront-secret": "storefront-secret",
+          "x-jamora-customer-document-id": "customer-1",
+          "x-jamora-customer-session-version": "2",
+        },
+      });
+      await shippingController.customerTrackingLinks(verified);
+      assert.deepEqual(verified.body, {
+        links: [{
+          orderNumber: "JMR-1001",
+          trackingUrl:
+            `https://shop.example.test/track?order=JMR-1001&access=trk_${"A".repeat(43)}`,
+        }],
+      });
+      assert.deepEqual(calls, [{
+        customerDocumentId: "customer-1",
+        storefrontUrl: "https://shop.example.test",
+      }]);
+    });
+  } finally {
+    globalThis.strapi = originalStrapi;
+  }
 });

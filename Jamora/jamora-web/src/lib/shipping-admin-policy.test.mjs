@@ -29,7 +29,7 @@ test("shipping administration is exact-gated to owners and warehouse staff", () 
   assert.equal(canAccessAdminPath("content", "/admin/api/shipping/shipments/order-1"), false);
 });
 
-test("BFF permits only explicit shipment creation, capability, and label download operations", () => {
+test("BFF permits only explicit shipment, label, and bounded capability-reissue operations", () => {
   assert.deepEqual(
     shippingAdminOperation("POST", ["shipments", "order-1"]),
     {
@@ -55,6 +55,28 @@ test("BFF permits only explicit shipment creation, capability, and label downloa
       kind: "download",
       targetPath: "/api/jamora/admin/shipping/shipments/shipment-1/labels",
     },
+  );
+  assert.deepEqual(
+    shippingAdminOperation(
+      "POST",
+      ["tracking", "capabilities", "reissue"],
+      { limit: 25, actor: "forged", rawCapability: "never" },
+    ),
+    {
+      kind: "reissue",
+      ownerOnly: true,
+      targetPath:
+        "/api/jamora/admin/shipping/tracking/capabilities/reissue",
+      body: JSON.stringify({ limit: 25 }),
+    },
+  );
+  assert.throws(
+    () => shippingAdminOperation(
+      "POST",
+      ["tracking", "capabilities", "reissue"],
+      { limit: 101 },
+    ),
+    /limit/i,
   );
 
   for (const [method, path] of [

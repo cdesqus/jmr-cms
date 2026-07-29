@@ -31,9 +31,21 @@ export default {
       config: { auth: false },
     },
     {
+      method: "GET",
+      path: "/jamora/shipping/tracking/links",
+      handler: "shipping-operations.customerTrackingLinks",
+      config: { auth: false },
+    },
+    {
       method: "POST",
       path: "/jamora/admin/shipping/tracking/poll",
       handler: "shipping-operations.pollTracking",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
+      path: "/jamora/admin/shipping/tracking/capabilities/reissue",
+      handler: "shipping-operations.reissueTrackingCapabilities",
       config: { auth: false },
     },
     {

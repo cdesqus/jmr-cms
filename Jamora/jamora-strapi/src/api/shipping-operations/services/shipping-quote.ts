@@ -4,6 +4,9 @@ import {
   validateShippingSnapshot as validateSnapshot,
 } from "./shipping-domain.cjs";
 import { isDeepStrictEqual } from "node:util";
+import {
+  assertShippingProviderMode,
+} from "./shipping-provider-config.cjs";
 
 const PRODUCT_UID = "api::product.product";
 const ORDER_UID = "api::order.order";
@@ -15,6 +18,7 @@ function text(value: unknown) {
 
 function enabled() {
   if (process.env.SHIPPING_ENABLED !== "true") throw new Error("Not found.");
+  assertShippingProviderMode(process.env);
 }
 
 function quoteSecret() {
