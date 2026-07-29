@@ -9,7 +9,7 @@ import { LOCALE_COOKIE, UI_TEXT, asLocale, type Locale } from "@/lib/i18n";
 const NAV = [
   { href: "/", label: "home" },
   { href: "/shop", label: "shop" },
-  { href: "/account/membership/plans", label: "membership", membershipOnly: true },
+  { href: "/membership", label: "membership", membershipOnly: true },
   { href: "/about", label: "story" },
   { href: "/contact", label: "contact" },
 ];

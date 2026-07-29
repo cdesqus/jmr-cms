@@ -65,7 +65,7 @@ test("public membership offer follows the membership feature flag", () => {
 
   assert.deepEqual(publicMembershipOffer({ MEMBERSHIP_ENABLED: "true" }), {
     visible: true,
-    href: "/account/membership/plans",
+    href: "/membership",
     eyebrow: "Prepaid membership",
     title: "Stock your ritual for 3, 6, or 12 months.",
     description:

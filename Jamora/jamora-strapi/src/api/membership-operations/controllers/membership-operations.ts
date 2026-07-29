@@ -36,6 +36,7 @@ async function run(ctx: any, action: () => Promise<unknown>) {
 }
 
 export default {
+  async publicPlans(ctx: any) { if (enabled(ctx)) ctx.body = { plans: await service().listPlans(true) }; },
   async plans(ctx: any) { const identity = await customer(ctx); if (identity) ctx.body = { plans: await service().listPlans(true) }; },
   async me(ctx: any) { const identity = await customer(ctx); if (identity) ctx.body = { memberships: await service().customerMemberships(identity.documentId) }; },
   async purchase(ctx: any) { const identity = await customer(ctx); if (identity) await run(ctx, () => service().preparePurchase(identity.documentId, text(body(ctx).planDocumentId), text(body(ctx).idempotencyKey))); },

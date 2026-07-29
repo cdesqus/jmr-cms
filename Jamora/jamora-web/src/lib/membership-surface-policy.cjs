@@ -8,7 +8,7 @@ function publicMembershipOffer(env = process.env) {
   if (!membershipSurfaceEnabled(env)) return { visible: false };
   return {
     visible: true,
-    href: "/account/membership/plans",
+    href: "/membership",
     eyebrow: "Prepaid membership",
     title: "Stock your ritual for 3, 6, or 12 months.",
     description:

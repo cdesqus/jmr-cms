@@ -1,5 +1,6 @@
 export default {
   routes: [
+    { method: "GET", path: "/jamora/membership/public-plans", handler: "membership-operations.publicPlans", config: { auth: false } },
     { method: "GET", path: "/jamora/membership/plans", handler: "membership-operations.plans", config: { auth: false } },
     { method: "GET", path: "/jamora/membership/me", handler: "membership-operations.me", config: { auth: false } },
     { method: "POST", path: "/jamora/membership/purchase", handler: "membership-operations.purchase", config: { auth: false } },
