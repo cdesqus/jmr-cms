@@ -48,6 +48,8 @@ test("safe checkout order returns authoritative RON totals and shipping fields o
     }],
     shippingAddress: address,
     shippingAddressText: "Calea Victoriei 10",
+    trackingPreviewUrl:
+      `https://shop.example.test/track?order=JMR-2026-1&access=trk_${"A".repeat(43)}`,
     shippingSnapshot: {
       shippingAddress: address,
       shippingAddressText: "Calea Victoriei 10",
@@ -137,6 +139,8 @@ test("safe checkout order returns authoritative RON totals and shipping fields o
     discountCents: 0,
     totalCents: 18_650,
     createdAt: "2026-07-25T08:01:00.000Z",
+    trackingPreviewUrl:
+      `https://shop.example.test/track?order=JMR-2026-1&access=trk_${"A".repeat(43)}`,
     shippingEstimate: { minimumDays: 2, maximumDays: 4 },
     priceSnapshot: {
       reference: { amountMinor: 3_700, currency: "EUR" },

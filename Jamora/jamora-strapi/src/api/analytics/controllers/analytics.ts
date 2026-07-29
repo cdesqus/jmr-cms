@@ -31,10 +31,21 @@ import {
   hasStorefrontSecret,
 } from "../../customer-auth/controllers/storefront-secret.cjs";
 import {
+  createPublicOrderTrackingLimiter,
+  createPublicOrderTrackingPrivacyFloor,
   createPublicOrderTrackingQuery,
+  issuePublicTrackingCapability,
 } from "../services/public-order-tracking.cjs";
 
 const DEFAULT_COST_RATIO = 0.42;
+const publicTrackingLimiter = createPublicOrderTrackingLimiter({
+  limit: process.env.PUBLIC_TRACKING_RATE_LIMIT,
+  windowMs: process.env.PUBLIC_TRACKING_RATE_WINDOW_MS,
+  maxBuckets: process.env.PUBLIC_TRACKING_RATE_MAX_BUCKETS,
+});
+const publicTrackingPrivacyFloor = createPublicOrderTrackingPrivacyFloor({
+  minimumMs: process.env.PUBLIC_TRACKING_PRIVACY_FLOOR_MS,
+});
 
 function startOfDay(date = new Date()) {
   const d = new Date(date);
@@ -1049,6 +1060,10 @@ const controller = {
       : phase1MockPaidOrderFields(orderNumber);
     modeFields.statusHistory = (modeFields.statusHistory as any[])
       .map((event) => timelineEvent(event));
+    const trackingCapability = issuePublicTrackingCapability({
+      storefrontUrl,
+      orderNumber,
+    });
     const orderData = {
         orderNumber,
         trackingNumber: asString(body.trackingNumber),
@@ -1084,7 +1099,8 @@ const controller = {
               anonymousSessionId: asString(body.anonymousSessionId) || undefined,
             }
           : {}),
-        trackingPreviewUrl: `${storefrontUrl}/track?order=${encodeURIComponent(orderNumber)}`,
+        trackingPreviewUrl: trackingCapability.previewUrl,
+        trackingCapabilityHash: trackingCapability.digest,
         deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
         estimatedDelivery: shippingEnabled ? undefined : body.estimatedDelivery,
     };
@@ -1195,10 +1211,20 @@ const controller = {
   },
 
   async trackOrder(ctx) {
+    const startedAt = Date.now();
+    const rate = publicTrackingLimiter.check(ctx.ip ?? ctx.request?.ip);
+    if (!rate.allowed) {
+      if (rate.retryAfter) ctx.set?.("Retry-After", String(rate.retryAfter));
+      await publicTrackingPrivacyFloor(startedAt);
+      ctx.status = 429;
+      ctx.body = { error: "Request could not be completed." };
+      return;
+    }
     const query = asString(ctx.query.q).trim();
-    if (!query) {
-      ctx.status = 400;
-      ctx.body = { error: "Missing tracking query." };
+    if (!query || query.length > 255) {
+      await publicTrackingPrivacyFloor(startedAt);
+      ctx.status = 404;
+      ctx.body = { error: "Order not found." };
       return;
     }
 
@@ -1206,29 +1232,26 @@ const controller = {
     try {
       order = await createPublicOrderTrackingQuery({
         documents: (uid: string) => strapi.documents(uid as any),
-        enrichBatchAllocations,
-      })(query);
+      })(query, asString(ctx.query.access).trim());
     } catch (caught) {
       if (caught instanceof TypeError) {
-        ctx.status = 400;
-        ctx.body = { error: "Invalid tracking query." };
+        await publicTrackingPrivacyFloor(startedAt);
+        ctx.status = 404;
+        ctx.body = { error: "Order not found." };
         return;
       }
       throw caught;
     }
     if (!order) {
+      await publicTrackingPrivacyFloor(startedAt);
       ctx.status = 404;
       ctx.body = { error: "Order not found." };
       return;
     }
 
+    await publicTrackingPrivacyFloor(startedAt);
     ctx.body = {
-      order: {
-        ...order,
-        statusHistory: parseHistory((order as any).statusHistory).filter(
-          (event: any) => event?.type === "status",
-        ),
-      },
+      order,
     };
   },
 

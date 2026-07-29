@@ -38,6 +38,47 @@ function trackingFields(order) {
   };
 }
 
+function trackingSurfacePolicy(mode) {
+  const publicTracking = mode === "tracking";
+  return {
+    showCustomer: !publicTracking,
+    showItems: !publicTracking,
+    showPrices: !publicTracking,
+  };
+}
+
+function publicTrackingSearchParams(query, access) {
+  const normalizedQuery = typeof query === "string" ? query.trim() : "";
+  const normalizedAccess = typeof access === "string" ? access.trim() : "";
+  if (!normalizedQuery ||
+      normalizedQuery.length > 255 ||
+      !/^trk_[A-Za-z0-9_-]{43}$/.test(normalizedAccess)) {
+    return null;
+  }
+  return new URLSearchParams({
+    q: normalizedQuery,
+    access: normalizedAccess,
+  }).toString();
+}
+
+function parsePublicTrackingInput(value, fallbackAccess) {
+  const input = typeof value === "string" ? value.trim() : "";
+  if (!input) return null;
+  let query = input;
+  let access = fallbackAccess;
+  try {
+    const url = new URL(input);
+    if (!["http:", "https:"].includes(url.protocol) ||
+        url.pathname.replace(/\/+$/, "") !== "/track") {
+      return null;
+    }
+    query = url.searchParams.get("order") ?? "";
+    access = url.searchParams.get("access") ?? "";
+  } catch {}
+  if (!publicTrackingSearchParams(query, access)) return null;
+  return { query: query.trim(), access: access.trim() };
+}
+
 function trackingTimeline(order) {
   const history = Array.isArray(order?.statusHistory)
     ? structuredClone(order.statusHistory)
@@ -69,6 +110,9 @@ function trackingTimeline(order) {
 }
 
 module.exports = {
+  parsePublicTrackingInput,
+  publicTrackingSearchParams,
   trackingFields,
+  trackingSurfacePolicy,
   trackingTimeline,
 };

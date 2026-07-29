@@ -24,6 +24,7 @@ export interface MockOrder {
   id: string;
   orderNumber: string;
   trackingNumber: string;
+  trackingPreviewUrl?: string;
   carrier: string;
   service?: string;
   shipmentStatus?: ShipmentTrackingStatus;
@@ -223,6 +224,9 @@ export function authoritativeMockOrder(value: unknown): MockOrder {
     id: String(order.id ?? order.orderNumber ?? ""),
     orderNumber: String(order.orderNumber ?? ""),
     trackingNumber: String(order.trackingNumber ?? ""),
+    ...(typeof order.trackingPreviewUrl === "string"
+      ? { trackingPreviewUrl: order.trackingPreviewUrl }
+      : {}),
     carrier: String(order.carrier ?? "Jamora EU Fulfilment"),
     ...(typeof order.service === "string" ? { service: order.service } : {}),
     currency,

@@ -74,6 +74,15 @@
     "lastTrackingEventAt": {
       "type": "datetime"
     },
+    "lastTrackingObservedAt": {
+      "type": "datetime"
+    },
+    "lastTrackingAppliedAt": {
+      "type": "datetime"
+    },
+    "lastPollAttemptAt": {
+      "type": "datetime"
+    },
     "createdByActor": {
       "type": "string",
       "required": true

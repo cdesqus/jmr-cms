@@ -154,6 +154,39 @@ test("canonical JSON is stable across object key order and HMAC authenticates ti
   }), /expired webhook signature/i);
 });
 
+test("signed tracking payload is closed-schema and occurrence time is envelope-bound", () => {
+  const secret = "shipping-webhook-secret-at-least-32-bytes";
+  const timestamp = "1784980800";
+  assert.throws(
+    () => signTrackingWebhook({
+      payload: { ...payload, providerMetadata: "unsigned-domain-drift" },
+      timestamp,
+      secret,
+    }),
+    /payload fields are invalid/i,
+  );
+
+  for (const occurredAt of [
+    "2026-07-25T12:05:01.000Z",
+    "2026-07-17T11:59:59.000Z",
+  ]) {
+    const candidate = { ...payload, occurredAt };
+    const signature = signTrackingWebhook({
+      payload: candidate,
+      timestamp,
+      secret,
+    });
+    assert.throws(() => verifyTrackingWebhook({
+      payload: candidate,
+      providerHeader: "jamora-mock",
+      timestamp,
+      signature,
+      secret,
+      now: new Date("2026-07-25T12:00:00.000Z"),
+    }), /occurrence time is outside/i);
+  }
+});
+
 test("authenticated limiter is provider-bound, event-aware, and bounded", () => {
   const limiter = createAuthenticatedTrackingLimiter({
     providerLimit: 3,

@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createPublicOrderTrackingQuery } from "./public-order-tracking.cjs";
+import publicTrackingModule from "./public-order-tracking.cjs";
+
+const {
+  createPublicOrderTrackingLimiter,
+  createPublicOrderTrackingPrivacyFloor,
+  createPublicOrderTrackingQuery,
+  issuePublicTrackingCapability,
+  publicTrackingCapabilityDigest,
+} = publicTrackingModule;
+
+const TRACKING_ACCESS = `trk_${"A".repeat(43)}`;
 
 function documentsFixture({ order, shipment, events = [] }) {
   return (uid) => {
@@ -36,6 +46,7 @@ test("public order tracking prefers safe shipment projection and omits private l
     statusHistory: [],
     trackingPreviewUrl: "https://private.example/tracking",
     deliveryLabelUrl: "https://private.example/label",
+    trackingCapabilityHash: publicTrackingCapabilityDigest(TRACKING_ACCESS),
     createdAt: "2026-07-25T11:00:00.000Z",
   };
   const shipment = {
@@ -66,21 +77,29 @@ test("public order tracking prefers safe shipment projection and omits private l
     enrichBatchAllocations: async (value) => value,
   });
 
-  const result = await findTrackedOrder("JMR-1001");
+  const result = await findTrackedOrder("JMR-1001", TRACKING_ACCESS);
 
-  assert.deepEqual(result.shipment, {
-    carrier: "jamora-mock",
-    service: "standard",
-    trackingNumber: "JMR000000000000000001",
-    status: "in_transit",
-    updatedAt: "2026-07-25T12:00:00.000Z",
-    updates: [{
+  assert.deepEqual(result, {
+    orderNumber: "JMR-1001",
+    status: "shipped",
+    createdAt: "2026-07-25T11:00:00.000Z",
+    shipment: {
+      carrier: "jamora-mock",
+      service: "standard",
+      trackingNumber: "JMR000000000000000001",
       status: "in_transit",
-      occurredAt: "2026-07-25T12:00:00.000Z",
-    }],
+      updatedAt: "2026-07-25T12:00:00.000Z",
+      updates: [{
+        status: "in_transit",
+        occurredAt: "2026-07-25T12:00:00.000Z",
+      }],
+    },
   });
   const serialized = JSON.stringify(result);
   for (const secret of [
+    "Ana",
+    "ana@example.test",
+    "10000",
     "private.example",
     "private-reference",
     "private-hash",
@@ -89,6 +108,26 @@ test("public order tracking prefers safe shipment projection and omits private l
     "owner@example.test",
   ]) {
     assert.equal(serialized.includes(secret), false);
+  }
+  for (const forbidden of [
+    "documentId",
+    "customerName",
+    "email",
+    "shippingAddress",
+    "items",
+    "subtotalCents",
+    "shippingCents",
+    "discountCents",
+    "totalCents",
+    "invoiceNumber",
+    "packedBy",
+    "fulfilmentChecklist",
+    "batchAllocations",
+    "statusHistory",
+    "trackingCapabilityHash",
+    "trackingPreviewUrl",
+  ]) {
+    assert.equal(Object.hasOwn(result, forbidden), false);
   }
   assert.equal(Object.hasOwn(result, "trackingNumber"), false);
   assert.equal(Object.hasOwn(result, "carrier"), false);
@@ -106,6 +145,7 @@ test("public tracking still reads legacy carrier and tracking fields without a s
     items: [],
     batchAllocations: [],
     statusHistory: [],
+    trackingCapabilityHash: publicTrackingCapabilityDigest(TRACKING_ACCESS),
     createdAt: "2026-07-20T11:00:00.000Z",
   };
   const findTrackedOrder = createPublicOrderTrackingQuery({
@@ -113,18 +153,23 @@ test("public tracking still reads legacy carrier and tracking fields without a s
     enrichBatchAllocations: async (value) => value,
   });
 
-  const result = await findTrackedOrder("LEGACY-123");
+  const result = await findTrackedOrder("LEGACY-123", TRACKING_ACCESS);
 
-  assert.deepEqual(result.shipment, {
-    carrier: "Legacy Carrier",
-    service: "",
-    trackingNumber: "LEGACY-123",
-    status: "delivered",
-    updatedAt: "2026-07-20T11:00:00.000Z",
-    updates: [],
+  assert.deepEqual(result, {
+    orderNumber: "JMR-LEGACY",
+    status: "fulfilled",
+    createdAt: "2026-07-20T11:00:00.000Z",
+    shipment: {
+      carrier: "Legacy Carrier",
+      service: "",
+      trackingNumber: "LEGACY-123",
+      status: "delivered",
+      updatedAt: "2026-07-20T11:00:00.000Z",
+      updates: [],
+    },
   });
-  assert.equal(result.trackingNumber, "LEGACY-123");
-  assert.equal(result.carrier, "Legacy Carrier");
+  assert.equal(Object.hasOwn(result, "trackingNumber"), false);
+  assert.equal(Object.hasOwn(result, "carrier"), false);
 });
 
 test("AWB-only lookup resolves its owning order without trusting legacy order fields", async () => {
@@ -138,6 +183,7 @@ test("AWB-only lookup resolves its owning order without trusting legacy order fi
     items: [],
     batchAllocations: [],
     statusHistory: [],
+    trackingCapabilityHash: publicTrackingCapabilityDigest(TRACKING_ACCESS),
     createdAt: "2026-07-20T11:00:00.000Z",
   };
   const shipment = {
@@ -178,12 +224,95 @@ test("AWB-only lookup resolves its owning order without trusting legacy order fi
     enrichBatchAllocations: async (value) => value,
   });
 
-  const result = await findTrackedOrder("AWB-ONLY-2");
+  const result = await findTrackedOrder("AWB-ONLY-2", TRACKING_ACCESS);
 
-  assert.equal(result.documentId, "order-2");
+  assert.equal(result.orderNumber, "JMR-1002");
+  assert.equal(Object.hasOwn(result, "documentId"), false);
   assert.equal(result.shipment.trackingNumber, "AWB-ONLY-2");
   assert.ok(calls.some(([uid, filters]) =>
     uid === "api::shipment.shipment" && filters.awb.$eqi === "AWB-ONLY-2"));
   assert.ok(calls.some(([uid, filters]) =>
     uid === "api::order.order" && filters.documentId?.$eq === "order-2"));
+});
+
+test("public tracking requires an unguessable order-bound capability", async () => {
+  const order = {
+    documentId: "order-private",
+    orderNumber: "JMR-GUESSABLE-1",
+    status: "shipped",
+    trackingCapabilityHash: publicTrackingCapabilityDigest(TRACKING_ACCESS),
+    createdAt: "2026-07-20T11:00:00.000Z",
+  };
+  const findTrackedOrder = createPublicOrderTrackingQuery({
+    documents: documentsFixture({ order, shipment: null }),
+  });
+
+  assert.equal(await findTrackedOrder("JMR-GUESSABLE-1", ""), null);
+  assert.equal(
+    await findTrackedOrder("JMR-GUESSABLE-1", `trk_${"B".repeat(43)}`),
+    null,
+  );
+  assert.equal(
+    (await findTrackedOrder("JMR-GUESSABLE-1", TRACKING_ACCESS)).orderNumber,
+    "JMR-GUESSABLE-1",
+  );
+});
+
+test("tracking capability issuance stores only a digest beside a secure preview URL", () => {
+  const issued = issuePublicTrackingCapability({
+    storefrontUrl: "https://shop.example.test/",
+    orderNumber: "JMR-2026-123",
+    randomBytes: () => Buffer.alloc(32, 7),
+  });
+
+  assert.match(issued.access, /^trk_[A-Za-z0-9_-]{43}$/);
+  assert.match(issued.digest, /^[a-f0-9]{64}$/);
+  assert.equal(issued.digest, publicTrackingCapabilityDigest(issued.access));
+  assert.equal(
+    issued.previewUrl,
+    `https://shop.example.test/track?order=JMR-2026-123&access=${encodeURIComponent(issued.access)}`,
+  );
+  assert.equal(issued.digest.includes(issued.access), false);
+});
+
+test("public tracking limiter is IP-bound, generic, expiring, and storage-bounded", () => {
+  let now = 0;
+  const limiter = createPublicOrderTrackingLimiter({
+    limit: 2,
+    windowMs: 1_000,
+    maxBuckets: 3,
+    now: () => now,
+  });
+  assert.deepEqual(limiter.check("192.0.2.1"), { allowed: true });
+  assert.deepEqual(limiter.check("192.0.2.1"), { allowed: true });
+  assert.deepEqual(limiter.check("192.0.2.1"), {
+    allowed: false,
+    retryAfter: 1,
+  });
+  assert.deepEqual(limiter.check("192.0.2.2"), { allowed: true });
+  for (let index = 3; index < 20; index += 1) {
+    limiter.check(`192.0.2.${index}`);
+  }
+  assert.ok(limiter.bucketCount() <= 3);
+  now = 1_001;
+  assert.deepEqual(limiter.check("192.0.2.1"), { allowed: true });
+});
+
+test("found and not-found public tracking requests share the same privacy floor", async () => {
+  let now = 1_000;
+  const waits = [];
+  const floor = createPublicOrderTrackingPrivacyFloor({
+    minimumMs: 150,
+    now: () => now,
+    wait: async (duration) => {
+      waits.push(duration);
+      now += duration;
+    },
+  });
+
+  await floor(1_000);
+  now = 2_120;
+  await floor(2_000);
+
+  assert.deepEqual(waits, [150, 30]);
 });

@@ -24,6 +24,17 @@ const OUTCOMES = new Set([
 ]);
 const DEFAULT_POLL_LIMIT = 25;
 const MAX_POLL_LIMIT = 100;
+const TRACKING_EVENT_FIELDS = Object.freeze([
+  "awb",
+  "occurredAt",
+  "provider",
+  "providerEventId",
+  "status",
+]);
+const MAX_EVENT_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
+const MAX_EVENT_FUTURE_SKEW_MS = 5 * 60 * 1_000;
+const DEFAULT_POLL_TIMEOUT_MS = 2_000;
+const DEFAULT_TOTAL_POLL_TIMEOUT_MS = 10_000;
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -70,6 +81,11 @@ function normaliseTrackingEvent(value) {
   if (!value || Array.isArray(value) || typeof value !== "object") {
     throw new TypeError("Tracking event is invalid.");
   }
+  const fields = Object.keys(value).sort();
+  if (fields.length !== TRACKING_EVENT_FIELDS.length ||
+      fields.some((field, index) => field !== TRACKING_EVENT_FIELDS[index])) {
+    throw new TypeError("Tracking event fields are invalid.");
+  }
   return {
     providerEventId: identifier(value.providerEventId, "Provider event ID"),
     provider: identifier(value.provider, "Tracking provider"),
@@ -77,6 +93,15 @@ function normaliseTrackingEvent(value) {
     status: trackingStatus(value.status),
     occurredAt: iso(value.occurredAt, "Tracking occurrence time"),
   };
+}
+
+function assertEventOccurrence(occurredAt, receivedAt) {
+  const occurrenceTime = new Date(occurredAt).getTime();
+  const receiptTime = new Date(receivedAt).getTime();
+  if (occurrenceTime > receiptTime + MAX_EVENT_FUTURE_SKEW_MS ||
+      occurrenceTime < receiptTime - MAX_EVENT_AGE_MS) {
+    throw new TypeError("Tracking occurrence time is outside the accepted window.");
+  }
 }
 
 function eventDigest(event) {
@@ -156,7 +181,10 @@ function safeShipmentResult(shipment) {
     service: shipment.service,
     awb: shipment.awb,
     status: shipment.status,
-    updatedAt: shipment.lastTrackingEventAt ?? shipment.updatedAt ?? shipment.createdAt,
+    updatedAt: shipment.lastTrackingAppliedAt ??
+      shipment.lastTrackingEventAt ??
+      shipment.updatedAt ??
+      shipment.createdAt,
   };
 }
 
@@ -170,6 +198,7 @@ async function applyTrackingEvent({
   const normalized = normaliseTrackingEvent(event);
   const normalizedSource = sourceName(source);
   const received = iso(receivedAt, "Tracking receipt time");
+  assertEventOccurrence(normalized.occurredAt, received);
   const payloadDigest = eventDigest(normalized);
 
   return adapter.transaction(async (tx) => {
@@ -204,8 +233,11 @@ async function applyTrackingEvent({
       currentProgress,
       normalized.status,
     );
-    const lastOccurrence = shipment.lastTrackingEventAt
-      ? new Date(shipment.lastTrackingEventAt)
+    const observedAt = shipment.lastTrackingObservedAt ??
+      shipment.lastTrackingEventAt ??
+      shipment.createdAt;
+    const lastOccurrence = observedAt
+      ? new Date(observedAt)
       : null;
     if (transition.applied &&
         lastOccurrence &&
@@ -222,12 +254,23 @@ async function applyTrackingEvent({
       throw new Error("Tracking transition outcome is invalid.");
     }
 
+    const isNewerObservation = !lastOccurrence ||
+      !Number.isFinite(lastOccurrence.getTime()) ||
+      new Date(normalized.occurredAt) > lastOccurrence;
     let effectiveShipment = shipment;
     if (transition.applied) {
       effectiveShipment = await tx.updateShipment(shipment.documentId, {
         status: transition.status,
         trackingProgressStatus: transition.progressStatus,
         lastTrackingEventAt: normalized.occurredAt,
+        lastTrackingAppliedAt: normalized.occurredAt,
+        ...(isNewerObservation
+          ? { lastTrackingObservedAt: normalized.occurredAt }
+          : {}),
+      });
+    } else if (isNewerObservation) {
+      effectiveShipment = await tx.updateShipment(shipment.documentId, {
+        lastTrackingObservedAt: normalized.occurredAt,
       });
     }
     await tx.createEvent({
@@ -262,19 +305,65 @@ function pollLimit(value, fallback = DEFAULT_POLL_LIMIT) {
   return Math.min(parsed, MAX_POLL_LIMIT);
 }
 
+function boundedDuration(value, fallback, maximum, label) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new TypeError(`${label} is invalid.`);
+  }
+  return parsed;
+}
+
+async function pollProviderWithTimeout(provider, shipment, timeoutMs) {
+  const controller = new AbortController();
+  let timeout;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() =>
+        provider.pollTracking(safeShipmentResult(shipment), {
+          signal: controller.signal,
+        })),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Tracking provider poll timed out."));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
 async function pollOpenShipments({
   adapter,
   provider,
   limit = DEFAULT_POLL_LIMIT,
   now = new Date(),
+  perCallTimeoutMs = DEFAULT_POLL_TIMEOUT_MS,
+  totalTimeoutMs = DEFAULT_TOTAL_POLL_TIMEOUT_MS,
 }) {
-  if (!adapter?.listOpenShipments) {
+  if (!adapter?.listOpenShipments || !adapter?.recordPollAttempt) {
     throw new TypeError("Tracking adapter is required.");
   }
   if (!provider?.pollTracking) {
     throw new TypeError("Tracking polling provider is required.");
   }
   const boundedLimit = pollLimit(limit);
+  const callTimeout = boundedDuration(
+    perCallTimeoutMs,
+    DEFAULT_POLL_TIMEOUT_MS,
+    30_000,
+    "Tracking provider poll timeout",
+  );
+  const totalTimeout = boundedDuration(
+    totalTimeoutMs,
+    DEFAULT_TOTAL_POLL_TIMEOUT_MS,
+    120_000,
+    "Tracking total poll timeout",
+  );
+  const deadline = Date.now() + totalTimeout;
+  const attemptedAt = iso(now, "Tracking poll attempt time");
   const open = await adapter.listOpenShipments(boundedLimit);
   if (!Array.isArray(open) || open.length > boundedLimit) {
     throw new Error("Tracking poll result is not bounded.");
@@ -287,21 +376,32 @@ async function pollOpenShipments({
     failed: 0,
   };
   for (const shipment of open) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     summary.attempted += 1;
+    let classification = "failed";
     try {
-      const event = await provider.pollTracking(safeShipmentResult(shipment));
+      const event = await pollProviderWithTimeout(
+        provider,
+        shipment,
+        Math.min(callTimeout, remaining),
+      );
       const result = await applyTrackingEvent({
         adapter,
         event,
         source: "poll",
         receivedAt: now,
       });
-      if (result.idempotent) summary.replayed += 1;
-      else if (result.applied) summary.applied += 1;
-      else summary.ignored += 1;
+      if (result.idempotent) classification = "replayed";
+      else if (result.applied) classification = "applied";
+      else classification = "ignored";
+    } catch {}
+    try {
+      await adapter.recordPollAttempt(shipment.documentId, attemptedAt);
     } catch {
-      summary.failed += 1;
+      classification = "failed";
     }
+    summary[classification] += 1;
   }
   return summary;
 }
@@ -342,7 +442,8 @@ function publicTrackingProjection({
       trackingNumber: text(shipment.awb),
       status: trackingStatus(shipment.status),
       updatedAt: iso(
-        shipment.lastTrackingEventAt ??
+        shipment.lastTrackingAppliedAt ??
+          shipment.lastTrackingEventAt ??
           shipment.updatedAt ??
           shipment.createdAt,
         "Tracking update time",
@@ -385,12 +486,21 @@ function createMemoryTrackingAdapter({
       return [...adapter.shipments.values()]
         .filter((candidate) => !TERMINAL_STATES.has(candidate.status))
         .sort((left, right) => {
-          const time = text(left.lastTrackingEventAt ?? left.createdAt)
-            .localeCompare(text(right.lastTrackingEventAt ?? right.createdAt));
+          const leftPoll = text(left.lastPollAttemptAt);
+          const rightPoll = text(right.lastPollAttemptAt);
+          if (!leftPoll && rightPoll) return -1;
+          if (leftPoll && !rightPoll) return 1;
+          const time = leftPoll.localeCompare(rightPoll);
           return time || text(left.documentId).localeCompare(text(right.documentId));
         })
         .slice(0, limit)
         .map((candidate) => structuredClone(candidate));
+    },
+    async recordPollAttempt(documentId, attemptedAt) {
+      const candidate = adapter.shipments.get(documentId);
+      if (!candidate) throw new Error("Shipment not found.");
+      candidate.lastPollAttemptAt = attemptedAt;
+      return structuredClone(candidate);
     },
     async transaction(work) {
       const prior = adapter.queue;
@@ -454,11 +564,16 @@ function createStrapiTrackingAdapter(strapi) {
     listOpenShipments: (limit) => shipment().findMany({
       where: { status: { $notIn: [...TERMINAL_STATES] } },
       orderBy: [
-        { lastTrackingEventAt: "asc" },
+        { lastPollAttemptAt: "asc" },
         { createdAt: "asc" },
       ],
       limit,
     }),
+    recordPollAttempt: (documentId, attemptedAt) =>
+      shipment().update({
+        where: { documentId },
+        data: { lastPollAttemptAt: attemptedAt },
+      }),
     transaction: (work) => strapi.db.transaction(async ({ trx }) => work({
       async lockShipmentByAwb(provider, awb) {
         const candidate = await shipment().findOne(options(trx, {
@@ -491,25 +606,58 @@ function createStrapiTrackingAdapter(strapi) {
 async function runShippingTrackingStartupPoll(
   domain,
   logger,
-  { enabled = process.env.SHIPPING_ENABLED, limit } = {},
+  {
+    enabled = process.env.SHIPPING_ENABLED,
+    limit,
+    startupTimeoutMs,
+  } = {},
 ) {
   if (enabled !== "true") return null;
+  const timeoutMs = boundedDuration(
+    startupTimeoutMs ?? process.env.SHIPPING_TRACKING_STARTUP_TIMEOUT_MS,
+    DEFAULT_TOTAL_POLL_TIMEOUT_MS,
+    120_000,
+    "Tracking startup timeout",
+  );
+  let timeout;
   try {
-    return await domain.pollOpenShipments({
-      limit: pollLimit(
-        limit ?? process.env.SHIPPING_TRACKING_STARTUP_POLL_LIMIT,
-      ),
-    });
-  } catch (error) {
+    const result = await Promise.race([
+      domain.pollOpenShipments({
+        limit: pollLimit(
+          limit ?? process.env.SHIPPING_TRACKING_STARTUP_POLL_LIMIT,
+        ),
+        totalTimeoutMs: timeoutMs,
+      }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Tracking startup poll timed out.")),
+          timeoutMs,
+        );
+      }),
+    ]);
+    const summary = {
+      attempted: Number(result?.attempted) || 0,
+      applied: Number(result?.applied) || 0,
+      replayed: Number(result?.replayed) || 0,
+      ignored: Number(result?.ignored) || 0,
+      failed: Number(result?.failed) || 0,
+    };
+    logger?.info?.("Shipping tracking startup poll completed.", summary);
+    return summary;
+  } catch {
     logger?.warn?.("Shipping tracking startup poll failed.", {
-      error: error instanceof Error ? error.message : "Unknown error",
+      failed: true,
     });
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 module.exports = {
   MAX_POLL_LIMIT,
+  MAX_EVENT_AGE_MS,
+  MAX_EVENT_FUTURE_SKEW_MS,
   PROGRESS_STATES,
   TRACKING_STATES,
   applyTrackingEvent,

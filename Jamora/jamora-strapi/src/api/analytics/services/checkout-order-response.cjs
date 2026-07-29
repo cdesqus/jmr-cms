@@ -75,6 +75,28 @@ function safeBreakdown(value) {
   };
 }
 
+function safeTrackingPreviewUrl(value, orderNumber) {
+  const raw = text(value);
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.replace(/\/+$/, "");
+    if (!["http:", "https:"].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        path !== "/track" ||
+        url.searchParams.get("order") !== orderNumber ||
+        !/^trk_[A-Za-z0-9_-]{43}$/.test(
+          url.searchParams.get("access") ?? "",
+        )) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 function safeCheckoutOrder(order) {
   if (!order || typeof order !== "object" || Array.isArray(order)) {
     throw new Error("Authoritative checkout order is unavailable.");
@@ -218,10 +240,15 @@ function safeCheckoutOrder(order) {
       }
     : undefined;
   const documentId = text(order.documentId);
+  const orderNumber = text(order.orderNumber);
+  const trackingPreviewUrl = safeTrackingPreviewUrl(
+    order.trackingPreviewUrl,
+    orderNumber,
+  );
   return {
     id: documentId || text(order.orderNumber),
     ...(documentId ? { documentId } : {}),
-    orderNumber: text(order.orderNumber),
+    orderNumber,
     trackingNumber: text(order.trackingNumber),
     status: text(order.status),
     carrier: quote?.carrier ?? text(order.carrier),
@@ -239,6 +266,7 @@ function safeCheckoutOrder(order) {
       ? { promotionCode: text(order.promotionCode) }
       : {}),
     createdAt: text(order.createdAt) || new Date().toISOString(),
+    ...(trackingPreviewUrl ? { trackingPreviewUrl } : {}),
     ...(quote?.estimate
       ? { shippingEstimate: quote.estimate }
       : {}),

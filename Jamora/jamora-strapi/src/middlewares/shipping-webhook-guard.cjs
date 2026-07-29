@@ -14,6 +14,24 @@ const JSON_CONTENT_TYPE =
   /^application\/json(?:\s*;\s*charset\s*=\s*utf-8)?$/i;
 const PROVIDER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SIGNATURE = /^sha256=([a-f0-9]{64})$/i;
+const TRACKING_PAYLOAD_FIELDS = Object.freeze([
+  "awb",
+  "occurredAt",
+  "provider",
+  "providerEventId",
+  "status",
+]);
+const TRACKING_STATUSES = new Set([
+  "label_created",
+  "picked_up",
+  "in_transit",
+  "out_for_delivery",
+  "delivered",
+  "exception",
+  "returned",
+]);
+const MAX_ENVELOPE_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
+const MAX_ENVELOPE_EVENT_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -50,6 +68,39 @@ function canonicalTrackingJson(payload) {
   return JSON.stringify(stableValue(payload));
 }
 
+function closedTrackingPayload(payload) {
+  if (!payload || Array.isArray(payload) || typeof payload !== "object") {
+    throw new TypeError("Tracking webhook payload fields are invalid.");
+  }
+  const fields = Object.keys(payload).sort();
+  if (fields.length !== TRACKING_PAYLOAD_FIELDS.length ||
+      fields.some((field, index) => field !== TRACKING_PAYLOAD_FIELDS[index]) ||
+      TRACKING_PAYLOAD_FIELDS.some((field) =>
+        typeof payload[field] !== "string" || !payload[field].trim()) ||
+      !TRACKING_STATUSES.has(payload.status.trim().toLowerCase())) {
+    throw new TypeError("Tracking webhook payload fields are invalid.");
+  }
+  const occurredAt = new Date(payload.occurredAt);
+  if (!Number.isFinite(occurredAt.getTime())) {
+    throw new TypeError("Tracking webhook occurrence time is invalid.");
+  }
+  return {
+    providerEventId: payload.providerEventId.trim(),
+    provider: payload.provider.trim(),
+    awb: payload.awb.trim(),
+    status: payload.status.trim().toLowerCase(),
+    occurredAt: occurredAt.toISOString(),
+  };
+}
+
+function assertEnvelopeOccurrence(occurredAt, timestampMs) {
+  const occurrenceMs = new Date(occurredAt).getTime();
+  if (occurrenceMs > timestampMs + MAX_ENVELOPE_EVENT_FUTURE_SKEW_MS ||
+      occurrenceMs < timestampMs - MAX_ENVELOPE_EVENT_AGE_MS) {
+    throw new Error("Tracking webhook occurrence time is outside the accepted window.");
+  }
+}
+
 function safeEqual(left, right) {
   const leftBytes = Buffer.from(String(left), "utf8");
   const rightBytes = Buffer.from(String(right), "utf8");
@@ -70,8 +121,9 @@ function signTrackingWebhook({ payload, timestamp, secret }) {
   if (!/^\d{10}$/.test(normalizedTimestamp)) {
     throw new TypeError("Tracking webhook timestamp is invalid.");
   }
+  const closedPayload = closedTrackingPayload(payload);
   const digest = createHmac("sha256", webhookSecret(secret))
-    .update(`${normalizedTimestamp}.${canonicalTrackingJson(payload)}`)
+    .update(`${normalizedTimestamp}.${canonicalTrackingJson(closedPayload)}`)
     .digest("hex");
   return `sha256=${digest}`;
 }
@@ -85,6 +137,7 @@ function verifyTrackingWebhook({
   now = new Date(),
   toleranceSeconds = 300,
 }) {
+  const closedPayload = closedTrackingPayload(payload);
   const provider = typeof providerHeader === "string"
     ? providerHeader.trim()
     : "";
@@ -93,7 +146,7 @@ function verifyTrackingWebhook({
     ? SIGNATURE.exec(signature.trim())
     : null;
   if (!PROVIDER.test(provider) ||
-      payload?.provider !== provider ||
+      closedPayload.provider !== provider ||
       !/^\d{10}$/.test(normalizedTimestamp) ||
       !match) {
     throw new Error("Invalid webhook signature.");
@@ -105,15 +158,16 @@ function verifyTrackingWebhook({
         positiveInteger(toleranceSeconds, 300) * 1_000) {
     throw new Error("Expired webhook signature.");
   }
+  assertEnvelopeOccurrence(closedPayload.occurredAt, timestampMs);
   const expected = signTrackingWebhook({
-    payload,
+    payload: closedPayload,
     timestamp: normalizedTimestamp,
     secret,
   });
   if (!safeEqual(signature.trim().toLowerCase(), expected.toLowerCase())) {
     throw new Error("Invalid webhook signature.");
   }
-  return structuredClone(payload);
+  return closedPayload;
 }
 
 function createWindowLimiter({
@@ -250,6 +304,7 @@ function shippingWebhookGuardFactory(config) {
 
 module.exports = {
   canonicalTrackingJson,
+  closedTrackingPayload,
   createAuthenticatedTrackingLimiter,
   createShippingWebhookGuard,
   createShippingWebhookLimiter,

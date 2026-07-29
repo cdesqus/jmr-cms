@@ -2,9 +2,47 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  parsePublicTrackingInput,
+  publicTrackingSearchParams,
+  trackingSurfacePolicy,
   trackingFields,
   trackingTimeline,
 } from "./order-tracking-policy.cjs";
+
+test("public tracking requests require and forward a high-entropy capability", () => {
+  const access = `trk_${"A".repeat(43)}`;
+  assert.equal(
+    publicTrackingSearchParams("JMR-2026-1", access),
+    `q=JMR-2026-1&access=${encodeURIComponent(access)}`,
+  );
+  assert.equal(publicTrackingSearchParams("JMR-2026-1", ""), null);
+  assert.equal(publicTrackingSearchParams("JMR-2026-1", "guessable"), null);
+  assert.equal(publicTrackingSearchParams("", access), null);
+  assert.deepEqual(
+    parsePublicTrackingInput(
+      `https://shop.example.test/track?order=JMR-2026-1&access=${access}`,
+    ),
+    { query: "JMR-2026-1", access },
+  );
+  assert.deepEqual(
+    parsePublicTrackingInput("JMR-2026-1", access),
+    { query: "JMR-2026-1", access },
+  );
+  assert.equal(parsePublicTrackingInput("JMR-2026-1"), null);
+});
+
+test("public tracking surface never renders customer, item, or price details", () => {
+  assert.deepEqual(trackingSurfacePolicy("tracking"), {
+    showCustomer: false,
+    showItems: false,
+    showPrices: false,
+  });
+  assert.deepEqual(trackingSurfacePolicy("success"), {
+    showCustomer: true,
+    showItems: true,
+    showPrices: true,
+  });
+});
 
 test("new shipment projection replaces legacy tracking fields", () => {
   assert.deepEqual(trackingFields({

@@ -50,7 +50,8 @@
     "membershipSnapshot": { "type": "json" },
     "nonFulfillable": { "type": "boolean", "default": false },
     "failureReason": { "type": "text" },
-    "trackingPreviewUrl": { "type": "string" },
+    "trackingPreviewUrl": { "type": "string", "private": true },
+    "trackingCapabilityHash": { "type": "string", "private": true },
     "deliveryLabelUrl": { "type": "string" },
     "estimatedDelivery": { "type": "datetime" }
   }

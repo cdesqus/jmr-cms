@@ -32,6 +32,22 @@ export function trackingFields(order: {
   shipmentStatus?: ShipmentTrackingStatus;
 };
 
+export function trackingSurfacePolicy(mode: "success" | "tracking"): {
+  showCustomer: boolean;
+  showItems: boolean;
+  showPrices: boolean;
+};
+
+export function publicTrackingSearchParams(
+  query: string,
+  access?: string,
+): string | null;
+
+export function parsePublicTrackingInput(
+  value: string,
+  fallbackAccess?: string,
+): { query: string; access: string } | null;
+
 export function trackingTimeline(order: {
   statusHistory?: MockOrder["statusHistory"];
   shipment?: SafeShipmentProjection;

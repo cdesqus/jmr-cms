@@ -1,6 +1,7 @@
 import type { MockOrder, MockOrderStatus } from "@/lib/mock-orders";
 import { normalizeOrderTimeline } from "@/lib/order-timeline.cjs";
 import {
+  publicTrackingSearchParams,
   trackingFields,
   trackingTimeline,
   type SafeShipmentProjection,
@@ -102,9 +103,14 @@ function mapTrackedOrder(order: StrapiTrackedOrder): MockOrder {
   };
 }
 
-export async function fetchTrackedOrder(query: string): Promise<MockOrder | null> {
+export async function fetchTrackedOrder(
+  query: string,
+  access?: string,
+): Promise<MockOrder | null> {
+  const search = publicTrackingSearchParams(query, access);
+  if (!search) return null;
   const res = await fetch(
-    `/api/jamora/orders/track?q=${encodeURIComponent(query)}`,
+    `/api/jamora/orders/track?${search}`,
     { cache: "no-store" },
   );
   if (res.status === 404) return null;

@@ -45,6 +45,7 @@ function operations(options = {}) {
   const service = createPaymentTransactions(adapter, {
     env: enabled,
     beneficiary,
+    now: () => now,
     randomUUID: (() => {
       let value = 0;
       return () => `00000000-0000-4000-8000-${String(++value).padStart(12, "0")}`;
