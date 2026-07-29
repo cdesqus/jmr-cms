@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { publicTrackingSearchParams } from "@/lib/order-tracking-policy.cjs";
+import { trustedPublicTrackingHeaders } from "@/lib/public-tracking-boundary.cjs";
 
 const STRAPI_URL =
   process.env.STRAPI_URL ??
@@ -15,10 +16,26 @@ export async function GET(request: Request) {
   if (!upstreamQuery) {
     return NextResponse.json({ error: "Order not found." }, { status: 404 });
   }
+  let downstreamHeaders;
+  try {
+    downstreamHeaders = trustedPublicTrackingHeaders(request.headers, {
+      env: process.env,
+      secret: process.env.JAMORA_STOREFRONT_API_SECRET,
+      now: new Date(),
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Request could not be completed." },
+      { status: 503 },
+    );
+  }
 
   const res = await fetch(
     `${STRAPI_URL}/api/jamora/orders/track?${upstreamQuery}`,
-    { cache: "no-store" },
+    {
+      cache: "no-store",
+      headers: downstreamHeaders,
+    },
   );
   const body = await res.json().catch(() => ({}));
 

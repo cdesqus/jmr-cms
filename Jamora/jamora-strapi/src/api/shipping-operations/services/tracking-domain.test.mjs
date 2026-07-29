@@ -5,6 +5,7 @@ import trackingModule from "./tracking-domain.cjs";
 
 const {
   createMemoryTrackingAdapter,
+  createStrapiTrackingAdapter,
   createTrackingDomain,
   publicTrackingProjection,
   runShippingTrackingStartupPoll,
@@ -404,6 +405,64 @@ test("failed and unchanged polls persist fairness attempts so other shipments ar
     adapter.shipments.get("shipment-2").lastPollAttemptAt,
     "2026-07-25T12:11:00.000Z",
   );
+});
+
+test("PostgreSQL polling explicitly selects never-polled shipments before oldest attempts", async () => {
+  const calls = [];
+  const rows = {
+    never: [
+      shipment({ documentId: "never-1", lastPollAttemptAt: null }),
+      shipment({ documentId: "never-2", lastPollAttemptAt: null }),
+    ],
+    polled: [
+      shipment({
+        documentId: "polled-1",
+        lastPollAttemptAt: "2026-07-25T11:00:00.000Z",
+      }),
+    ],
+  };
+  const strapi = {
+    db: {
+      query(uid) {
+        assert.equal(uid, "api::shipment.shipment");
+        return {
+          async findMany(input) {
+            calls.push(structuredClone(input));
+            if (input.where.lastPollAttemptAt?.$null === true) {
+              return structuredClone(rows.never.slice(0, input.limit));
+            }
+            if (input.where.lastPollAttemptAt?.$notNull === true) {
+              return structuredClone(rows.polled.slice(0, input.limit));
+            }
+            return [];
+          },
+        };
+      },
+    },
+  };
+
+  const result = await createStrapiTrackingAdapter(strapi)
+    .listOpenShipments(3);
+
+  assert.deepEqual(
+    result.map((candidate) => candidate.documentId),
+    ["never-1", "never-2", "polled-1"],
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].where.lastPollAttemptAt.$null, true);
+  assert.equal(calls[0].limit, 3);
+  assert.deepEqual(calls[0].orderBy, [{ createdAt: "asc" }]);
+  assert.equal(calls[1].where.lastPollAttemptAt.$notNull, true);
+  assert.equal(calls[1].limit, 1);
+  assert.deepEqual(calls[1].orderBy, [
+    { lastPollAttemptAt: "asc" },
+    { createdAt: "asc" },
+  ]);
+  for (const call of calls) {
+    assert.deepEqual(call.where.status, {
+      $notIn: ["delivered", "returned"],
+    });
+  }
 });
 
 test("polling aborts hung provider calls and stops at the total deadline", async () => {

@@ -561,14 +561,31 @@ function createStrapiTrackingAdapter(strapi) {
     strapi.db.query("api::shipment-event.shipment-event");
   const options = (trx, extra = {}) => ({ ...extra, transacting: trx });
   return {
-    listOpenShipments: (limit) => shipment().findMany({
-      where: { status: { $notIn: [...TERMINAL_STATES] } },
-      orderBy: [
-        { lastPollAttemptAt: "asc" },
-        { createdAt: "asc" },
-      ],
-      limit,
-    }),
+    async listOpenShipments(limit) {
+      const openStatus = { status: { $notIn: [...TERMINAL_STATES] } };
+      const neverPolled = await shipment().findMany({
+        where: {
+          ...openStatus,
+          lastPollAttemptAt: { $null: true },
+        },
+        orderBy: [{ createdAt: "asc" }],
+        limit,
+      });
+      const remaining = Math.max(0, limit - neverPolled.length);
+      if (remaining === 0) return neverPolled;
+      const previouslyPolled = await shipment().findMany({
+        where: {
+          ...openStatus,
+          lastPollAttemptAt: { $notNull: true },
+        },
+        orderBy: [
+          { lastPollAttemptAt: "asc" },
+          { createdAt: "asc" },
+        ],
+        limit: remaining,
+      });
+      return [...neverPolled, ...previouslyPolled];
+    },
     recordPollAttempt: (documentId, attemptedAt) =>
       shipment().update({
         where: { documentId },

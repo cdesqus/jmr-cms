@@ -2,6 +2,7 @@
 
 const {
   createHash,
+  createHmac,
   randomBytes: secureRandomBytes,
   timingSafeEqual,
 } = require("node:crypto");
@@ -22,6 +23,8 @@ const PUBLIC_ORDER_FIELDS = Object.freeze([
   "trackingCapabilityHash",
 ]);
 const TRACKING_CAPABILITY = /^trk_[A-Za-z0-9_-]{43}$/;
+const TRACKING_CLIENT_KEY = /^[A-Za-z0-9_-]{43}$/;
+const TRACKING_CLIENT_SIGNATURE = /^[a-f0-9]{64}$/;
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -36,6 +39,57 @@ function opaqueIp(value) {
   return createHash("sha256")
     .update(text(value).toLowerCase() || "<missing>")
     .digest("base64url");
+}
+
+function headerValue(headers, name) {
+  if (typeof headers?.get === "function") return text(headers.get(name));
+  if (typeof headers === "function") return text(headers(name));
+  const target = name.toLowerCase();
+  const entry = Object.entries(headers ?? {}).find(
+    ([key]) => key.toLowerCase() === target,
+  );
+  return text(entry?.[1]);
+}
+
+function verifyPublicTrackingClientIdentity({
+  headers,
+  secret,
+  now = new Date(),
+  toleranceSeconds = 30,
+}) {
+  const clientKey = headerValue(
+    headers,
+    "x-jamora-tracking-client-key",
+  );
+  const timestamp = headerValue(
+    headers,
+    "x-jamora-tracking-client-timestamp",
+  );
+  const signature = headerValue(
+    headers,
+    "x-jamora-tracking-client-signature",
+  ).toLowerCase();
+  const trustedSecret = text(secret);
+  const current = now instanceof Date ? now : new Date(now);
+  const timestampMs = Number(timestamp) * 1_000;
+  if (!TRACKING_CLIENT_KEY.test(clientKey) ||
+      !/^\d{10}$/.test(timestamp) ||
+      !TRACKING_CLIENT_SIGNATURE.test(signature) ||
+      Buffer.byteLength(trustedSecret, "utf8") < 32 ||
+      !Number.isFinite(current.getTime()) ||
+      Math.abs(current.getTime() - timestampMs) >
+        positiveInteger(toleranceSeconds, 30) * 1_000) {
+    return null;
+  }
+  const expected = createHmac("sha256", trustedSecret)
+    .update(`public-tracking\0${timestamp}\0${clientKey}`)
+    .digest("hex");
+  const suppliedBytes = Buffer.from(signature, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  return suppliedBytes.length === expectedBytes.length &&
+    timingSafeEqual(suppliedBytes, expectedBytes)
+    ? clientKey
+    : null;
 }
 
 function publicTrackingCapabilityDigest(value) {
@@ -86,39 +140,54 @@ function hasPublicTrackingCapability(order, value) {
 }
 
 function createPublicOrderTrackingLimiter(options = {}) {
-  const limit = positiveInteger(options.limit, 30);
+  const clientLimit = positiveInteger(
+    options.clientLimit ?? options.limit,
+    30,
+  );
+  const capabilityLimit = positiveInteger(
+    options.capabilityLimit ?? options.limit,
+    30,
+  );
   const windowMs = positiveInteger(options.windowMs, 60_000);
   const maxBuckets = positiveInteger(options.maxBuckets, 10_000);
   const now = options.now ?? Date.now;
   const buckets = new Map();
-  return {
-    check(ip) {
-      const timestamp = now();
-      const key = opaqueIp(ip);
-      const current = buckets.get(key);
-      if (!current || timestamp >= current.resetAt) {
-        if (!current && buckets.size >= maxBuckets) {
-          for (const [candidate, bucket] of buckets) {
-            if (timestamp >= bucket.resetAt) buckets.delete(candidate);
-          }
-          while (buckets.size >= maxBuckets) {
-            buckets.delete(buckets.keys().next().value);
-          }
+  function consume(key, limit) {
+    const timestamp = now();
+    const current = buckets.get(key);
+    if (!current || timestamp >= current.resetAt) {
+      if (!current && buckets.size >= maxBuckets) {
+        for (const [candidate, bucket] of buckets) {
+          if (timestamp >= bucket.resetAt) buckets.delete(candidate);
         }
-        buckets.set(key, { count: 1, resetAt: timestamp + windowMs });
-        return { allowed: true };
+        while (buckets.size >= maxBuckets) {
+          buckets.delete(buckets.keys().next().value);
+        }
       }
-      if (current.count >= limit) {
-        return {
-          allowed: false,
-          retryAfter: Math.max(
-            1,
-            Math.ceil((current.resetAt - timestamp) / 1_000),
-          ),
-        };
-      }
-      current.count += 1;
+      buckets.set(key, { count: 1, resetAt: timestamp + windowMs });
       return { allowed: true };
+    }
+    if (current.count >= limit) {
+      return {
+        allowed: false,
+        retryAfter: Math.max(
+          1,
+          Math.ceil((current.resetAt - timestamp) / 1_000),
+        ),
+      };
+    }
+    current.count += 1;
+    return { allowed: true };
+  }
+  return {
+    check(clientIdentity, access) {
+      const client = opaqueIp(clientIdentity);
+      const clientResult = consume(`client:${client}`, clientLimit);
+      if (!clientResult.allowed) return clientResult;
+      const capability = TRACKING_CAPABILITY.test(text(access))
+        ? `capability:${client}:${opaqueIp(access)}`
+        : `invalid:${client}`;
+      return consume(capability, capabilityLimit);
     },
     bucketCount: () => buckets.size,
   };
@@ -241,4 +310,5 @@ module.exports = {
   createPublicOrderTrackingQuery,
   issuePublicTrackingCapability,
   publicTrackingCapabilityDigest,
+  verifyPublicTrackingClientIdentity,
 };

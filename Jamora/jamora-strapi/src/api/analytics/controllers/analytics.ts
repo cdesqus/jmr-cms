@@ -35,11 +35,14 @@ import {
   createPublicOrderTrackingPrivacyFloor,
   createPublicOrderTrackingQuery,
   issuePublicTrackingCapability,
+  verifyPublicTrackingClientIdentity,
 } from "../services/public-order-tracking.cjs";
 
 const DEFAULT_COST_RATIO = 0.42;
 const publicTrackingLimiter = createPublicOrderTrackingLimiter({
   limit: process.env.PUBLIC_TRACKING_RATE_LIMIT,
+  clientLimit: process.env.PUBLIC_TRACKING_RATE_LIMIT,
+  capabilityLimit: process.env.PUBLIC_TRACKING_CAPABILITY_RATE_LIMIT,
   windowMs: process.env.PUBLIC_TRACKING_RATE_WINDOW_MS,
   maxBuckets: process.env.PUBLIC_TRACKING_RATE_MAX_BUCKETS,
 });
@@ -1212,7 +1215,16 @@ const controller = {
 
   async trackOrder(ctx) {
     const startedAt = Date.now();
-    const rate = publicTrackingLimiter.check(ctx.ip ?? ctx.request?.ip);
+    const access = asString(ctx.query.access).trim();
+    const trustedClient = verifyPublicTrackingClientIdentity({
+      headers: (name: string) => ctx.get(name),
+      secret: process.env.JAMORA_STOREFRONT_API_SECRET,
+      now: new Date(),
+    });
+    const rate = publicTrackingLimiter.check(
+      trustedClient ?? ctx.ip ?? ctx.request?.ip,
+      access,
+    );
     if (!rate.allowed) {
       if (rate.retryAfter) ctx.set?.("Retry-After", String(rate.retryAfter));
       await publicTrackingPrivacyFloor(startedAt);
@@ -1232,7 +1244,7 @@ const controller = {
     try {
       order = await createPublicOrderTrackingQuery({
         documents: (uid: string) => strapi.documents(uid as any),
-      })(query, asString(ctx.query.access).trim());
+      })(query, access);
     } catch (caught) {
       if (caught instanceof TypeError) {
         await publicTrackingPrivacyFloor(startedAt);
