@@ -30,6 +30,31 @@ function shippingAdminOperation(method, segments, input) {
       path.length === 3 &&
       path[0] === "tracking" &&
       path[1] === "capabilities" &&
+      path[2] === "manage") {
+    const action = text(input?.action);
+    const orderDocumentIds = input?.orderDocumentIds;
+    if (!["rotate", "revoke"].includes(action)) {
+      throw new TypeError("Tracking capability action is invalid.");
+    }
+    if (!Array.isArray(orderDocumentIds) ||
+        orderDocumentIds.length < 1 ||
+        orderDocumentIds.length > 100 ||
+        orderDocumentIds.some((id) => !safeSegment(id)) ||
+        new Set(orderDocumentIds).size !== orderDocumentIds.length) {
+      throw new TypeError("Tracking capability order document IDs are invalid.");
+    }
+    return {
+      kind: "manage",
+      ownerOnly: true,
+      targetPath:
+        "/api/jamora/admin/shipping/tracking/capabilities/manage",
+      body: JSON.stringify({ action, orderDocumentIds }),
+    };
+  }
+  if (method === "POST" &&
+      path.length === 3 &&
+      path[0] === "tracking" &&
+      path[1] === "capabilities" &&
       path[2] === "reissue") {
     const limit = Number(input?.limit ?? 25);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
@@ -102,10 +127,24 @@ function safeShipmentMutationResponse(value, kind) {
     };
     return {
       selected: count("selected"),
-      reissued: count("reissued"),
+      queued: count("queued"),
       skippedIneligible: count("skippedIneligible"),
       skippedConcurrent: count("skippedConcurrent"),
-      remainingMissing: count("remainingMissing"),
+      remainingUnreviewed: count("remainingUnreviewed"),
+    };
+  }
+  if (kind === "manage") {
+    const count = (field) => {
+      const result = Number(value?.[field]);
+      if (!Number.isSafeInteger(result) || result < 0) {
+        throw new TypeError("Invalid tracking capability management response.");
+      }
+      return result;
+    };
+    return {
+      selected: count("selected"),
+      updated: count("updated"),
+      skippedConcurrent: count("skippedConcurrent"),
     };
   }
   if (kind === "capability") {

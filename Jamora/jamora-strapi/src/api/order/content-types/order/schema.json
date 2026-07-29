@@ -52,6 +52,18 @@
     "failureReason": { "type": "text" },
     "trackingPreviewUrl": { "type": "string", "private": true },
     "trackingCapabilityHash": { "type": "string", "private": true },
+    "trackingCapabilityStatus": {
+      "type": "enumeration",
+      "enum": ["pending_delivery", "active", "revoked", "ineligible"],
+      "private": true
+    },
+    "trackingCapabilityVersion": {
+      "type": "integer",
+      "min": 0,
+      "default": 0,
+      "private": true
+    },
+    "trackingCapabilityReviewedAt": { "type": "datetime", "private": true },
     "deliveryLabelUrl": { "type": "string" },
     "estimatedDelivery": { "type": "datetime" }
   }

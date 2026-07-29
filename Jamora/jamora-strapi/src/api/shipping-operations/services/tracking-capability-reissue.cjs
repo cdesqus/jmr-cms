@@ -2,11 +2,11 @@
 
 const {
   issuePublicTrackingCapability,
-  publicTrackingCapabilityDigest,
 } = require("../../analytics/services/public-order-tracking.cjs");
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
+const ACTIONS = new Set(["rotate", "revoke"]);
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -31,21 +31,26 @@ function trustedStorefrontUrl(value) {
     parsed.protocol === "http:" &&
     ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
   if ((parsed.protocol !== "https:" && !localDevelopment) ||
-      parsed.username ||
-      parsed.password ||
-      parsed.search ||
-      parsed.hash) {
+      parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new TypeError("HTTPS storefront URL is required.");
   }
   return parsed.toString().replace(/\/$/, "");
 }
 
-function requiredActor(value) {
-  const actor = text(value);
-  if (!actor || actor.length > 255) {
-    throw new TypeError("Tracking capability reissue actor is required.");
+function required(value, label) {
+  const result = text(value);
+  if (!result || result.length > 255) {
+    throw new TypeError(`${label} is required.`);
   }
-  return actor;
+  return result;
+}
+
+function validNow(value) {
+  const result = value instanceof Date ? new Date(value) : new Date(value);
+  if (!Number.isFinite(result.getTime())) {
+    throw new TypeError("Tracking capability time is invalid.");
+  }
+  return result;
 }
 
 function safeOrder(value) {
@@ -55,28 +60,31 @@ function safeOrder(value) {
     email: text(value?.email).toLowerCase(),
     customerDocumentId: text(value?.customerDocumentId),
     trackingCapabilityHash: text(value?.trackingCapabilityHash),
+    trackingCapabilityStatus: text(value?.trackingCapabilityStatus),
+    trackingCapabilityVersion:
+      Number.isSafeInteger(value?.trackingCapabilityVersion)
+        ? value.trackingCapabilityVersion
+        : 0,
   };
 }
 
-function auditData({
-  action,
-  actor,
-  order,
-  now,
-  details,
-}) {
+function auditData({ action, actor, role = "owner", order, now, details }) {
   return {
     action,
     entityType: "order",
     ...(order?.documentId ? { entityId: order.documentId } : {}),
     ...(order?.orderNumber ? { entityLabel: order.orderNumber } : {}),
     actor,
-    role: "owner",
-    details: {
-      ...details,
-      occurredAt: now.toISOString(),
-    },
+    role,
+    details: { ...details, occurredAt: now.toISOString() },
   };
+}
+
+function verifiedBinding(order, customer) {
+  return customer?.active === true &&
+    Boolean(customer?.emailVerifiedAt) &&
+    text(customer?.documentId) === order.customerDocumentId &&
+    text(customer?.email).toLowerCase() === order.email;
 }
 
 async function reissueLegacyTrackingCapabilities({
@@ -84,210 +92,224 @@ async function reissueLegacyTrackingCapabilities({
   actor: actorInput,
   limit: requestedLimit,
   storefrontUrl: storefrontUrlInput,
-  randomBytes,
   now: nowInput = new Date(),
 }) {
-  if (!adapter?.listMissingCapabilities ||
-      !adapter?.transaction ||
-      !adapter?.countMissingCapabilities ||
-      !adapter?.createAudit) {
+  if (!adapter?.listUnreviewedCapabilities || !adapter?.transaction ||
+      !adapter?.countUnreviewedCapabilities || !adapter?.createAudit) {
     throw new TypeError("Tracking capability reissue adapter is required.");
   }
-  const actor = requiredActor(actorInput);
+  const actor = required(actorInput, "Tracking capability reissue actor");
   const limit = trackingCapabilityReissueLimit(requestedLimit);
-  const storefrontUrl = trustedStorefrontUrl(storefrontUrlInput);
-  const now = nowInput instanceof Date ? new Date(nowInput) : new Date(nowInput);
-  if (!Number.isFinite(now.getTime())) {
-    throw new TypeError("Tracking capability reissue time is invalid.");
-  }
-  const selected = await adapter.listMissingCapabilities(limit);
+  // Validate configuration now even though no raw capability is created by the job.
+  trustedStorefrontUrl(storefrontUrlInput);
+  const now = validNow(nowInput);
+  const selected = await adapter.listUnreviewedCapabilities(limit);
   if (!Array.isArray(selected) || selected.length > limit) {
     throw new Error("Tracking capability reissue selection is not bounded.");
   }
-
   const summary = {
     selected: selected.length,
-    reissued: 0,
+    queued: 0,
     skippedIneligible: 0,
     skippedConcurrent: 0,
-    remainingMissing: 0,
+    remainingUnreviewed: 0,
   };
   for (const candidate of selected) {
     const outcome = await adapter.transaction(async (tx) => {
-      const order = safeOrder(await tx.lockMissingOrder(
-        safeOrder(candidate).documentId,
-      ));
-      if (!order.documentId || !order.orderNumber ||
-          order.trackingCapabilityHash) {
-        if (order.documentId) {
-          await tx.createAudit(auditData({
-            action: "shipping.tracking-capability.skipped",
-            actor,
-            order,
-            now,
-            details: { outcome: "concurrent" },
-          }));
-        }
+      const order = safeOrder(await tx.lockOrder(safeOrder(candidate).documentId));
+      if (!order.documentId || order.trackingCapabilityHash ||
+          order.trackingCapabilityStatus) {
         return "concurrent";
       }
       const customer = await tx.findVerifiedCustomerForOrder(order);
-      const eligible =
-        customer?.active === true &&
-        Boolean(customer?.emailVerifiedAt) &&
-        text(customer?.documentId) === order.customerDocumentId &&
-        text(customer?.email).toLowerCase() === order.email;
-      if (!eligible) {
-        await tx.createAudit(auditData({
-          action: "shipping.tracking-capability.skipped",
-          actor,
-          order,
-          now,
-          details: { outcome: "ineligible" },
-        }));
-        return "ineligible";
-      }
-
-      const issued = issuePublicTrackingCapability({
-        storefrontUrl,
-        orderNumber: order.orderNumber,
-        ...(randomBytes ? { randomBytes } : {}),
+      const status = verifiedBinding(order, customer)
+        ? "pending_delivery"
+        : "ineligible";
+      const updated = await tx.markReviewedIfUnchanged(order.documentId, {
+        trackingPreviewUrl: null,
+        trackingCapabilityStatus: status,
+        trackingCapabilityReviewedAt: now.toISOString(),
       });
-      const updated = await tx.storeCapabilityIfMissing(order.documentId, {
-        trackingCapabilityHash: issued.digest,
-        trackingPreviewUrl: issued.previewUrl,
-      });
-      if (!updated) {
-        await tx.createAudit(auditData({
-          action: "shipping.tracking-capability.skipped",
-          actor,
-          order,
-          now,
-          details: { outcome: "concurrent" },
-        }));
-        return "concurrent";
-      }
+      if (!updated) return "concurrent";
       await tx.createAudit(auditData({
-        action: "shipping.tracking-capability.reissued",
+        action: status === "pending_delivery"
+          ? "shipping.tracking-capability.queued"
+          : "shipping.tracking-capability.skipped",
         actor,
         order,
         now,
         details: {
-          outcome: "reissued",
-          delivery: "verified_customer_account",
+          outcome: status === "pending_delivery" ? "queued" : "ineligible",
+          delivery: status === "pending_delivery"
+            ? "verified_customer_one_time_claim"
+            : "none",
         },
       }));
-      return "reissued";
+      return status === "pending_delivery" ? "queued" : "ineligible";
     });
-    if (outcome === "reissued") summary.reissued += 1;
+    if (outcome === "queued") summary.queued += 1;
     else if (outcome === "ineligible") summary.skippedIneligible += 1;
     else summary.skippedConcurrent += 1;
   }
-  summary.remainingMissing = await adapter.countMissingCapabilities();
+  summary.remainingUnreviewed = await adapter.countUnreviewedCapabilities();
   await adapter.createAudit(auditData({
     action: "shipping.tracking-capability.batch",
     actor,
     now,
-    details: {
-      outcome: "completed",
-      ...summary,
-    },
+    details: { outcome: "completed", ...summary },
   }));
   return summary;
 }
 
-async function listCustomerTrackingLinks({
+async function claimCustomerTrackingCapability({
   adapter,
-  customerDocumentId: customerDocumentIdInput,
-  storefrontUrl: storefrontUrlInput,
+  customerDocumentId: customerInput,
+  orderDocumentId: orderInput,
+  storefrontUrl: storefrontInput,
+  randomBytes,
+  now: nowInput = new Date(),
 }) {
-  if (!adapter?.listCustomerLinks) {
-    throw new TypeError("Tracking capability reissue adapter is required.");
+  if (!adapter?.transaction) {
+    throw new TypeError("Tracking capability adapter is required.");
   }
-  const customerDocumentId = text(customerDocumentIdInput);
-  if (!customerDocumentId || customerDocumentId.length > 255) {
-    throw new TypeError("Customer document ID is required.");
-  }
-  const storefrontUrl = trustedStorefrontUrl(storefrontUrlInput);
-  const origin = new URL(storefrontUrl).origin;
-  const orders = await adapter.listCustomerLinks(customerDocumentId, 100);
-  if (!Array.isArray(orders) || orders.length > 100) {
-    throw new Error("Customer tracking link result is not bounded.");
-  }
-  const links = [];
-  for (const order of orders) {
-    const orderNumber = text(order?.orderNumber);
-    const expectedDigest = text(order?.trackingCapabilityHash).toLowerCase();
-    let preview;
-    try {
-      preview = new URL(text(order?.trackingPreviewUrl));
-    } catch {
-      continue;
+  const customerDocumentId = required(customerInput, "Customer document ID");
+  const orderDocumentId = required(orderInput, "Order document ID");
+  const storefrontUrl = trustedStorefrontUrl(storefrontInput);
+  const now = validNow(nowInput);
+  return adapter.transaction(async (tx) => {
+    const order = safeOrder(await tx.lockOrder(orderDocumentId));
+    const customer = await tx.findVerifiedCustomerForOrder(order);
+    if (!order.documentId || order.customerDocumentId !== customerDocumentId ||
+        !verifiedBinding(order, customer) ||
+        order.trackingCapabilityStatus !== "pending_delivery" ||
+        order.trackingCapabilityHash) {
+      throw new Error("Tracking capability is not available.");
     }
-    const access = preview.searchParams.get("access");
-    const parameters = [...preview.searchParams.keys()].sort();
-    let actualDigest;
-    try {
-      actualDigest = publicTrackingCapabilityDigest(access);
-    } catch {
-      continue;
-    }
-    if (!orderNumber ||
-        preview.origin !== origin ||
-        preview.pathname !== "/track" ||
-        parameters.length !== 2 ||
-        parameters[0] !== "access" ||
-        parameters[1] !== "order" ||
-        preview.searchParams.get("order") !== orderNumber ||
-        actualDigest !== expectedDigest) {
-      continue;
-    }
-    links.push({
-      orderNumber,
-      trackingUrl: preview.toString(),
+    const issued = issuePublicTrackingCapability({
+      storefrontUrl,
+      orderNumber: order.orderNumber,
+      ...(randomBytes ? { randomBytes } : {}),
     });
+    const updated = await tx.activateClaimIfUnchanged(
+      order.documentId,
+      order.trackingCapabilityVersion,
+      {
+        trackingPreviewUrl: null,
+        trackingCapabilityHash: issued.digest,
+        trackingCapabilityStatus: "active",
+        trackingCapabilityReviewedAt: now.toISOString(),
+      },
+    );
+    if (!updated) throw new Error("Tracking capability is not available.");
+    await tx.createAudit(auditData({
+      action: "shipping.tracking-capability.claimed",
+      actor: customerDocumentId,
+      role: "customer",
+      order,
+      now,
+      details: { outcome: "claimed", delivery: "authenticated_response_once" },
+    }));
+    return { orderNumber: order.orderNumber, trackingUrl: issued.previewUrl };
+  });
+}
+
+function managedIds(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_LIMIT ||
+      value.some((item) => !text(item) || text(item).length > 255) ||
+      new Set(value.map(text)).size !== value.length) {
+    throw new TypeError("Tracking capability order document IDs are invalid.");
   }
-  return links;
+  return value.map(text);
+}
+
+async function manageTrackingCapabilities({
+  adapter,
+  actor: actorInput,
+  action: actionInput,
+  orderDocumentIds: idsInput,
+  now: nowInput = new Date(),
+}) {
+  if (!adapter?.transaction || !adapter?.createAudit) {
+    throw new TypeError("Tracking capability adapter is required.");
+  }
+  const actor = required(actorInput, "Tracking capability actor");
+  const action = text(actionInput);
+  if (!ACTIONS.has(action)) {
+    throw new TypeError("Tracking capability action is invalid.");
+  }
+  const orderDocumentIds = managedIds(idsInput);
+  const now = validNow(nowInput);
+  const summary = {
+    selected: orderDocumentIds.length,
+    updated: 0,
+    skippedConcurrent: 0,
+  };
+  for (const documentId of orderDocumentIds) {
+    const outcome = await adapter.transaction(async (tx) => {
+      const order = safeOrder(await tx.lockOrder(documentId));
+      if (!order.documentId) return "concurrent";
+      const next = {
+        trackingPreviewUrl: null,
+        trackingCapabilityHash: null,
+        trackingCapabilityStatus:
+          action === "rotate" ? "pending_delivery" : "revoked",
+        trackingCapabilityVersion: order.trackingCapabilityVersion + 1,
+        trackingCapabilityReviewedAt: now.toISOString(),
+      };
+      const updated = await tx.manageIfVersion(
+        documentId,
+        order.trackingCapabilityVersion,
+        next,
+      );
+      if (!updated) return "concurrent";
+      await tx.createAudit(auditData({
+        action: `shipping.tracking-capability.${action}d`,
+        actor,
+        order,
+        now,
+        details: {
+          outcome: `${action}d`,
+          fromVersion: order.trackingCapabilityVersion,
+          toVersion: next.trackingCapabilityVersion,
+        },
+      }));
+      return "updated";
+    });
+    if (outcome === "updated") summary.updated += 1;
+    else summary.skippedConcurrent += 1;
+  }
+  await adapter.createAudit(auditData({
+    action: "shipping.tracking-capability.management-batch",
+    actor,
+    now,
+    details: { action, outcome: "completed", ...summary },
+  }));
+  return summary;
 }
 
 function createMemoryTrackingCapabilityAdapter({
-  orders = [],
-  customers = [],
-  audits = [],
-  beforeConditionalUpdate,
+  orders = [], customers = [], audits = [], beforeConditionalUpdate,
 } = {}) {
   const adapter = {
-    orders: new Map(orders.map((order) => [
-      order.documentId,
-      structuredClone(order),
-    ])),
+    orders: new Map(orders.map((order) => [order.documentId, structuredClone(order)])),
     customers: new Map(customers.map((customer) => [
-      customer.documentId,
-      structuredClone(customer),
+      customer.documentId, structuredClone(customer),
     ])),
     audits: structuredClone(audits),
     queue: Promise.resolve(),
-    async listMissingCapabilities(limit) {
+    async listUnreviewedCapabilities(limit) {
       return [...adapter.orders.values()]
-        .filter((order) => !text(order.trackingCapabilityHash))
+        .filter((order) => !text(order.trackingCapabilityHash) &&
+          !text(order.trackingCapabilityStatus))
         .slice(0, limit)
         .map((order) => structuredClone(order));
     },
-    async countMissingCapabilities() {
-      return [...adapter.orders.values()]
-        .filter((order) => !text(order.trackingCapabilityHash))
-        .length;
+    async countUnreviewedCapabilities() {
+      return [...adapter.orders.values()].filter((order) =>
+        !text(order.trackingCapabilityHash) &&
+        !text(order.trackingCapabilityStatus)).length;
     },
-    async listCustomerLinks(customerDocumentId, limit) {
-      return [...adapter.orders.values()]
-        .filter((order) =>
-          order.customerDocumentId === customerDocumentId &&
-          text(order.trackingCapabilityHash))
-        .slice(0, limit)
-        .map((order) => structuredClone(order));
-    },
-    async createAudit(data) {
-      adapter.audits.push(structuredClone(data));
-    },
+    async createAudit(data) { adapter.audits.push(structuredClone(data)); },
     async transaction(work) {
       const prior = adapter.queue;
       let release;
@@ -297,7 +319,7 @@ function createMemoryTrackingCapabilityAdapter({
       const auditSnapshot = structuredClone(adapter.audits);
       try {
         return await work({
-          async lockMissingOrder(documentId) {
+          async lockOrder(documentId) {
             const order = adapter.orders.get(documentId);
             return order ? structuredClone(order) : null;
           },
@@ -305,17 +327,33 @@ function createMemoryTrackingCapabilityAdapter({
             const customer = adapter.customers.get(order.customerDocumentId);
             return customer ? structuredClone(customer) : null;
           },
-          async storeCapabilityIfMissing(documentId, data) {
+          async markReviewedIfUnchanged(documentId, data) {
             const order = adapter.orders.get(documentId);
-            if (!order) return false;
             beforeConditionalUpdate?.(order);
-            if (text(order.trackingCapabilityHash)) return false;
+            if (!order || text(order.trackingCapabilityHash) ||
+                text(order.trackingCapabilityStatus)) return false;
             Object.assign(order, structuredClone(data));
             return true;
           },
-          async createAudit(data) {
-            adapter.audits.push(structuredClone(data));
+          async activateClaimIfUnchanged(documentId, version, data) {
+            const order = adapter.orders.get(documentId);
+            beforeConditionalUpdate?.(order);
+            if (!order || text(order.trackingCapabilityHash) ||
+                order.trackingCapabilityStatus !== "pending_delivery" ||
+                (order.trackingCapabilityVersion ?? 0) !== version) return false;
+            Object.assign(order, structuredClone(data));
+            return true;
           },
+          async manageIfVersion(documentId, version, data) {
+            const order = adapter.orders.get(documentId);
+            beforeConditionalUpdate?.(order);
+            if (!order || (order.trackingCapabilityVersion ?? 0) !== version) {
+              return false;
+            }
+            Object.assign(order, structuredClone(data));
+            return true;
+          },
+          async createAudit(data) { adapter.audits.push(structuredClone(data)); },
         });
       } catch (error) {
         adapter.orders = new Map(orderSnapshot);
@@ -334,39 +372,31 @@ function createStrapiTrackingCapabilityAdapter(strapi) {
   const customerQuery = () =>
     strapi.db.query("api::customer-account.customer-account");
   const auditQuery = () => strapi.db.query("api::audit-log.audit-log");
-  const withTransaction = (trx, value) => ({
-    ...value,
-    transacting: trx,
-  });
+  const withTransaction = (trx, value) => ({ ...value, transacting: trx });
   return {
-    listMissingCapabilities: (limit) => orderQuery().findMany({
-      where: { trackingCapabilityHash: { $null: true } },
+    listUnreviewedCapabilities: (limit) => orderQuery().findMany({
+      where: {
+        trackingCapabilityHash: { $null: true },
+        trackingCapabilityStatus: { $null: true },
+      },
       orderBy: [{ createdAt: "asc" }],
       limit,
     }),
-    countMissingCapabilities: async () => orderQuery().count({
-      where: { trackingCapabilityHash: { $null: true } },
-    }),
-    listCustomerLinks: (customerDocumentId, limit) => orderQuery().findMany({
+    countUnreviewedCapabilities: () => orderQuery().count({
       where: {
-        customerDocumentId,
-        trackingCapabilityHash: { $notNull: true },
+        trackingCapabilityHash: { $null: true },
+        trackingCapabilityStatus: { $null: true },
       },
-      orderBy: [{ createdAt: "desc" }],
-      limit,
     }),
     createAudit: (data) => auditQuery().create({ data }),
     transaction: (work) => strapi.db.transaction(async ({ trx }) => work({
-      async lockMissingOrder(documentId) {
+      async lockOrder(documentId) {
         const candidate = await orderQuery().findOne(withTransaction(trx, {
           where: { documentId },
         }));
         if (!candidate?.id) return null;
-        await strapi.db.connection("orders")
-          .where({ id: candidate.id })
-          .transacting(trx)
-          .forUpdate()
-          .first();
+        await strapi.db.connection("orders").where({ id: candidate.id })
+          .transacting(trx).forUpdate().first();
         return orderQuery().findOne(withTransaction(trx, {
           where: { id: candidate.id },
         }));
@@ -382,12 +412,32 @@ function createStrapiTrackingCapabilityAdapter(strapi) {
           },
         }));
       },
-      async storeCapabilityIfMissing(documentId, data) {
+      async markReviewedIfUnchanged(documentId, data) {
         const result = await orderQuery().updateMany(withTransaction(trx, {
           where: {
             documentId,
             trackingCapabilityHash: { $null: true },
+            trackingCapabilityStatus: { $null: true },
           },
+          data,
+        }));
+        return result?.count === 1;
+      },
+      async activateClaimIfUnchanged(documentId, version, data) {
+        const result = await orderQuery().updateMany(withTransaction(trx, {
+          where: {
+            documentId,
+            trackingCapabilityHash: { $null: true },
+            trackingCapabilityStatus: "pending_delivery",
+            trackingCapabilityVersion: version,
+          },
+          data,
+        }));
+        return result?.count === 1;
+      },
+      async manageIfVersion(documentId, version, data) {
+        const result = await orderQuery().updateMany(withTransaction(trx, {
+          where: { documentId, trackingCapabilityVersion: version },
           data,
         }));
         return result?.count === 1;
@@ -399,9 +449,10 @@ function createStrapiTrackingCapabilityAdapter(strapi) {
 }
 
 module.exports = {
+  claimCustomerTrackingCapability,
   createMemoryTrackingCapabilityAdapter,
   createStrapiTrackingCapabilityAdapter,
-  listCustomerTrackingLinks,
+  manageTrackingCapabilities,
   reissueLegacyTrackingCapabilities,
   trackingCapabilityReissueLimit,
   trustedStorefrontUrl,

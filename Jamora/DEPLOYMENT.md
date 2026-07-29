@@ -799,8 +799,9 @@ shared limiter before scaling either service horizontally.
 
 ### Legacy tracking capability reissue
 
-Legacy order-number/AWB links stay unavailable until an explicit reissue. There
-is no compatibility switch. The owner-only operation:
+Legacy order-number/AWB-only lookup stays unavailable permanently. There is no
+compatibility switch: public tracking accepts only a valid `trk_` capability
+whose digest is bound to the order. The owner-only backfill operation:
 
 ```bash
 curl --fail-with-body -X POST \
@@ -810,21 +811,36 @@ curl --fail-with-body -X POST \
   --data '{"limit":25}'
 ```
 
-The result contains counts only: `selected`, `reissued`,
-`skippedIneligible`, `skippedConcurrent`, and `remainingMissing`. Internally
-each eligible order receives independent 32-byte random `trk_` entropy; Strapi
-atomically stores its SHA-256 digest and same-origin private preview URL only if
-the digest is still absent. The job records actor/order/time/outcome plus a
-batch aggregate, never the raw capability.
+The result contains counts only: `selected`, `queued`,
+`skippedIneligible`, `skippedConcurrent`, and `remainingUnreviewed`. The
+missing-only job atomically marks an eligible order `pending_delivery`; it does
+not create, store, log, or return raw entropy. It durably marks ineligible rows
+too, so a small batch eventually advances past them. The job records
+actor/order/time/outcome plus a batch aggregate.
 
 Only active, email-verified accounts whose account/email binding matches the
-order are eligible. Their authenticated customer BFF can read their own links
-from `GET /api/jamora/shipping/tracking/links`. Guest legacy orders remain
-fail-closed until a reviewed verified-email delivery workflow exists. Rotation/
-revocation means issuing a new independent capability and replacing the stored
-digest/URL; never derive it from order number, AWB, email, or another secret.
-Run bounded batches until the before/after missing count is understood, review
-all skip/concurrent audits, and retry only skipped rows.
+order are eligible. That customer claims an eligible order once through
+`POST /api/jamora/shipping/tracking/capabilities/claim`; Strapi returns the
+same-origin URL in that authenticated response and persists only its SHA-256
+digest. Guest legacy orders remain fail-closed.
+
+Rotation and revocation are explicit owner-only actions:
+
+```bash
+curl --fail-with-body -X POST \
+  https://<storefront-private-host>/admin/api/shipping/tracking/capabilities/manage \
+  -H 'content-type: application/json' \
+  -H '<authenticated-owner-session-cookie>' \
+  --data '{"action":"rotate","orderDocumentIds":["<order-document-id>"]}'
+```
+
+`rotate` atomically invalidates the old digest, clears any legacy preview value,
+increments the version, and returns the order to `pending_delivery`; the
+verified customer must claim a newly random capability. `revoke` atomically
+clears the digest/legacy preview, increments the version, and leaves the order
+unclaimable. Both actions accept 1–100 unique document IDs and write per-order
+and batch audits without raw capabilities. Never derive entropy from order
+number, AWB, email, or another secret.
 
 ### Romanian privacy and retention
 
@@ -872,11 +888,11 @@ Run the repository gate first from a clean checkout (no Docker required):
 
 ```bash
 cd jamora-web
-npm test
+node --test --test-force-exit src/lib/**/*.test.mjs src/lib/*.test.mjs
 npm run lint
 npm run build
 cd ../jamora-strapi
-npm test
+node --test --test-force-exit src/api/**/*.test.mjs src/middlewares/*.test.mjs scripts/package-runtime-cjs.test.mjs
 npm run build
 ```
 
@@ -885,7 +901,7 @@ checklist is a production release blocker:
 
 1. **Migration and flags:** record missing-capability counts and schema/index
    checks. With both Phase 3 flags false, verify address suggestion, quote,
-   shipment, label, webhook, poll, customer-link, and reissue routes are hidden;
+   shipment, label, webhook, poll, customer-claim, and reissue routes are hidden;
    complete an ordinary Phase 2/manual structured-address checkout.
 2. **Address:** enable address assistance. Using both a verified customer and a
    live guest reservation, request `Memorandumului`; confirm at most eight safe
@@ -920,8 +936,8 @@ checklist is a production release blocker:
    requests return the same generic not-found surface. A valid secure link
    exposes only order status plus the minimal shipment timeline. Run the legacy
    reissue at limit 1, verify aggregate/per-order audits contain no `trk_`,
-   confirm verified customer retrieval, and confirm ineligible guest rows stay
-   unavailable.
+   confirm one-time verified-customer claim stores only a digest, exercise
+   owner rotation/revocation, and confirm ineligible guest rows stay unavailable.
 9. **BFF ingress limit:** with a temporary 30/minute limit, send 31
    missing/malformed requests to
    `/api/jamora/orders/track?q=&access=bad`; request 31 must be `429` with

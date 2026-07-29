@@ -1102,8 +1102,9 @@ const controller = {
               anonymousSessionId: asString(body.anonymousSessionId) || undefined,
             }
           : {}),
-        trackingPreviewUrl: trackingCapability.previewUrl,
         trackingCapabilityHash: trackingCapability.digest,
+        trackingCapabilityStatus: "active",
+        trackingCapabilityVersion: 0,
         deliveryLabelUrl: `${storefrontUrl}/delivery-label/${encodeURIComponent(orderNumber)}`,
         estimatedDelivery: shippingEnabled ? undefined : body.estimatedDelivery,
     };
@@ -1151,7 +1152,15 @@ const controller = {
     }
 
     try {
-      ctx.body = { ok: true, order: safeCheckoutOrder(order) };
+      ctx.body = {
+        ok: true,
+        order: safeCheckoutOrder({
+          ...order,
+          // One-time delivery in this authenticated checkout response only.
+          // The raw capability is never persisted on the order.
+          trackingPreviewUrl: trackingCapability.previewUrl,
+        }),
+      };
     } catch {
       ctx.status = 409;
       ctx.body = { error: "Authoritative order snapshot is unavailable." };

@@ -31,9 +31,9 @@ export default {
       config: { auth: false },
     },
     {
-      method: "GET",
-      path: "/jamora/shipping/tracking/links",
-      handler: "shipping-operations.customerTrackingLinks",
+      method: "POST",
+      path: "/jamora/shipping/tracking/capabilities/claim",
+      handler: "shipping-operations.claimTrackingCapability",
       config: { auth: false },
     },
     {
@@ -46,6 +46,12 @@ export default {
       method: "POST",
       path: "/jamora/admin/shipping/tracking/capabilities/reissue",
       handler: "shipping-operations.reissueTrackingCapabilities",
+      config: { auth: false },
+    },
+    {
+      method: "POST",
+      path: "/jamora/admin/shipping/tracking/capabilities/manage",
+      handler: "shipping-operations.manageTrackingCapabilities",
       config: { auth: false },
     },
     {

@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  claimCustomerTrackingCapability,
   createMemoryTrackingCapabilityAdapter,
-  listCustomerTrackingLinks,
+  manageTrackingCapabilities,
   reissueLegacyTrackingCapabilities,
   trackingCapabilityReissueLimit,
 } from "./tracking-capability-reissue.cjs";
@@ -11,208 +12,237 @@ import {
 const now = new Date("2026-07-29T08:00:00.000Z");
 const storefrontUrl = "https://shop.example.test";
 
-function entropy() {
-  let value = 0;
-  return () => Buffer.alloc(32, ++value);
+function entropy(byte = 7) {
+  return () => Buffer.alloc(32, byte);
 }
 
-test("legacy reissue is bounded, account-verified, atomic, and never returns or audits raw capabilities", async () => {
-  const adapter = createMemoryTrackingCapabilityAdapter({
-    orders: [
-      {
-        documentId: "order-verified",
-        orderNumber: "JMR-VERIFIED",
-        email: "ana@example.test",
-        customerDocumentId: "customer-verified",
-        trackingCapabilityHash: null,
-        trackingPreviewUrl: null,
-      },
-      {
-        documentId: "order-unverified",
-        orderNumber: "JMR-UNVERIFIED",
-        email: "guest@example.test",
-        customerDocumentId: null,
-        trackingCapabilityHash: null,
-        trackingPreviewUrl: null,
-      },
-      {
-        documentId: "order-existing",
-        orderNumber: "JMR-EXISTING",
-        email: "existing@example.test",
-        customerDocumentId: "customer-existing",
-        trackingCapabilityHash: "a".repeat(64),
-        trackingPreviewUrl: "https://shop.example.test/track?order=JMR-EXISTING&access=trk_existing",
-      },
-    ],
-    customers: [
-      {
-        documentId: "customer-verified",
-        email: "ana@example.test",
-        active: true,
-        emailVerifiedAt: "2026-07-01T00:00:00.000Z",
-      },
-    ],
-  });
-
-  const result = await reissueLegacyTrackingCapabilities({
-    adapter,
-    actor: "owner@example.test",
-    limit: 2,
-    storefrontUrl,
-    randomBytes: entropy(),
-    now,
-  });
-
-  assert.deepEqual(result, {
-    selected: 2,
-    reissued: 1,
-    skippedIneligible: 1,
-    skippedConcurrent: 0,
-    remainingMissing: 1,
-  });
-  const updated = adapter.orders.get("order-verified");
-  assert.match(updated.trackingCapabilityHash, /^[a-f0-9]{64}$/);
-  assert.match(
-    updated.trackingPreviewUrl,
-    /^https:\/\/shop\.example\.test\/track\?order=JMR-VERIFIED&access=trk_[A-Za-z0-9_-]{43}$/,
-  );
-  assert.equal(adapter.orders.get("order-unverified").trackingCapabilityHash, null);
-  assert.equal(adapter.orders.get("order-existing").trackingCapabilityHash, "a".repeat(64));
-
-  const serializedSummary = JSON.stringify(result);
-  const serializedAudit = JSON.stringify(adapter.audits);
-  assert.equal(serializedSummary.includes("trk_"), false);
-  assert.equal(serializedAudit.includes("trk_"), false);
-  assert.deepEqual(adapter.audits.map((entry) => ({
-    action: entry.action,
-    actor: entry.actor,
-    entityId: entry.entityId,
-    outcome: entry.details.outcome,
-  })), [
-    {
-      action: "shipping.tracking-capability.reissued",
-      actor: "owner@example.test",
-      entityId: "order-verified",
-      outcome: "reissued",
-    },
-    {
-      action: "shipping.tracking-capability.skipped",
-      actor: "owner@example.test",
-      entityId: "order-unverified",
-      outcome: "ineligible",
-    },
-    {
-      action: "shipping.tracking-capability.batch",
-      actor: "owner@example.test",
-      entityId: undefined,
-      outcome: "completed",
-    },
-  ]);
-});
-
-test("a row that gains a capability concurrently is skipped without overwriting or exposing it", async () => {
-  const adapter = createMemoryTrackingCapabilityAdapter({
+function eligibleFixture(extra = {}) {
+  return {
     orders: [{
-      documentId: "order-race",
-      orderNumber: "JMR-RACE",
-      email: "race@example.test",
-      customerDocumentId: "customer-race",
+      documentId: "order-verified",
+      orderNumber: "JMR-VERIFIED",
+      email: "ana@example.test",
+      customerDocumentId: "customer-verified",
       trackingCapabilityHash: null,
-      trackingPreviewUrl: null,
+      trackingCapabilityStatus: null,
+      trackingCapabilityVersion: 0,
+      ...extra,
     }],
     customers: [{
-      documentId: "customer-race",
-      email: "race@example.test",
+      documentId: "customer-verified",
+      email: "ana@example.test",
       active: true,
       emailVerifiedAt: "2026-07-01T00:00:00.000Z",
     }],
-    beforeConditionalUpdate(order) {
-      order.trackingCapabilityHash = "b".repeat(64);
-      order.trackingPreviewUrl = "https://shop.example.test/track?order=JMR-RACE&access=trk_concurrent";
-    },
-  });
+  };
+}
 
+test("legacy backfill stores only safe pending-delivery metadata and never raw capability", async () => {
+  const fixture = eligibleFixture();
+  fixture.orders.push({
+    documentId: "order-existing",
+    orderNumber: "JMR-EXISTING",
+    email: "ana@example.test",
+    customerDocumentId: "customer-verified",
+    trackingCapabilityHash: "a".repeat(64),
+    trackingCapabilityStatus: "active",
+    trackingCapabilityVersion: 2,
+  });
+  const adapter = createMemoryTrackingCapabilityAdapter(fixture);
   const result = await reissueLegacyTrackingCapabilities({
     adapter,
     actor: "owner@example.test",
     limit: 1,
     storefrontUrl,
+    now,
+  });
+
+  assert.deepEqual(result, {
+    selected: 1,
+    queued: 1,
+    skippedIneligible: 0,
+    skippedConcurrent: 0,
+    remainingUnreviewed: 0,
+  });
+  assert.deepEqual(adapter.orders.get("order-verified"), {
+    ...eligibleFixture().orders[0],
+    trackingPreviewUrl: null,
+    trackingCapabilityStatus: "pending_delivery",
+    trackingCapabilityReviewedAt: now.toISOString(),
+  });
+  assert.equal(JSON.stringify(adapter.orders).includes("trk_"), false);
+  assert.equal(JSON.stringify(adapter.audits).includes("trk_"), false);
+  assert.equal(
+    adapter.orders.get("order-existing").trackingCapabilityHash,
+    "a".repeat(64),
+  );
+});
+
+test("verified customer claim atomically stores only digest and returns raw URL once", async () => {
+  const adapter = createMemoryTrackingCapabilityAdapter(eligibleFixture({
+    trackingCapabilityStatus: "pending_delivery",
+    trackingCapabilityReviewedAt: now.toISOString(),
+  }));
+  const claimed = await claimCustomerTrackingCapability({
+    adapter,
+    customerDocumentId: "customer-verified",
+    orderDocumentId: "order-verified",
+    storefrontUrl,
     randomBytes: entropy(),
     now,
   });
 
-  assert.equal(result.reissued, 0);
-  assert.equal(result.skippedConcurrent, 1);
-  assert.equal(adapter.orders.get("order-race").trackingCapabilityHash, "b".repeat(64));
-  assert.equal(JSON.stringify(adapter.audits).includes("trk_concurrent"), false);
+  assert.match(
+    claimed.trackingUrl,
+    /^https:\/\/shop\.example\.test\/track\?order=JMR-VERIFIED&access=trk_[A-Za-z0-9_-]{43}$/,
+  );
+  assert.deepEqual(Object.keys(claimed).sort(), ["orderNumber", "trackingUrl"]);
+  const stored = adapter.orders.get("order-verified");
+  assert.match(stored.trackingCapabilityHash, /^[a-f0-9]{64}$/);
+  assert.equal(stored.trackingCapabilityStatus, "active");
+  assert.equal(JSON.stringify(stored).includes("trk_"), false);
+  assert.equal(JSON.stringify(adapter.audits).includes("trk_"), false);
+  await assert.rejects(
+    claimCustomerTrackingCapability({
+      adapter,
+      customerDocumentId: "customer-verified",
+      orderDocumentId: "order-verified",
+      storefrontUrl,
+      randomBytes: entropy(8),
+      now,
+    }),
+    /not available/i,
+  );
 });
 
-test("reissue bounds are safe and reject malformed actor or storefront origin", async () => {
+test("durable review state prevents ineligible rows starving eligible rows", async () => {
+  const fixture = eligibleFixture();
+  const adapter = createMemoryTrackingCapabilityAdapter({
+    orders: [
+      {
+        documentId: "order-ineligible",
+        orderNumber: "JMR-GUEST",
+        email: "guest@example.test",
+        customerDocumentId: null,
+        trackingCapabilityHash: null,
+        trackingCapabilityStatus: null,
+        trackingCapabilityVersion: 0,
+      },
+      ...fixture.orders,
+    ],
+    customers: fixture.customers,
+  });
+
+  const first = await reissueLegacyTrackingCapabilities({
+    adapter,
+    actor: "owner@example.test",
+    limit: 1,
+    storefrontUrl,
+    now,
+  });
+  const second = await reissueLegacyTrackingCapabilities({
+    adapter,
+    actor: "owner@example.test",
+    limit: 1,
+    storefrontUrl,
+    now: new Date(now.getTime() + 1),
+  });
+
+  assert.equal(first.skippedIneligible, 1);
+  assert.equal(first.remainingUnreviewed, 1);
+  assert.equal(second.queued, 1);
+  assert.equal(second.remainingUnreviewed, 0);
+  assert.equal(
+    adapter.orders.get("order-ineligible").trackingCapabilityStatus,
+    "ineligible",
+  );
+  assert.equal(
+    adapter.orders.get("order-verified").trackingCapabilityStatus,
+    "pending_delivery",
+  );
+});
+
+test("owner rotation and revocation are bounded, conditional, and audited without raw values", async () => {
+  const adapter = createMemoryTrackingCapabilityAdapter(eligibleFixture({
+    trackingCapabilityHash: "a".repeat(64),
+    trackingCapabilityStatus: "active",
+    trackingCapabilityVersion: 3,
+  }));
+  const rotated = await manageTrackingCapabilities({
+    adapter,
+    actor: "owner@example.test",
+    action: "rotate",
+    orderDocumentIds: ["order-verified"],
+    now,
+  });
+  assert.deepEqual(rotated, {
+    selected: 1,
+    updated: 1,
+    skippedConcurrent: 0,
+  });
+  let stored = adapter.orders.get("order-verified");
+  assert.equal(stored.trackingCapabilityHash, null);
+  assert.equal(stored.trackingCapabilityStatus, "pending_delivery");
+  assert.equal(stored.trackingCapabilityVersion, 4);
+
+  await claimCustomerTrackingCapability({
+    adapter,
+    customerDocumentId: "customer-verified",
+    orderDocumentId: "order-verified",
+    storefrontUrl,
+    randomBytes: entropy(9),
+    now,
+  });
+  const revoked = await manageTrackingCapabilities({
+    adapter,
+    actor: "owner@example.test",
+    action: "revoke",
+    orderDocumentIds: ["order-verified"],
+    now,
+  });
+  assert.equal(revoked.updated, 1);
+  stored = adapter.orders.get("order-verified");
+  assert.equal(stored.trackingCapabilityHash, null);
+  assert.equal(stored.trackingCapabilityStatus, "revoked");
+  assert.equal(stored.trackingCapabilityVersion, 5);
+  assert.equal(JSON.stringify(adapter.audits).includes("trk_"), false);
+  await assert.rejects(
+    claimCustomerTrackingCapability({
+      adapter,
+      customerDocumentId: "customer-verified",
+      orderDocumentId: "order-verified",
+      storefrontUrl,
+      randomBytes: entropy(),
+      now,
+    }),
+    /not available/i,
+  );
+});
+
+test("management bounds and malformed inputs fail closed", async () => {
   assert.equal(trackingCapabilityReissueLimit(undefined), 25);
   assert.equal(trackingCapabilityReissueLimit(100), 100);
   assert.throws(() => trackingCapabilityReissueLimit(0), /limit is invalid/i);
   assert.throws(() => trackingCapabilityReissueLimit(101), /limit is invalid/i);
-
   const adapter = createMemoryTrackingCapabilityAdapter();
   await assert.rejects(
-    reissueLegacyTrackingCapabilities({
-      adapter,
-      actor: "",
-      storefrontUrl,
-      now,
-    }),
-    /actor is required/i,
-  );
-  await assert.rejects(
-    reissueLegacyTrackingCapabilities({
+    manageTrackingCapabilities({
       adapter,
       actor: "owner@example.test",
-      storefrontUrl: "http://shop.example.test",
+      action: "rotate",
+      orderDocumentIds: Array.from({ length: 101 }, (_, index) => `order-${index}`),
       now,
     }),
-    /https storefront url is required/i,
+    /order document ids are invalid/i,
   );
-});
-
-test("customer links expose only valid same-origin capabilities bound to the verified account", async () => {
-  const access = `trk_${Buffer.alloc(32, 7).toString("base64url")}`;
-  const adapter = createMemoryTrackingCapabilityAdapter({
-    orders: [
-      {
-        documentId: "order-valid",
-        orderNumber: "JMR-VALID",
-        customerDocumentId: "customer-1",
-        trackingCapabilityHash:
-          "5dd38b968b0cef130c93d09fbeacfdb9b4f0fb867bc8786906cffbb0e066c7c5",
-        trackingPreviewUrl:
-          `${storefrontUrl}/track?order=JMR-VALID&access=${access}`,
-      },
-      {
-        documentId: "order-forged",
-        orderNumber: "JMR-FORGED",
-        customerDocumentId: "customer-1",
-        trackingCapabilityHash: "0".repeat(64),
-        trackingPreviewUrl:
-          `${storefrontUrl}/track?order=JMR-FORGED&access=${access}`,
-      },
-      {
-        documentId: "order-other",
-        orderNumber: "JMR-OTHER",
-        customerDocumentId: "customer-2",
-        trackingCapabilityHash:
-          "5dd38b968b0cef130c93d09fbeacfdb9b4f0fb867bc8786906cffbb0e066c7c5",
-        trackingPreviewUrl:
-          `${storefrontUrl}/track?order=JMR-OTHER&access=${access}`,
-      },
-    ],
-  });
-
-  assert.deepEqual(await listCustomerTrackingLinks({
-    adapter,
-    customerDocumentId: "customer-1",
-    storefrontUrl,
-  }), [{
-    orderNumber: "JMR-VALID",
-    trackingUrl: `${storefrontUrl}/track?order=JMR-VALID&access=${access}`,
-  }]);
+  await assert.rejects(
+    manageTrackingCapabilities({
+      adapter,
+      actor: "owner@example.test",
+      action: "delete",
+      orderDocumentIds: ["order-1"],
+      now,
+    }),
+    /action is invalid/i,
+  );
 });

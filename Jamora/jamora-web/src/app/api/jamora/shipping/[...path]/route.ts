@@ -3,7 +3,7 @@ import { getCurrentCustomer } from "@/lib/customer-api";
 import {
   customerShippingPath,
   safeShippingResponse,
-  safeTrackingLinks,
+  safeTrackingClaim,
   shippingOperationEnabled,
   shippingOperationBody,
   trustedShippingHeaders,
@@ -58,6 +58,12 @@ export async function POST(
     const customer = await getCurrentCustomer();
     const guestCapability =
       request.headers.get("x-jamora-checkout-capability")?.trim() || undefined;
+    if (operation === "shipping/tracking/capabilities/claim" && !customer) {
+      return NextResponse.json(
+        { error: "Verified customer session required." },
+        { status: 401 },
+      );
+    }
     if (!customer) {
       const boundary = await guestShippingCapabilityBoundary(guestCapability);
       if (boundary === "invalid") {
@@ -95,67 +101,14 @@ export async function POST(
         { status: response.status },
       );
     }
+    const responseBody = await response.json();
     return NextResponse.json(
-      safeShippingResponse(operation, await response.json()),
-      { status: response.status },
-    );
-  } catch {
-    return NextResponse.json(
-      { error: "Shipping service unavailable." },
-      { status: 503 },
-    );
-  }
-}
-
-export async function GET(
-  request: Request,
-  context: { params: Promise<{ path: string[] }> },
-) {
-  const { path } = await context.params;
-  const operation = path.join("/");
-  let target: string;
-  try {
-    target = customerShippingPath("GET", path);
-  } catch {
-    return NextResponse.json({ error: "Not found." }, { status: 404 });
-  }
-  if (!shippingOperationEnabled(operation, process.env)) {
-    return NextResponse.json({ error: "Not found." }, { status: 404 });
-  }
-  try {
-    const customer = await getCurrentCustomer();
-    if (!customer) {
-      return NextResponse.json(
-        { error: "Verified customer session required." },
-        { status: 401 },
-      );
-    }
-    const headers = trustedShippingHeaders(
-      {},
-      process.env.JAMORA_STOREFRONT_API_SECRET,
-      customer,
-      undefined,
-    );
-    const response = await fetch(`${STRAPI_URL}${target}`, {
-      method: "GET",
-      headers,
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      return NextResponse.json(
-        {
-          error: response.status === 404
-            ? "Not found."
-            : "Shipping request could not be completed.",
-        },
-        { status: response.status },
-      );
-    }
-    return NextResponse.json(
-      safeTrackingLinks(
-        await response.json(),
-        process.env.JAMORA_STOREFRONT_URL ?? new URL(request.url).origin,
-      ),
+      operation === "shipping/tracking/capabilities/claim"
+        ? safeTrackingClaim(
+            responseBody,
+            process.env.JAMORA_STOREFRONT_URL ?? new URL(request.url).origin,
+          )
+        : safeShippingResponse(operation, responseBody),
       { status: response.status },
     );
   } catch {

@@ -18,9 +18,11 @@ import {
 } from "./services/tracking-domain.cjs";
 import webhookGuard from "../../middlewares/shipping-webhook-guard.cjs";
 import {
+  createPaymentSubjectSettlement,
   createMemoryPaymentAdapter,
   createPaymentTransactions,
 } from "../payment-operations/services/payment-transaction.cjs";
+import createShippingQuoteService from "./services/shipping-quote.ts";
 import shippingController, {
   createShippingOperationsController,
 } from "./controllers/shipping-operations.ts";
@@ -140,79 +142,210 @@ test("address assistance preserves manual edits/warnings and quote selection is 
   );
 });
 
-test("guest, customer, and membership subjects remain pending until verified settlement", async () => {
-  const settlements = [];
-  const adapter = createMemoryPaymentAdapter({
-    resolvePaymentSubject: async (input) => ({
-      ...input,
-      ownerDocumentId:
-        input.customerDocumentId ??
-        `guest:${input.guestCheckoutCapability}`,
-    }),
-    settleSubject: async (payment) => {
-      settlements.push(payment.subjectId);
-    },
-  });
-  const payments = createPaymentTransactions(adapter, {
-    env: { PAYMENTS_ENABLED: "true" },
-    beneficiary: {
-      name: "Jamora SRL",
-      iban: "RO49AAAA1B31007593840000",
-      bank: "Banca Jamora",
-    },
-  });
-  const subjects = [
-    {
-      subjectId: "order-guest",
-      subjectType: "order",
-      purpose: "order",
-      guestCheckoutCapability: "rsv_guest",
-    },
-    {
-      subjectId: "order-customer",
-      subjectType: "order",
-      purpose: "order",
-      customerDocumentId: "customer-1",
-    },
-    {
-      subjectId: "membership-order-1",
-      subjectType: "order",
-      purpose: "order",
-      customerDocumentId: "customer-1",
-      membershipDocumentId: "membership-1",
-    },
-  ];
-  const created = [];
-  for (const [index, subject] of subjects.entries()) {
-    const payment = await payments.prepareBankTransfer({
-      idempotencyKey: `phase3:${subject.subjectId}`,
-      ...subject,
-      orderDocumentId: subject.subjectId,
-      amountMinor: 2_490,
-      currency: "RON",
+test("real guest, customer, and member settlement revalidates locked shipping snapshots", async () => {
+  await environment({
+    SHIPPING_ENABLED: "true",
+    SHIPPING_PROVIDER_MODE: "mock",
+    SHIPPING_QUOTE_SECRET: QUOTE_SECRET,
+    DEMO_EUR_RON_RATE: "1.000000",
+  }, async () => {
+    const quote = selectShippingQuote({
+      selection: quoteShipping({ address, items, products }, {
+        secret: QUOTE_SECRET,
+        now: NOW,
+      })[0],
+      address,
+      items,
+      products,
+    }, { secret: QUOTE_SECRET, now: NOW }).snapshot;
+    const shippingAddressText = "Ana Pop\nStrada Memorandumului 21\n400001 Cluj-Napoca, CJ\nRomania";
+    const ordinaryOrder = (documentId, ownership = {}) => ({
+      documentId,
+      status: "pending",
+      items,
+      currency: "eur",
+      carrier: quote.carrier,
+      subtotalCents: 0,
+      discountCents: 0,
+      shippingCents: quote.amountMinor,
+      totalCents: quote.amountMinor,
+      shippingAddress: address,
+      shippingAddressText,
+      shippingSnapshot: { shippingAddress: address, shippingAddressText, quote },
       priceSnapshot: {
-        charge: { amountMinor: 2_490, currency: "RON" },
-        shipping: { amountMinor: 2_490, currency: "RON" },
+        reference: { amountMinor: quote.amountMinor, currency: "EUR" },
+        charge: { amountMinor: quote.amountMinor, currency: "RON" },
+        rate: "1.000000",
+        shipping: quote,
       },
-      now: NOW,
+      ...ownership,
     });
-    assert.equal(payment.status, "awaiting_payment");
-    created.push(payment);
-    await payments.recordBankReceipt({
-      paymentDocumentId: payment.documentId,
-      amountMinor: 2_490,
+    const checkout = {
+      checkoutReference: "membership-checkout-1",
+      customerDocumentId: "customer-1",
+      status: "reserved",
+      items,
       currency: "RON",
-      receivedAt: new Date(NOW.getTime() + index + 1),
-      actor: "owner@example.test",
-      providerEventId: `phase3:receipt:${index}`,
+      totals: {
+        merchandiseMinor: 0,
+        shippingMinor: quote.amountMinor,
+        totalMinor: quote.amountMinor,
+      },
+      shippingSnapshot: { shippingAddress: address, quote },
+    };
+    const orders = new Map([
+      ["order-guest", ordinaryOrder("order-guest", {
+        reservationToken: "rsv_guest",
+      })],
+      ["order-customer", ordinaryOrder("order-customer", {
+        customerDocumentId: "customer-1",
+      })],
+      ["membership-order-1", {
+        documentId: "membership-order-1",
+        customerDocumentId: "customer-1",
+        membershipDocumentId: "membership-1",
+        checkoutReference: checkout.checkoutReference,
+        shippingSnapshot: checkout.shippingSnapshot,
+        status: "pending",
+      }],
+    ]);
+    const productLocks = [];
+    const shipping = createShippingQuoteService({
+      strapi: {
+        contentTypes: { "api::product.product": { pluginOptions: {} } },
+        db: {
+          query: () => ({
+            findMany: async () => products.map((product, index) => ({
+              id: index + 1,
+              ...product,
+            })),
+          }),
+          connection: () => {
+            const chain = {
+              where: () => chain,
+              transacting: () => chain,
+              forUpdate: () => chain,
+              first: async () => { productLocks.push("locked"); },
+            };
+            return chain;
+          },
+        },
+      },
     });
-  }
-  assert.deepEqual(settlements, subjects.map(({ subjectId }) => subjectId));
-  assert.equal(
-    created.every((payment) =>
-      adapter.payments.get(payment.documentId).status === "paid"),
-    true,
-  );
+    const validations = [];
+    const settlements = [];
+    const settleSubject = createPaymentSubjectSettlement({
+      activateMembership: async () => {
+        throw new Error("unexpected membership purchase");
+      },
+      settleOrder: async (payment, context) => {
+        settlements.push(payment.subjectId);
+        const order = orders.get(payment.orderDocumentId);
+        order.status = "paid";
+        order.paymentDocumentId = payment.documentId;
+        return order;
+      },
+      finalizeMembershipCheckout: async (input) => {
+        checkout.status = "paid";
+        checkout.orderDocumentId = input.orderDocumentId;
+        checkout.settlementKey = input.idempotencyKey;
+        const order = orders.get(input.orderDocumentId);
+        return { checkout, order };
+      },
+    });
+    const adapter = createMemoryPaymentAdapter({
+      resolvePaymentSubject: async (input) => ({
+        ...input,
+        ownerDocumentId:
+          input.customerDocumentId ?? `guest:${input.guestCheckoutCapability}`,
+      }),
+      validateSettlementSubject: async (payment, context) => {
+        validations.push(payment.subjectId);
+        await shipping.validateLockedSubject({
+          order: orders.get(payment.orderDocumentId),
+          ...(payment.membershipDocumentId ? { checkout } : {}),
+          now: new Date(context.validatedAt),
+          // The in-memory payment adapter has no database transaction object;
+          // use an explicit transaction token so the real shipping service
+          // exercises its lock-and-reread branch used by Strapi settlement.
+          trx: context.trx ?? { id: "phase3-settlement-transaction" },
+        });
+      },
+      settleSubject,
+    });
+    const payments = createPaymentTransactions(adapter, {
+      env: { PAYMENTS_ENABLED: "true" },
+      beneficiary: {
+        name: "Jamora SRL",
+        iban: "RO49AAAA1B31007593840000",
+        bank: "Banca Jamora",
+      },
+    });
+    const subjects = [
+      {
+        subjectId: "order-guest",
+        subjectType: "order",
+        purpose: "order",
+        guestCheckoutCapability: "rsv_guest",
+      },
+      {
+        subjectId: "order-customer",
+        subjectType: "order",
+        purpose: "order",
+        customerDocumentId: "customer-1",
+      },
+      {
+        subjectId: checkout.checkoutReference,
+        subjectType: "order",
+        purpose: "order",
+        customerDocumentId: "customer-1",
+        membershipDocumentId: "membership-1",
+        orderDocumentId: "membership-order-1",
+        priceSnapshot: {
+          membershipCheckout: {
+            checkoutReference: checkout.checkoutReference,
+          },
+        },
+      },
+    ];
+    for (const [index, subject] of subjects.entries()) {
+      const orderDocumentId = subject.orderDocumentId ?? subject.subjectId;
+      const payment = await payments.prepareBankTransfer({
+        idempotencyKey: `phase3:${subject.subjectId}`,
+        ...subject,
+        orderDocumentId,
+        amountMinor: quote.amountMinor,
+        currency: "RON",
+        priceSnapshot: {
+          ...(subject.priceSnapshot ?? {}),
+          charge: { amountMinor: quote.amountMinor, currency: "RON" },
+          shipping: quote,
+        },
+        now: NOW,
+      });
+      assert.equal(payment.status, "awaiting_payment");
+      await payments.recordBankReceipt({
+        paymentDocumentId: payment.documentId,
+        amountMinor: quote.amountMinor,
+        currency: "RON",
+        receivedAt: new Date(NOW.getTime() + index + 1),
+        actor: "owner@example.test",
+        providerEventId: `phase3:receipt:${index}`,
+      });
+      assert.equal(adapter.payments.get(payment.documentId).status, "paid");
+    }
+    assert.deepEqual(validations, [
+      "order-guest",
+      "order-customer",
+      checkout.checkoutReference,
+    ]);
+    assert.deepEqual(settlements, [
+      "order-guest",
+      "order-customer",
+      checkout.checkoutReference,
+    ]);
+    assert.equal(productLocks.length, 3);
+  });
 });
 
 test("paid packed warehouse shipment uses private single-use label authorization", async () => {
@@ -399,7 +532,7 @@ test("signed tracking is replay-safe, monotonic, and shares its path with bounde
   assert.equal(adapter.shipments.get("shipment-1").status, "out_for_delivery");
 });
 
-test("feature-off controller keeps manual structured address usable and hides provider surfaces", async () => {
+test("feature-off keeps manual checkout and the real payment fallback usable", async () => {
   const manual = assessRomanianAddress(address);
   assert.deepEqual(manual.errors, []);
   let providerCalls = 0;
@@ -429,6 +562,53 @@ test("feature-off controller keeps manual structured address usable and hides pr
       assert.equal(ctx.status, 404);
       assert.deepEqual(ctx.body, { error: "Not found." });
     }
+    const settled = [];
+    const adapter = createMemoryPaymentAdapter({
+      resolvePaymentSubject: async (input) => ({
+        ...input,
+        ownerDocumentId: `guest:${input.guestCheckoutCapability}`,
+        priceSnapshot: {
+          ...input.priceSnapshot,
+          manualShippingAddress: manual.address,
+        },
+      }),
+      settleSubject: async (payment) => {
+        settled.push(payment.subjectId);
+      },
+    });
+    const payments = createPaymentTransactions(adapter, {
+      env: { PAYMENTS_ENABLED: "true" },
+      beneficiary: {
+        name: "Jamora SRL",
+        iban: "RO49AAAA1B31007593840000",
+        bank: "Banca Jamora",
+      },
+    });
+    const payment = await payments.prepareBankTransfer({
+      idempotencyKey: "phase3:feature-off-manual-checkout",
+      subjectId: "manual-order-1",
+      subjectType: "order",
+      purpose: "order",
+      orderDocumentId: "manual-order-1",
+      guestCheckoutCapability: "rsv_manual",
+      amountMinor: 10_000,
+      currency: "RON",
+      priceSnapshot: {
+        charge: { amountMinor: 10_000, currency: "RON" },
+        manualShippingAddress: manual.address,
+      },
+      now: NOW,
+    });
+    await payments.recordBankReceipt({
+      paymentDocumentId: payment.documentId,
+      amountMinor: 10_000,
+      currency: "RON",
+      receivedAt: new Date(NOW.getTime() + 1),
+      actor: "owner@example.test",
+      providerEventId: "phase3:feature-off-receipt",
+    });
+    assert.equal(adapter.payments.get(payment.documentId).status, "paid");
+    assert.deepEqual(settled, ["manual-order-1"]);
   });
   assert.equal(providerCalls, 0);
 });

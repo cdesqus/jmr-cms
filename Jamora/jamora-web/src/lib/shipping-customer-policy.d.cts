@@ -45,13 +45,11 @@ export function safeShippingSelection(input: unknown): {
   idempotent: boolean;
   shipping: ShippingQuote;
 };
-export function safeTrackingLinks(
+export function safeTrackingClaim(
   input: unknown,
   storefrontUrl: string,
 ): {
-  links: Array<{
-    orderNumber: string;
-    trackingUrl: string;
-  }>;
+  orderNumber: string;
+  trackingUrl: string;
 };
 export function safeShippingResponse(operation: string, input: unknown): unknown;

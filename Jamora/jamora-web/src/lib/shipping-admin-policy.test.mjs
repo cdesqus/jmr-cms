@@ -78,6 +78,35 @@ test("BFF permits only explicit shipment, label, and bounded capability-reissue 
     ),
     /limit/i,
   );
+  assert.deepEqual(
+    shippingAdminOperation(
+      "POST",
+      ["tracking", "capabilities", "manage"],
+      {
+        action: "rotate",
+        orderDocumentIds: ["order-1"],
+        rawCapability: "never",
+      },
+    ),
+    {
+      kind: "manage",
+      ownerOnly: true,
+      targetPath:
+        "/api/jamora/admin/shipping/tracking/capabilities/manage",
+      body: JSON.stringify({
+        action: "rotate",
+        orderDocumentIds: ["order-1"],
+      }),
+    },
+  );
+  assert.throws(
+    () => shippingAdminOperation(
+      "POST",
+      ["tracking", "capabilities", "manage"],
+      { action: "delete", orderDocumentIds: ["order-1"] },
+    ),
+    /action/i,
+  );
 
   for (const [method, path] of [
     ["GET", ["shipments", "order-1"]],

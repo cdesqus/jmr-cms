@@ -10,7 +10,7 @@ import {
   safeAddressSuggestions,
   safeShippingQuotes,
   safeShippingSelection,
-  safeTrackingLinks,
+  safeTrackingClaim,
   shippingOperationEnabled,
   shippingOperationBody,
   trustedShippingHeaders,
@@ -83,14 +83,14 @@ test("shipping and address BFF features require their exact true flag", () => {
   }), false);
 });
 
-test("shipping BFF has an exact mutation allowlist plus verified-customer tracking links", () => {
+test("shipping BFF allowlists authenticated one-time tracking claims", () => {
   assert.equal(customerShippingPath("POST", ["address", "suggest"]), "/api/jamora/address/suggest");
   assert.equal(customerShippingPath("POST", ["address", "assess"]), "/api/jamora/address/assess");
   assert.equal(customerShippingPath("POST", ["shipping", "quotes"]), "/api/jamora/shipping/quotes");
   assert.equal(customerShippingPath("POST", ["shipping", "select"]), "/api/jamora/shipping/select");
   assert.equal(
-    customerShippingPath("GET", ["shipping", "tracking", "links"]),
-    "/api/jamora/shipping/tracking/links",
+    customerShippingPath("POST", ["shipping", "tracking", "capabilities", "claim"]),
+    "/api/jamora/shipping/tracking/capabilities/claim",
   );
   for (const rejected of [
     ["GET", ["shipping", "quotes"]],
@@ -103,30 +103,24 @@ test("shipping BFF has an exact mutation allowlist plus verified-customer tracki
   }
 });
 
-test("customer tracking link DTO strips metadata and rejects foreign or malformed URLs", () => {
+test("customer tracking claim DTO strips metadata and rejects foreign or malformed URLs", () => {
   const access = `trk_${"A".repeat(43)}`;
-  assert.deepEqual(safeTrackingLinks({
-    links: [{
-      orderNumber: "JMR-1001",
-      trackingUrl:
-        `https://shop.example.test/track?order=JMR-1001&access=${access}`,
-      customerEmail: "never@example.test",
-      capabilityHash: "never",
-    }],
+  assert.deepEqual(safeTrackingClaim({
+    orderNumber: "JMR-1001",
+    trackingUrl:
+      `https://shop.example.test/track?order=JMR-1001&access=${access}`,
+    customerEmail: "never@example.test",
+    capabilityHash: "never",
   }, "https://shop.example.test"), {
-    links: [{
-      orderNumber: "JMR-1001",
-      trackingUrl:
-        `https://shop.example.test/track?order=JMR-1001&access=${access}`,
-    }],
+    orderNumber: "JMR-1001",
+    trackingUrl:
+      `https://shop.example.test/track?order=JMR-1001&access=${access}`,
   });
   assert.throws(
-    () => safeTrackingLinks({
-      links: [{
-        orderNumber: "JMR-1001",
-        trackingUrl:
-          `https://foreign.example/track?order=JMR-1001&access=${access}`,
-      }],
+    () => safeTrackingClaim({
+      orderNumber: "JMR-1001",
+      trackingUrl:
+        `https://foreign.example/track?order=JMR-1001&access=${access}`,
     }, "https://shop.example.test"),
     /tracking link response/i,
   );
@@ -215,6 +209,13 @@ test("operation bodies strip browser identity and preserve the quote for server 
       unit: "", instructions: "",
     },
   });
+  assert.deepEqual(
+    shippingOperationBody("shipping/tracking/capabilities/claim", {
+      orderDocumentId: " order-1 ",
+      customerDocumentId: "attacker",
+    }),
+    { orderDocumentId: "order-1" },
+  );
 });
 
 test("safe address DTOs keep warnings visible and strip provider metadata", () => {

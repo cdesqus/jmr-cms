@@ -85,7 +85,8 @@ function customerShippingPath(method, path) {
     "POST address/assess": "/api/jamora/address/assess",
     "POST shipping/quotes": "/api/jamora/shipping/quotes",
     "POST shipping/select": "/api/jamora/shipping/select",
-    "GET shipping/tracking/links": "/api/jamora/shipping/tracking/links",
+    "POST shipping/tracking/capabilities/claim":
+      "/api/jamora/shipping/tracking/capabilities/claim",
   };
   const operation = `${method} ${key}`;
   if (!Object.hasOwn(targets, operation)) {
@@ -218,42 +219,33 @@ function safeShippingSelection(value) {
   };
 }
 
-function safeTrackingLinks(value, storefrontUrl) {
+function safeTrackingClaim(value, storefrontUrl) {
   const input = record(value, "Invalid tracking link response.");
-  if (!Array.isArray(input.links) || input.links.length > 100) {
-    throw new Error("Invalid tracking link response.");
-  }
   let trustedOrigin;
   try {
     trustedOrigin = new URL(text(storefrontUrl)).origin;
   } catch {
     throw new Error("Invalid tracking link response.");
   }
-  return {
-    links: input.links.map((link) => {
-      const candidate = record(link, "Invalid tracking link response.");
-      const orderNumber = text(candidate.orderNumber);
-      let url;
-      try {
-        url = new URL(text(candidate.trackingUrl));
-      } catch {
-        throw new Error("Invalid tracking link response.");
-      }
-      const access = text(url.searchParams.get("access"));
-      const parameters = [...url.searchParams.keys()].sort();
-      if (!orderNumber ||
-          url.origin !== trustedOrigin ||
-          url.pathname !== "/track" ||
-          url.searchParams.get("order") !== orderNumber ||
-          !/^trk_[A-Za-z0-9_-]{43}$/.test(access) ||
-          parameters.length !== 2 ||
-          parameters[0] !== "access" ||
-          parameters[1] !== "order") {
-        throw new Error("Invalid tracking link response.");
-      }
-      return { orderNumber, trackingUrl: url.toString() };
-    }),
-  };
+  const orderNumber = text(input.orderNumber);
+  let url;
+  try {
+    url = new URL(text(input.trackingUrl));
+  } catch {
+    throw new Error("Invalid tracking link response.");
+  }
+  const access = text(url.searchParams.get("access"));
+  const parameters = [...url.searchParams.keys()].sort();
+  if (!orderNumber || url.origin !== trustedOrigin ||
+      url.pathname !== "/track" ||
+      url.searchParams.get("order") !== orderNumber ||
+      !/^trk_[A-Za-z0-9_-]{43}$/.test(access) ||
+      parameters.length !== 2 ||
+      parameters[0] !== "access" ||
+      parameters[1] !== "order") {
+    throw new Error("Invalid tracking link response.");
+  }
+  return { orderNumber, trackingUrl: url.toString() };
 }
 
 function quoteInput(value) {
@@ -304,6 +296,13 @@ function shippingOperationBody(operation, value) {
       address: safeAddress(input.address),
     };
   }
+  if (operation === "shipping/tracking/capabilities/claim") {
+    const orderDocumentId = text(input.orderDocumentId);
+    if (!orderDocumentId || orderDocumentId.length > 255) {
+      throw new TypeError("Invalid tracking claim.");
+    }
+    return { orderDocumentId };
+  }
   throw new Error("Not found.");
 }
 
@@ -312,6 +311,9 @@ function safeShippingResponse(operation, value) {
   if (operation === "address/assess") return safeAddressAssessment(value);
   if (operation === "shipping/quotes") return safeShippingQuotes(value);
   if (operation === "shipping/select") return safeShippingSelection(value);
+  if (operation === "shipping/tracking/capabilities/claim") {
+    throw new Error("Tracking claims require storefront origin validation.");
+  }
   throw new Error("Not found.");
 }
 
@@ -325,7 +327,7 @@ module.exports = {
   safeShippingQuotes,
   safeShippingResponse,
   safeShippingSelection,
-  safeTrackingLinks,
+  safeTrackingClaim,
   shippingOperationEnabled,
   shippingOperationBody,
   trustedShippingHeaders,

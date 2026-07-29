@@ -20,8 +20,9 @@ import {
   verifyTrackingWebhook,
 } from "../../../middlewares/shipping-webhook-guard.cjs";
 import {
+  claimCustomerTrackingCapability,
   createStrapiTrackingCapabilityAdapter,
-  listCustomerTrackingLinks,
+  manageTrackingCapabilities,
   reissueLegacyTrackingCapabilities,
 } from "../services/tracking-capability-reissue.cjs";
 import {
@@ -372,8 +373,10 @@ function defaultTrackingCapabilityOperations() {
   return {
     reissue: (input: any) =>
       reissueLegacyTrackingCapabilities({ adapter, ...input }),
-    customerLinks: (input: any) =>
-      listCustomerTrackingLinks({ adapter, ...input }),
+    claim: (input: any) =>
+      claimCustomerTrackingCapability({ adapter, ...input }),
+    manage: (input: any) =>
+      manageTrackingCapabilities({ adapter, ...input }),
   };
 }
 
@@ -384,10 +387,22 @@ function safeReissueSummary(value: any) {
   };
   return {
     selected: field("selected"),
-    reissued: field("reissued"),
+    queued: field("queued"),
     skippedIneligible: field("skippedIneligible"),
     skippedConcurrent: field("skippedConcurrent"),
-    remainingMissing: field("remainingMissing"),
+    remainingUnreviewed: field("remainingUnreviewed"),
+  };
+}
+
+function safeManagementSummary(value: any) {
+  const field = (name: string) => {
+    const result = Number(value?.[name]);
+    return Number.isSafeInteger(result) && result >= 0 ? result : 0;
+  };
+  return {
+    selected: field("selected"),
+    updated: field("updated"),
+    skippedConcurrent: field("skippedConcurrent"),
   };
 }
 
@@ -595,19 +610,43 @@ export function createShippingOperationsController({
         trackingDomain().pollOpenShipments({ limit }));
     },
 
-    async customerTrackingLinks(ctx: any) {
-      if (!shippingEnabled(ctx)) return;
+    async claimTrackingCapability(ctx: any) {
+      if (!shippingEnabled(ctx) || !isJsonRequest(ctx)) return;
       const identity = await verifiedCustomerIdentity(ctx);
       if (!identity) return;
-      await runShipment(ctx, async () => ({
-        links: await trackingCapabilityOperations().customerLinks({
+      const body = requestBody(ctx);
+      if (!body) return;
+      await runShipment(ctx, async () =>
+        trackingCapabilityOperations().claim({
           ...identity,
+          orderDocumentId: body.orderDocumentId,
           storefrontUrl:
             process.env.JAMORA_STOREFRONT_URL ??
             process.env.PUBLIC_URL ??
             "http://localhost:3095",
-        }),
-      }));
+        }));
+    },
+
+    async manageTrackingCapabilities(ctx: any) {
+      const identity = shipmentAdmin(ctx);
+      if (!identity || !isJsonRequest(ctx)) return;
+      if (identity.role !== "owner") {
+        return fail(ctx, 403, "Owner credentials required.");
+      }
+      const body = requestBody(ctx);
+      if (!body) return;
+      try {
+        ctx.body = safeManagementSummary(
+          await trackingCapabilityOperations().manage({
+            actor: identity.actor,
+            action: body.action,
+            orderDocumentIds: body.orderDocumentIds,
+          }),
+        );
+      } catch (caught) {
+        if (caught instanceof TypeError) return fail(ctx, 400, caught.message);
+        return fail(ctx, 502, "Shipping service unavailable.");
+      }
     },
 
     async reissueTrackingCapabilities(ctx: any) {

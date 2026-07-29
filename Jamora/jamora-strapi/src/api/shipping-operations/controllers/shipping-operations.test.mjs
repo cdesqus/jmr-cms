@@ -75,9 +75,10 @@ test("shipping operations expose only explicit address, quote, shipment, trackin
     { method: "POST", path: "/jamora/shipping/quotes", handler: "shipping-operations.quoteShipping" },
     { method: "POST", path: "/jamora/shipping/select", handler: "shipping-operations.selectShippingQuote" },
     { method: "POST", path: "/jamora/shipping/tracking/webhook", handler: "shipping-operations.trackingWebhook" },
-    { method: "GET", path: "/jamora/shipping/tracking/links", handler: "shipping-operations.customerTrackingLinks" },
+    { method: "POST", path: "/jamora/shipping/tracking/capabilities/claim", handler: "shipping-operations.claimTrackingCapability" },
     { method: "POST", path: "/jamora/admin/shipping/tracking/poll", handler: "shipping-operations.pollTracking" },
     { method: "POST", path: "/jamora/admin/shipping/tracking/capabilities/reissue", handler: "shipping-operations.reissueTrackingCapabilities" },
+    { method: "POST", path: "/jamora/admin/shipping/tracking/capabilities/manage", handler: "shipping-operations.manageTrackingCapabilities" },
     { method: "POST", path: "/jamora/admin/shipping/shipments/:orderDocumentId", handler: "shipping-operations.createShipment" },
     { method: "POST", path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels/capability", handler: "shipping-operations.createLabelCapability" },
     { method: "GET", path: "/jamora/admin/shipping/shipments/:shipmentDocumentId/labels", handler: "shipping-operations.downloadLabel" },
@@ -734,10 +735,10 @@ test("owner-only legacy tracking reissue returns aggregate counts without raw ca
         calls.push(input);
         return {
           selected: 3,
-          reissued: 2,
+          queued: 2,
           skippedIneligible: 1,
           skippedConcurrent: 0,
-          remainingMissing: 4,
+          remainingUnreviewed: 4,
           trackingPreviewUrl:
             "https://shop.example.test/track?order=secret&access=trk_must_not_leak",
         };
@@ -768,10 +769,10 @@ test("owner-only legacy tracking reissue returns aggregate counts without raw ca
     await shippingController.reissueTrackingCapabilities(owner);
     assert.deepEqual(owner.body, {
       selected: 3,
-      reissued: 2,
+      queued: 2,
       skippedIneligible: 1,
       skippedConcurrent: 0,
-      remainingMissing: 4,
+      remainingUnreviewed: 4,
     });
     assert.equal(JSON.stringify(owner.body).includes("trk_"), false);
     assert.deepEqual(calls, [{
@@ -782,17 +783,17 @@ test("owner-only legacy tracking reissue returns aggregate counts without raw ca
   });
 });
 
-test("tracking links are revealed only to a verified customer session", async () => {
+test("tracking capability is delivered once only to a verified customer session", async () => {
   const calls = [];
   const shippingController = createShippingOperationsController({
     trackingCapabilityOperations: () => ({
-      async customerLinks(input) {
+      async claim(input) {
         calls.push(input);
-        return [{
+        return {
           orderNumber: "JMR-1001",
           trackingUrl:
             `https://shop.example.test/track?order=JMR-1001&access=trk_${"A".repeat(43)}`,
-        }];
+        };
       },
     }),
   });
@@ -815,33 +816,34 @@ test("tracking links are revealed only to a verified customer session", async ()
       JAMORA_STOREFRONT_URL: "https://shop.example.test",
     }, async () => {
       const invalid = context({
+        body: { orderDocumentId: "order-1" },
         headers: {
           "x-jamora-storefront-secret": "storefront-secret",
           "x-jamora-customer-document-id": "customer-1",
           "x-jamora-customer-session-version": "1",
         },
       });
-      await shippingController.customerTrackingLinks(invalid);
+      await shippingController.claimTrackingCapability(invalid);
       assert.equal(invalid.status, 401);
       assert.equal(calls.length, 0);
 
       const verified = context({
+        body: { orderDocumentId: "order-1" },
         headers: {
           "x-jamora-storefront-secret": "storefront-secret",
           "x-jamora-customer-document-id": "customer-1",
           "x-jamora-customer-session-version": "2",
         },
       });
-      await shippingController.customerTrackingLinks(verified);
+      await shippingController.claimTrackingCapability(verified);
       assert.deepEqual(verified.body, {
-        links: [{
-          orderNumber: "JMR-1001",
-          trackingUrl:
-            `https://shop.example.test/track?order=JMR-1001&access=trk_${"A".repeat(43)}`,
-        }],
+        orderNumber: "JMR-1001",
+        trackingUrl:
+          `https://shop.example.test/track?order=JMR-1001&access=trk_${"A".repeat(43)}`,
       });
       assert.deepEqual(calls, [{
         customerDocumentId: "customer-1",
+        orderDocumentId: "order-1",
         storefrontUrl: "https://shop.example.test",
       }]);
     });
