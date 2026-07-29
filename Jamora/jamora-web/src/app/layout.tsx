@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Fraunces, Inter } from "next/font/google";
 import "./globals.css";
 import { AppChrome } from "@/components/app-chrome";
+import { membershipSurfaceEnabled } from "@/lib/membership-surface-policy.cjs";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -33,7 +34,7 @@ export default function RootLayout({
       className={`${inter.variable} ${fraunces.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <AppChrome>{children}</AppChrome>
+        <AppChrome membershipEnabled={membershipSurfaceEnabled(process.env)}>{children}</AppChrome>
       </body>
     </html>
   );

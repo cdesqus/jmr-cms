@@ -4,6 +4,7 @@ import { CATEGORY_META, type Category } from "@/lib/products";
 import { getFeaturedProducts } from "@/lib/catalog";
 import { getPublicStoreContent, localizeStoreContent } from "@/lib/store-content";
 import { LOCALE_COOKIE, UI_TEXT, asLocale } from "@/lib/i18n";
+import { publicMembershipOffer } from "@/lib/membership-surface-policy.cjs";
 import { ProductCard } from "@/components/product-card";
 import { ProductVisual } from "@/components/product-visual";
 
@@ -38,6 +39,7 @@ export default async function Home() {
   ]);
   const content = localizeStoreContent(rawContent, locale);
   const categories = Object.keys(CATEGORY_META) as Category[];
+  const membershipOffer = publicMembershipOffer(process.env);
 
   return (
     <>
@@ -123,6 +125,49 @@ export default async function Home() {
           </div>
         </div>
       </section>
+
+      {membershipOffer.visible && (
+        <section className="mx-auto max-w-6xl px-5 py-12">
+          <div className="overflow-hidden rounded-3xl border border-terracotta/30 bg-terracotta text-cream shadow-sm">
+            <div className="grid gap-8 p-8 md:grid-cols-[1.1fr_0.9fr] md:p-10">
+              <div>
+                <p className="eyebrow text-amber">{membershipOffer.eyebrow}</p>
+                <h2 className="mt-3 font-display text-3xl leading-tight sm:text-4xl">
+                  {membershipOffer.title}
+                </h2>
+                <p className="mt-4 max-w-xl text-sm leading-6 text-cream/85 sm:text-base">
+                  {membershipOffer.description}
+                </p>
+                <div className="mt-7 flex flex-wrap gap-3">
+                  <Link
+                    href={membershipOffer.href}
+                    className="rounded-full bg-cream px-6 py-3 text-sm font-semibold text-terracotta transition-colors hover:bg-amber"
+                  >
+                    {membershipOffer.primaryCta}
+                  </Link>
+                  <Link
+                    href="/account/register"
+                    className="rounded-full border border-cream/50 px-6 py-3 text-sm font-semibold text-cream transition-colors hover:bg-cream/10"
+                  >
+                    {membershipOffer.secondaryCta}
+                  </Link>
+                </div>
+              </div>
+              <div className="grid gap-3 text-sm text-cream/85">
+                {[
+                  "Choose 3, 6, or 12 month prepaid plans.",
+                  "Redeem package credits during the active period.",
+                  "Shipping remains customer-paid at checkout.",
+                ].map((item) => (
+                  <div key={item} className="rounded-2xl bg-cream/10 p-4">
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="mx-auto max-w-6xl px-5 py-12">
         <div className="flex items-end justify-between">

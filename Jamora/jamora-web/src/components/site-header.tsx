@@ -9,11 +9,12 @@ import { LOCALE_COOKIE, UI_TEXT, asLocale, type Locale } from "@/lib/i18n";
 const NAV = [
   { href: "/", label: "home" },
   { href: "/shop", label: "shop" },
+  { href: "/account/membership/plans", label: "membership", membershipOnly: true },
   { href: "/about", label: "story" },
   { href: "/contact", label: "contact" },
 ];
 
-export function SiteHeader() {
+export function SiteHeader({ membershipEnabled = false }: { membershipEnabled?: boolean }) {
   const { count, openCart } = useCart();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [locale, setLocale] = useState<Locale>("en");
@@ -39,13 +40,13 @@ export function SiteHeader() {
         </Link>
 
         <nav className="hidden items-center gap-7 md:flex">
-          {NAV.map((item) => (
+          {NAV.filter((item) => !item.membershipOnly || membershipEnabled).map((item) => (
             <Link
               key={item.label}
               href={item.href}
               className="text-sm font-medium text-bark transition-colors hover:text-terracotta"
             >
-              {text[item.label]}
+              {item.label === "membership" ? "Membership" : text[item.label]}
             </Link>
           ))}
         </nav>
@@ -105,14 +106,14 @@ export function SiteHeader() {
           >
             {text.trackOrder}
           </Link>
-          {NAV.map((item) => (
+          {NAV.filter((item) => !item.membershipOnly || membershipEnabled).map((item) => (
             <Link
               key={item.label}
               href={item.href}
               onClick={() => setMobileOpen(false)}
               className="block py-2 text-sm font-medium text-bark hover:text-terracotta"
             >
-              {text[item.label]}
+              {item.label === "membership" ? "Membership" : text[item.label]}
             </Link>
           ))}
         </nav>

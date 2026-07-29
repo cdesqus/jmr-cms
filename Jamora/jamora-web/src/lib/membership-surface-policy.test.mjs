@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  publicMembershipOffer,
   membershipCheckoutMode,
   membershipSurfaceEnabled,
   visibleAdminNavigation,
@@ -56,4 +57,20 @@ test("membership feature-off leaves ordinary guest and one-time checkout branche
     ),
     "membership",
   );
+});
+
+test("public membership offer follows the membership feature flag", () => {
+  assert.equal(publicMembershipOffer({}).visible, false);
+  assert.equal(publicMembershipOffer({ MEMBERSHIP_ENABLED: "TRUE" }).visible, false);
+
+  assert.deepEqual(publicMembershipOffer({ MEMBERSHIP_ENABLED: "true" }), {
+    visible: true,
+    href: "/account/membership/plans",
+    eyebrow: "Prepaid membership",
+    title: "Stock your ritual for 3, 6, or 12 months.",
+    description:
+      "Members prepay for a plan, receive package credits during the membership period, and still pay shipping at checkout.",
+    primaryCta: "View membership plans",
+    secondaryCta: "Create an account",
+  });
 });

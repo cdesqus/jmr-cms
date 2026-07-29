@@ -8,7 +8,13 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { VisitTracker } from "@/components/visit-tracker";
 
-export function AppChrome({ children }: { children: React.ReactNode }) {
+export function AppChrome({
+  children,
+  membershipEnabled = false,
+}: {
+  children: React.ReactNode;
+  membershipEnabled?: boolean;
+}) {
   const pathname = usePathname();
   const isAdmin = pathname?.startsWith("/admin");
   const isPrintUtility = pathname?.startsWith("/delivery-label");
@@ -17,7 +23,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
 
   return (
     <CartProvider>
-      <SiteHeader />
+      <SiteHeader membershipEnabled={membershipEnabled} />
       <main className="flex-1">{children}</main>
       <SiteFooter />
       <CartDrawer />
