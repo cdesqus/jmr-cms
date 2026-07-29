@@ -8,6 +8,7 @@ interface AnalyticsSummary {
   todayRevenueCents: number;
   estimatedProfitCents: number;
   estimatedMargin: number;
+  behavior?: Array<{ productId: string; views: number; cartAdds: number; checkoutStarts: number; purchases: number }>;
 }
 
 function formatEUR(cents: number) {
@@ -60,6 +61,7 @@ export default function JamoraAnalyticsWidget() {
     ["Today omzet", formatEUR(data.todayRevenueCents)],
     ["Est. profit", formatEUR(data.estimatedProfitCents)],
     ["Est. margin", `${data.estimatedMargin}%`],
+    ["Tracked products", `${data.behavior?.length ?? 0}`],
   ];
 
   return (
@@ -88,6 +90,7 @@ export default function JamoraAnalyticsWidget() {
           </div>
         </div>
       ))}
+      {data.behavior?.length ? <div style={{ gridColumn: "1 / -1", borderTop: "1px solid #eaeaef", paddingTop: 12 }}><div style={{ color: "#666687", fontSize: 12, fontWeight: 600 }}>TOP PRODUCT FUNNEL (30D)</div>{data.behavior.slice(0, 5).map((row) => <div key={row.productId} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, paddingTop: 8 }}><span>{row.productId}</span><span>{row.views} views · {row.cartAdds} carts · {row.purchases} sales</span></div>)}</div> : null}
     </div>
   );
 }

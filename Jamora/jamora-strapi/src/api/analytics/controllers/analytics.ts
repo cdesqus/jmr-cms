@@ -1191,7 +1191,7 @@ const controller = {
     const costRatio = Number(process.env.JAMORA_COST_RATIO ?? DEFAULT_COST_RATIO);
     const safeCostRatio = Number.isFinite(costRatio) ? costRatio : DEFAULT_COST_RATIO;
 
-    const [visits, visitsToday, paidOrders] = await Promise.all([
+    const [visits, visitsToday, paidOrders, commerceEvents] = await Promise.all([
       strapi.documents("api::visit-event.visit-event").findMany({
         fields: ["documentId"],
         limit: 10000,
@@ -1206,6 +1206,9 @@ const controller = {
         filters: { status: { $in: ["paid", "fulfilled"] } },
         sort: { createdAt: "desc" },
         limit: 10000,
+      }),
+      strapi.documents("api::commerce-event.commerce-event").findMany({
+        fields: ["eventType", "aggregateId", "payload"], limit: 10000,
       }),
     ]);
 
@@ -1233,6 +1236,7 @@ const controller = {
       estimatedProfitEur: centsToEur(profitCents),
       estimatedMargin: revenueCents > 0 ? Math.round((profitCents / revenueCents) * 1000) / 10 : 0,
       costRatio: safeCostRatio,
+      behavior: aggregateProductEvents(commerceEvents.map((event: any) => ({ eventType: event.eventType, productId: event.payload?.productId ?? event.aggregateId }))).slice(0, 10),
     };
   },
 
