@@ -10,6 +10,7 @@ const STRAPI_URL = process.env.STRAPI_URL ?? process.env.NEXT_PUBLIC_STRAPI_URL 
 
 type ReserveBody = {
   email?: string;
+  reservationIdempotencyKey?: string;
   customerName?: string;
   shippingAddressText?: string;
   shippingAddress?: unknown;
@@ -32,6 +33,18 @@ export async function POST(request: Request) {
   }
   const checkoutMode = membershipCheckoutMode(body, process.env);
   if (checkoutMode === "ordinary") {
+    const reservationIdempotencyKey = String(
+      body.reservationIdempotencyKey ?? "",
+    ).trim();
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(reservationIdempotencyKey)
+    ) {
+      return NextResponse.json(
+        { error: "Reservation idempotency key is required." },
+        { status: 400 },
+      );
+    }
     const secret = process.env.JAMORA_STOREFRONT_API_SECRET;
     if (!secret) {
       return NextResponse.json(
@@ -56,6 +69,7 @@ export async function POST(request: Request) {
       headers,
       body: JSON.stringify({
         ...body,
+        reservationIdempotencyKey,
         email: customer?.email ?? body.email,
       }),
       cache: "no-store",

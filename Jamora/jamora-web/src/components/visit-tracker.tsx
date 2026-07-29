@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { sanitizeVisitPayload } from "@/lib/analytics-url-safety.cjs";
 
 const VISITOR_KEY = "jamora.visitor-id.v1";
 
@@ -18,17 +19,17 @@ function getVisitorId() {
 
 export function VisitTracker() {
   useEffect(() => {
-    const path = `${window.location.pathname}${window.location.search}`;
+    const payload = sanitizeVisitPayload({
+      visitorId: getVisitorId(),
+      path: `${window.location.pathname}${window.location.search}`,
+      referrer: document.referrer,
+      userAgent: navigator.userAgent,
+    });
 
     fetch("/api/jamora/analytics/visit", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        visitorId: getVisitorId(),
-        path,
-        referrer: document.referrer,
-        userAgent: navigator.userAgent,
-      }),
+      body: JSON.stringify(payload),
       keepalive: true,
     }).catch(() => {});
   }, []);

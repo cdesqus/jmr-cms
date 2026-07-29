@@ -267,6 +267,7 @@ export function CartView({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             email: details.contact.email,
+            reservationIdempotencyKey: membershipAttemptKey,
             customerName: details.contact.name,
             shippingAddressText: formatRomanianAddress(normalizedShippingAddress),
             shippingAddress: normalizedShippingAddress,

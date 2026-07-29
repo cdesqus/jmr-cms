@@ -21,7 +21,6 @@ import {
   assertManualOrderStatusTransition,
   exactAllocationUpdate,
   normalisePackingChecklistInput,
-  reservationExpiryForSelection,
   requiredOrderReservationToken,
 } from "../services/shipping-order-finalization.cjs";
 import {
@@ -30,6 +29,15 @@ import {
 import {
   hasStorefrontSecret,
 } from "../../customer-auth/controllers/storefront-secret.cjs";
+import {
+  createStockReservationService,
+  createStrapiStockReservationAdapter,
+} from "../services/stock-reservation-transaction.cjs";
+import {
+  createStrapiVisitPrivacyAdapter,
+  createVisitPrivacyPurge,
+  sanitizeVisitPayload,
+} from "../services/visit-privacy.cjs";
 import {
   createPublicOrderTrackingLimiter,
   createPublicOrderTrackingPrivacyFloor,
@@ -596,165 +604,41 @@ async function logNotification(input: {
   });
 }
 
-async function releaseReservationAllocations(reservation: any) {
-  const allocations = Array.isArray(reservation?.allocations) ? reservation.allocations : [];
-  for (const allocation of allocations) {
-    if (!allocation.batchDocumentId) continue;
-    const batch = await batchDocuments().findOne({ documentId: allocation.batchDocumentId });
-    if (!batch) continue;
-    await batchDocuments().update({
-      documentId: batch.documentId,
-      data: {
-        reservedQuantity: Math.max(
-          0,
-          asNumber(batch.reservedQuantity) - asNumber(allocation.qty),
-        ),
-      },
-    });
-  }
-}
-
-async function expireReservations() {
-  const expired = await reservationDocuments().findMany({
-    filters: {
-      status: { $eq: "reserved" },
-      expiresAt: { $lt: new Date().toISOString() },
-    },
-    limit: 500,
-  });
-  for (const reservation of expired) {
-    await releaseReservationAllocations(reservation);
-    await reservationDocuments().update({
-      documentId: reservation.documentId,
-      data: { status: "expired" },
-    });
-  }
-}
+let stockReservationTransactions: ReturnType<
+  typeof createStockReservationService
+> | undefined;
+let visitPrivacyPurge: ReturnType<typeof createVisitPrivacyPurge> | undefined;
 
 async function createStockReservation(
   items: any[],
   email = "",
   shippingSelection?: unknown,
   customerDocumentId?: string,
+  idempotencyKey?: string,
 ) {
-  await expireReservations();
-  const activeReservations = await reservationDocuments().findMany({
-    fields: ["allocations"],
-    filters: { status: { $eq: "reserved" } },
-    limit: 1000,
-  });
-  const virtuallyReserved = new Map<string, number>();
-  for (const reservation of activeReservations) {
-    for (const allocation of Array.isArray(reservation.allocations) ? reservation.allocations : []) {
-      if (!allocation.batchDocumentId) {
-        const slug = asString(allocation.slug);
-        virtuallyReserved.set(slug, (virtuallyReserved.get(slug) ?? 0) + asNumber(allocation.qty));
-      }
-    }
-  }
-
-  const allocations: any[] = [];
-  const batchUpdates = new Map<string, { batch: any; reservedQuantity: number }>();
-  for (const item of items) {
-    const slug = asString(item.slug);
-    const qty = Math.max(0, Math.round(asNumber(item.qty)));
-    if (!slug || qty <= 0) continue;
-    const products = await strapi.documents("api::product.product").findMany({
-      fields: ["documentId", "slug", "sku", "name", "stock"],
-      filters: { slug: { $eq: slug } },
-      limit: 2,
-    });
-    if (products.length !== 1 || !products[0]?.documentId) {
-      return { error: `Authoritative product ${slug} is unavailable.` };
-    }
-    const product = products[0] as any;
-    const batches = await batchDocuments().findMany({
-      filters: { slug: { $eq: slug } },
-      sort: { expiryDate: "asc" },
-      limit: 200,
-    });
-    if (batches.some((batch: any) =>
-      batch.status === "active" &&
-      (batch.productDocumentId !== product.documentId ||
-       batch.slug !== product.slug))) {
-      return { error: `Inventory batch binding for ${slug} is invalid.` };
-    }
-    const usable = batches.filter((batch: any) => {
-      return batch.status === "active" && (!batch.expiryDate || new Date(batch.expiryDate).getTime() >= Date.now());
-    });
-
-    let remaining = qty;
-    if (usable.length > 0) {
-      for (const batch of usable) {
-        const planned = batchUpdates.get(batch.documentId)?.reservedQuantity ?? asNumber(batch.reservedQuantity);
-        const available = Math.max(0, asNumber(batch.quantity) - planned);
-        const take = Math.min(remaining, available);
-        if (take <= 0) continue;
-        allocations.push({
-          productDocumentId: product.documentId,
-          slug,
-          sku: product.sku,
-          name: product.name,
-          batchDocumentId: batch.documentId,
-          batchNumber: batch.batchNumber,
-          productionDate: batch.productionDate,
-          expiryDate: batch.expiryDate,
-          qty: take,
-        });
-        batchUpdates.set(batch.documentId, { batch, reservedQuantity: planned + take });
-        remaining -= take;
-        if (remaining === 0) break;
-      }
-      if (remaining === 0) continue;
-    }
-
-    const trackedBatchQuantity = batches.reduce(
-      (sum: number, batch: any) => sum + asNumber(batch.quantity),
-      0,
-    );
-    const available = Math.max(
-      0,
-      asNumber(product?.stock) - trackedBatchQuantity - (virtuallyReserved.get(slug) ?? 0),
-    );
-    if (!product || available < remaining) {
-      return { error: `Only ${qty - remaining + available} unit(s) of ${item.name} are available.` };
-    }
-    virtuallyReserved.set(slug, (virtuallyReserved.get(slug) ?? 0) + remaining);
-    allocations.push({
-      productDocumentId: product.documentId,
-      slug,
-      sku: item.sku,
-      name: item.name,
-      batchDocumentId: null,
-      batchNumber: "LEGACY-STOCK",
-      qty: remaining,
-    });
-  }
-
-  for (const { batch, reservedQuantity } of batchUpdates.values()) {
-    await batchDocuments().update({
-      documentId: batch.documentId,
-      data: { reservedQuantity },
-    });
-  }
-  const expiresAt = reservationExpiryForSelection(
-    new Date(),
-    shippingSelection && typeof shippingSelection === "object"
-      ? shippingSelection as Record<string, unknown>
-      : undefined,
+  stockReservationTransactions ??= createStockReservationService(
+    createStrapiStockReservationAdapter(strapi),
   );
-  const token = `rsv_${crypto.randomUUID()}`;
-  const reservation = await reservationDocuments().create({
-    data: {
-      token,
-      status: "reserved",
-      allocations,
-      expiresAt,
+  await stockReservationTransactions.expireDue(new Date(), 500);
+  try {
+    const reservation = await stockReservationTransactions.reserve({
+      idempotencyKey: asString(idempotencyKey),
+      items: items.map((item) => ({
+        slug: asString(item.slug),
+        qty: Math.round(asNumber(item.qty)),
+      })),
       email,
       customerDocumentId,
-    },
-  });
-  return { reservation };
+      shippingSelection,
+    });
+    return { reservation };
+  } catch (error) {
+    return {
+      error: error instanceof Error
+        ? error.message
+        : "Stock could not be reserved.",
+    };
+  }
 }
 
 async function enrichBatchAllocations(value: unknown) {
@@ -782,20 +666,38 @@ async function enrichBatchAllocations(value: unknown) {
 
 const controller = {
   async visit(ctx) {
-    const body = ctx.request.body ?? {};
-    const path = asString(body.path, "/").slice(0, 500);
+    if (!hasStorefrontSecret(
+      ctx.get("x-jamora-storefront-secret"),
+      process.env.JAMORA_STOREFRONT_API_SECRET,
+    )) {
+      ctx.status = 404;
+      ctx.body = { error: "Not found." };
+      return;
+    }
+    const payload = sanitizeVisitPayload(ctx.request.body ?? {});
 
     await strapi.documents("api::visit-event.visit-event").create({
       data: {
-        visitorId: asString(body.visitorId).slice(0, 120),
-        path,
-        referrer: asString(body.referrer).slice(0, 1000),
-        userAgent: asString(body.userAgent).slice(0, 1000),
+        ...payload,
         source: "storefront",
       },
     });
 
     ctx.body = { ok: true };
+  },
+
+  async adminPurgeVisitPrivacy(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+    visitPrivacyPurge ??= createVisitPrivacyPurge(
+      createStrapiVisitPrivacyAdapter(strapi),
+    );
+    const body = ctx.request.body ?? {};
+    const result = await visitPrivacyPurge.run({
+      cursor: asString(body.cursor),
+      limit: Math.round(asNumber(body.limit, 100)),
+      actor: adminIdentity(ctx).actor,
+    });
+    ctx.body = { ok: true, ...result };
   },
 
   async reserveStock(ctx) {
@@ -814,11 +716,18 @@ const controller = {
       ctx.body = { error: "Cart is empty." };
       return;
     }
+    const idempotencyKey = asString(body.reservationIdempotencyKey);
+    if (!idempotencyKey || idempotencyKey.length > 200) {
+      ctx.status = 400;
+      ctx.body = { error: "Reservation idempotency key is required." };
+      return;
+    }
     const result = await createStockReservation(
       items,
       asString(customer?.email, asString(body.email)),
       body.shippingSelection,
       customer?.documentId,
+      idempotencyKey,
     );
     if ("error" in result) {
       ctx.status = 409;

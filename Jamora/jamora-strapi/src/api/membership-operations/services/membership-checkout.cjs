@@ -39,6 +39,100 @@ function itemsInLockOrder(items) {
     String(left?.slug ?? "").localeCompare(String(right?.slug ?? "")));
 }
 
+function fulfilmentChecklist(batchAllocations) {
+  return (Array.isArray(batchAllocations) ? batchAllocations : []).map(
+    (allocation) => ({
+      productId: allocation.productDocumentId,
+      sku: allocation.sku,
+      name: allocation.name,
+      batchDocumentId: allocation.batchDocumentId ?? "",
+      batchNumber: allocation.batchNumber,
+      qty: allocation.qty,
+      scannedQty: 0,
+      checked: false,
+    }),
+  );
+}
+
+function planBatchAllocations(items, batches, now) {
+  const instant = now instanceof Date ? now : new Date(now);
+  if (!Number.isFinite(instant.getTime())) {
+    throw new Error("Inventory allocation time is invalid.");
+  }
+  const itemBySlug = new Map();
+  for (const item of itemsInLockOrder(items)) {
+    if (itemBySlug.has(item.slug)) {
+      throw new Error("Duplicate membership checkout product.");
+    }
+    itemBySlug.set(item.slug, item);
+  }
+  for (const batch of batches) {
+    const item = itemBySlug.get(batch.slug);
+    if (batch.status === "active" && item &&
+        (batch.productDocumentId !== item.productDocumentId ||
+         batch.sku !== item.sku)) {
+      throw new Error("Inventory batch binding is invalid.");
+    }
+  }
+  const allocations = [];
+  for (const item of itemBySlug.values()) {
+    let remaining = item.qty;
+    const usable = batches
+      .filter((batch) =>
+        batch.status === "active" &&
+        batch.slug === item.slug &&
+        (!batch.expiryDate || new Date(batch.expiryDate) >= instant))
+      .sort((left, right) => {
+        const expiry = String(left.expiryDate ?? "")
+          .localeCompare(String(right.expiryDate ?? ""));
+        return expiry || String(left.documentId)
+          .localeCompare(String(right.documentId));
+      });
+    for (const batch of usable) {
+      const quantity = Number(batch.quantity);
+      const reservedQuantity = Number(batch.reservedQuantity ?? 0);
+      if (!Number.isSafeInteger(quantity) || quantity < 0 ||
+          !Number.isSafeInteger(reservedQuantity) ||
+          reservedQuantity < 0 || reservedQuantity > quantity) {
+        throw new Error("Inventory batch quantity is invalid.");
+      }
+      const take = Math.min(remaining, quantity - reservedQuantity);
+      if (take <= 0) continue;
+      batch.reservedQuantity = reservedQuantity + take;
+      allocations.push({
+        productDocumentId: item.productDocumentId,
+        slug: item.slug,
+        sku: item.sku,
+        name: item.name,
+        batchDocumentId: batch.documentId,
+        batchNumber: batch.batchNumber,
+        ...(batch.productionDate
+          ? { productionDate: batch.productionDate }
+          : {}),
+        ...(batch.expiryDate ? { expiryDate: batch.expiryDate } : {}),
+        qty: take,
+      });
+      remaining -= take;
+      if (remaining === 0) break;
+    }
+    if (remaining > 0) {
+      if (batches.some((batch) => batch.slug === item.slug)) {
+        throw new Error("Insufficient batch stock.");
+      }
+      allocations.push({
+        productDocumentId: item.productDocumentId,
+        slug: item.slug,
+        sku: item.sku,
+        name: item.name,
+        batchDocumentId: null,
+        batchNumber: "LEGACY-STOCK",
+        qty: remaining,
+      });
+    }
+  }
+  return allocations;
+}
+
 function formatShippingAddress(address) {
   const unit = address.unit ? `, ap. ${address.unit}` : "";
   const county = address.subdivisionCode ? `, ${address.subdivisionCode}` : "";
@@ -83,6 +177,11 @@ function pendingOrderMatchesCheckout(order, checkout) {
     order.discountCents === 0 &&
     order.totalCents === checkout.totals.totalMinor &&
     same(order.items, checkout.items) &&
+    same(order.batchAllocations, checkout.batchAllocations) &&
+    same(
+      order.fulfilmentChecklist,
+      fulfilmentChecklist(checkout.batchAllocations),
+    ) &&
     (order.shippingAddressText ?? "") === (shipping.shippingAddressText ?? "") &&
     same(order.shippingAddress, shipping.shippingAddress) &&
     (!shipping.quote || same(order.shippingSnapshot, shipping));
@@ -119,7 +218,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
       throw new Error("Checkout credit binding is invalid.");
     }
     if (credit.status === "reserved") {
-      await tx.releaseStock(checkout.items);
+      await tx.releaseStock(checkout.items, checkout.batchAllocations);
       await tx.releaseCredits(credit);
     } else if (credit.status !== "release") {
       throw new Error("Checkout credit is already settled.");
@@ -166,30 +265,59 @@ function createMembershipCheckoutService(adapter, env = process.env) {
         const authoritativeProducts = [];
         for (const requested of itemsInLockOrder(input.items)) {
           const qty = positive(requested.qty, "qty");
-          const product = await tx.lockProductBySlug(requested.slug);
+          const product = tx.findProductBySlug
+            ? await tx.findProductBySlug(requested.slug)
+            : await tx.lockProductBySlug(requested.slug);
           if (!product || !membership.eligibleProductSlugs.includes(product.slug)) {
             throw new Error("Product is not eligible.");
           }
           const creditCost = positive(product.creditCost, "creditCost");
           const unitPriceMinor = positive(product.priceCents, "priceCents");
+          const sku = typeof product.sku === "string" ? product.sku.trim() : "";
+          const name = typeof product.name === "string" ? product.name.trim() : "";
+          if (!sku || !name) {
+            throw new Error("Authoritative product packing identity is invalid.");
+          }
           const stockIdentity = {
             documentId: product.documentId,
             ...(Number.isSafeInteger(product.id) && product.id > 0
               ? { rowId: product.id }
               : {}),
           };
-          await tx.reserveStock(stockIdentity, qty);
           coveredMerchandiseMinor = add(coveredMerchandiseMinor, multiply(qty, unitPriceMinor, "covered merchandise"), "covered merchandise");
           creditsRequired = add(creditsRequired, multiply(qty, creditCost, "credits"), "credits");
           authoritativeItems.push({
             productDocumentId: product.documentId, slug: product.slug,
-            qty, unitPriceMinor, creditCost,
+            sku, name, qty, unitPriceMinor, creditCost,
             ...(stockIdentity.rowId ? { productRowId: stockIdentity.rowId } : {}),
           });
           authoritativeProducts.push(product);
         }
         if (!authoritativeItems.length) throw new Error("Cart is empty.");
         if (creditsRequired > membership.ledgerBalance) throw new Error("Insufficient credits.");
+        let batchAllocations;
+        if (tx.reserveInventory) {
+          batchAllocations = await tx.reserveInventory(
+            authoritativeItems,
+            now,
+          );
+        } else {
+          batchAllocations = authoritativeItems.map((item) => ({
+            productDocumentId: item.productDocumentId,
+            slug: item.slug,
+            sku: item.sku,
+            name: item.name,
+            batchDocumentId: null,
+            batchNumber: "LEGACY-STOCK",
+            qty: item.qty,
+          }));
+          for (const item of authoritativeItems) {
+            await tx.reserveStock({
+              documentId: item.productDocumentId,
+              rowId: item.productRowId,
+            }, item.qty);
+          }
+        }
         let currency = "EUR";
         let shippingSnapshot = input.shippingSnapshot ?? {};
         let shippingMinor;
@@ -242,6 +370,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           membershipDocumentId: membership.documentId,
           currency,
           items: authoritativeItems,
+          batchAllocations,
           totals: {
             merchandiseMinor: 0, coveredMerchandiseMinor, creditsRequired,
             shippingMinor, totalMinor: shippingMinor,
@@ -282,6 +411,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           error.compensated = true;
           throw error;
         }
+        await tx.lockReservedInventory?.(checkout.batchAllocations);
         await revalidateShipping(tx, checkout, now);
         if (checkout.orderDocumentId) {
           const order = await tx.lockOrder(checkout.orderDocumentId);
@@ -338,6 +468,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           error.compensated = true;
           throw error;
         }
+        await tx.lockReservedInventory?.(checkout.batchAllocations);
         await revalidateShipping(tx, checkout, now);
         let order = input.orderDocumentId
           ? await tx.lockOrder(input.orderDocumentId)
@@ -377,7 +508,10 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           if (!order || order.customerDocumentId !== checkout.customerDocumentId ||
               order.checkoutReference !== checkout.checkoutReference ||
               order.status !== "paid") throw new Error("Payment order binding failed.");
-          await tx.consumeStock(checkout.items);
+           await tx.consumeStock(
+             checkout.items,
+             checkout.batchAllocations,
+           );
           await tx.redeemCredits(credit, order.documentId);
           const updated = await tx.finalizeOrder(order.documentId, {
             subtotalCents: 0, discountCents: 0,
@@ -432,7 +566,7 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             order: updated,
           };
         } catch (error) {
-          await tx.releaseStock(checkout.items);
+          await tx.releaseStock(checkout.items, checkout.batchAllocations);
           await tx.releaseCredits(credit);
           if (order) await tx.failOrder(order.documentId, "Membership redemption failed.");
           await tx.setCheckoutStatus(checkout.checkoutReference, "failed");
@@ -487,6 +621,7 @@ function createMemoryMembershipCheckoutAdapter(options = {}) {
   const adapter = {
     memberships: new Map((options.memberships ?? []).map((x) => [x.documentId, structuredClone(x)])),
     products: new Map((options.products ?? []).map((x) => [x.documentId, structuredClone(x)])),
+    batches: new Map((options.batches ?? []).map((x) => [x.documentId, structuredClone(x)])),
     stock: new Map((options.products ?? []).map((x) => [x.documentId, x.stock])),
     checkouts: new Map(),
     creditReservations: new Map(),
@@ -504,6 +639,7 @@ function createMemoryMembershipCheckoutAdapter(options = {}) {
       await prior;
       const snapshots = {
         stock: structuredClone([...adapter.stock]),
+        batches: structuredClone([...adapter.batches]),
         checkouts: structuredClone([...adapter.checkouts]),
         credits: structuredClone([...adapter.creditReservations]),
         orders: structuredClone([...adapter.orders]),
@@ -513,6 +649,7 @@ function createMemoryMembershipCheckoutAdapter(options = {}) {
         // Failure compensation is an intentional committed terminal state.
         if (!error.compensated) {
           adapter.stock = new Map(snapshots.stock);
+          adapter.batches = new Map(snapshots.batches);
           adapter.checkouts = new Map(snapshots.checkouts);
           adapter.creditReservations = new Map(snapshots.credits);
           adapter.orders = new Map(snapshots.orders);
@@ -522,6 +659,11 @@ function createMemoryMembershipCheckoutAdapter(options = {}) {
           adapter.checkouts.set(winner.checkoutReference, structuredClone(winner));
           for (const item of winner.items) {
             adapter.stock.set(item.productDocumentId, adapter.stock.get(item.productDocumentId) - item.qty);
+          }
+          for (const allocation of winner.batchAllocations ?? []) {
+            if (!allocation.batchDocumentId) continue;
+            const batch = adapter.batches.get(allocation.batchDocumentId);
+            if (batch) batch.reservedQuantity += allocation.qty;
           }
           adapter.creditReservations.set(winner.checkoutReference, {
             membershipDocumentId: winner.membershipDocumentId,
@@ -572,6 +714,7 @@ function strapiTx(strapi, query, withTrx, trx) {
   const checkoutQ = query("api::membership-checkout.membership-checkout");
   const ledgerQ = query("api::membership-credit-entry.membership-credit-entry");
   const orderQ = query("api::order.order");
+  const batchQ = query("api::inventory-batch.inventory-batch");
   const productLocalized =
     strapi.contentTypes?.["api::product.product"]?.pluginOptions?.i18n?.localized === true;
   const productLocale = productLocalized
@@ -585,6 +728,45 @@ function strapiTx(strapi, query, withTrx, trx) {
   const lock = (table, documentId) => strapi.db.connection(table)
     .where({ document_id: documentId }).transacting(trx).forUpdate();
   const findCheckout = (reference) => checkoutQ.findOne(withTrx(trx, { where: { checkoutReference: reference } }));
+  async function findPublishedProduct(slug) {
+    if (productLocalized && !productLocale) {
+      throw new Error("Authoritative membership product locale is required.");
+    }
+    const products = await productQ.findMany(withTrx(trx, {
+      where: publishedProductWhere({ slug }),
+    }));
+    if (products.length !== 1) {
+      throw new Error("Authoritative published membership product is missing or ambiguous.");
+    }
+    const product = products[0];
+    if (!Number.isSafeInteger(product?.id) ||
+        product.id <= 0 ||
+        !product.documentId ||
+        !Number.isFinite(new Date(product.publishedAt).getTime()) ||
+        (productLocalized && product.locale !== productLocale)) {
+      throw new Error("Authoritative published membership product is missing or ambiguous.");
+    }
+    return product;
+  }
+  async function lockAllocationBatches(batchAllocations) {
+    const documentIds = [...new Set(
+      (batchAllocations ?? [])
+        .map((allocation) => allocation.batchDocumentId)
+        .filter(Boolean),
+    )].sort();
+    const rows = new Map();
+    for (const documentId of documentIds) {
+      await lock("inventory_batches", documentId);
+      const batch = await batchQ.findOne(withTrx(trx, {
+        where: { documentId },
+      }));
+      if (!batch) {
+        throw new Error("Reserved inventory batch binding is invalid.");
+      }
+      rows.set(documentId, batch);
+    }
+    return rows;
+  }
   return {
     findCheckout,
     async lockCheckout(reference) {
@@ -609,24 +791,9 @@ function strapiTx(strapi, query, withTrx, trx) {
         eligibleProductSlugs: membership.planSnapshot?.eligibleProductSlugs ?? [],
       };
     },
+    findProductBySlug: findPublishedProduct,
     async lockProductBySlug(slug) {
-      if (productLocalized && !productLocale) {
-        throw new Error("Authoritative membership product locale is required.");
-      }
-      const products = await productQ.findMany(withTrx(trx, {
-        where: publishedProductWhere({ slug }),
-      }));
-      if (products.length !== 1) {
-        throw new Error("Authoritative published membership product is missing or ambiguous.");
-      }
-      const product = products[0];
-      if (!Number.isSafeInteger(product?.id) ||
-          product.id <= 0 ||
-          !product.documentId ||
-          !Number.isFinite(new Date(product.publishedAt).getTime()) ||
-          (productLocalized && product.locale !== productLocale)) {
-        throw new Error("Authoritative published membership product is missing or ambiguous.");
-      }
+      const product = await findPublishedProduct(slug);
       await strapi.db.connection("products")
         .where({ id: product.id })
         .transacting(trx)
@@ -646,6 +813,78 @@ function strapiTx(strapi, query, withTrx, trx) {
       }
       return locked;
     },
+    async reserveInventory(items, now) {
+      const slugs = items.map((item) => item.slug);
+      const candidates = await batchQ.findMany(withTrx(trx, {
+        where: { slug: { $in: slugs } },
+        orderBy: [{ expiryDate: "asc" }, { documentId: "asc" }],
+        limit: 501,
+      }));
+      if (candidates.length > 500) {
+        throw new Error("Membership inventory batch selection is not bounded.");
+      }
+      const batchIds = [...new Set(
+        candidates.map((batch) => batch.documentId).filter(Boolean),
+      )].sort();
+      for (const documentId of batchIds) {
+        await lock("inventory_batches", documentId);
+      }
+      const lockedBatches = batchIds.length
+        ? await batchQ.findMany(withTrx(trx, {
+            where: { documentId: { $in: batchIds } },
+            limit: 500,
+          }))
+        : [];
+      if (lockedBatches.length !== batchIds.length) {
+        throw new Error("Inventory batch binding changed.");
+      }
+      const rowIds = items
+        .map((item) => item.productRowId)
+        .sort((left, right) => Number(left) - Number(right));
+      if (rowIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+          new Set(rowIds).size !== rowIds.length) {
+        throw new Error("Authoritative published membership product row is required.");
+      }
+      for (const rowId of rowIds) {
+        await strapi.db.connection("products")
+          .where({ id: rowId })
+          .transacting(trx)
+          .forUpdate()
+          .first();
+      }
+      for (const item of itemsInLockOrder(items)) {
+        const locked = await productQ.findOne(withTrx(trx, {
+          where: publishedProductWhere({ id: item.productRowId }),
+        }));
+        if (!locked ||
+            locked.documentId !== item.productDocumentId ||
+            locked.slug !== item.slug ||
+            locked.sku !== item.sku) {
+          throw new Error("Authoritative published membership product changed.");
+        }
+      }
+      const allocations = planBatchAllocations(items, lockedBatches, now);
+      for (const item of itemsInLockOrder(items)) {
+        const updated = await strapi.db.connection("products")
+          .where({ id: item.productRowId })
+          .andWhere("stock", ">=", item.qty)
+          .transacting(trx)
+          .decrement("stock", item.qty);
+        if (Number(updated) !== 1) throw new Error("Insufficient stock.");
+      }
+      for (const batch of lockedBatches) {
+        const before = candidates.find((row) =>
+          row.documentId === batch.documentId);
+        if (!before ||
+            batch.reservedQuantity === before.reservedQuantity) continue;
+        await batchQ.update(withTrx(trx, {
+          where: { documentId: batch.documentId },
+          data: { reservedQuantity: batch.reservedQuantity },
+        }));
+      }
+      return allocations;
+    },
+    lockReservedInventory: lockAllocationBatches,
     async reserveStock(identity, qty) {
       if (!Number.isSafeInteger(identity?.rowId) || identity.rowId <= 0) {
         throw new Error("Authoritative published membership product row is required.");
@@ -688,12 +927,17 @@ function strapiTx(strapi, query, withTrx, trx) {
         subtotalCents: 0, shippingCents: checkout.totals.shippingMinor,
         discountCents: 0, totalCents: checkout.totals.shippingMinor,
         items: checkout.items,
+        batchAllocations: checkout.batchAllocations,
+        fulfilmentChecklist: fulfilmentChecklist(checkout.batchAllocations),
         reservationToken: checkout.checkoutReference,
         itemsSummary: JSON.stringify(checkout.items, null, 2),
         shippingAddressText: shipping.shippingAddressText || "",
         shippingAddress: shipping.shippingAddress,
         shippingSnapshot: shipping,
         estimatedDelivery: shipping.quote ? undefined : shipping.estimatedDelivery,
+        trackingCapabilityStatus: "pending_delivery",
+        trackingCapabilityVersion: 0,
+        trackingCapabilityReviewedAt: now.toISOString(),
       } }));
     },
     async createPendingOrder(checkout, metadata) {
@@ -711,6 +955,8 @@ function strapiTx(strapi, query, withTrx, trx) {
         subtotalCents: 0, shippingCents: checkout.totals.shippingMinor,
         discountCents: 0, totalCents: checkout.totals.totalMinor,
         items: checkout.items,
+        batchAllocations: checkout.batchAllocations,
+        fulfilmentChecklist: fulfilmentChecklist(checkout.batchAllocations),
         reservationToken: checkout.checkoutReference,
         itemsSummary: JSON.stringify(checkout.items, null, 2),
         shippingAddressText: shipping.shippingAddressText || "",
@@ -748,6 +994,9 @@ function strapiTx(strapi, query, withTrx, trx) {
             },
           } : {}),
         },
+        trackingCapabilityStatus: "pending_delivery",
+        trackingCapabilityVersion: 0,
+        trackingCapabilityReviewedAt: now.toISOString(),
       } }));
     },
     bindCheckoutOrder: (reference, orderDocumentId) => checkoutQ.update(withTrx(trx, {
@@ -763,7 +1012,36 @@ function strapiTx(strapi, query, withTrx, trx) {
       }));
       return { ...credit, status: settled ? settled.kind : "reserved" };
     },
-    consumeStock: async () => undefined,
+    async consumeStock(_items, batchAllocations) {
+      const batches = await lockAllocationBatches(batchAllocations);
+      for (const allocation of batchAllocations ?? []) {
+        if (!allocation.batchDocumentId) continue;
+        const batch = batches.get(allocation.batchDocumentId);
+        if (batch.productDocumentId !== allocation.productDocumentId ||
+            batch.slug !== allocation.slug ||
+            batch.sku !== allocation.sku ||
+            batch.batchNumber !== allocation.batchNumber ||
+            !Number.isSafeInteger(batch.quantity) ||
+            !Number.isSafeInteger(batch.reservedQuantity) ||
+            batch.quantity < allocation.qty ||
+            batch.reservedQuantity < allocation.qty) {
+          throw new Error("Reserved inventory batch binding is invalid.");
+        }
+        const quantity = batch.quantity - allocation.qty;
+        const reservedQuantity =
+          batch.reservedQuantity - allocation.qty;
+        await batchQ.update(withTrx(trx, {
+          where: { documentId: batch.documentId },
+          data: {
+            quantity,
+            reservedQuantity,
+            status: quantity === 0 ? "depleted" : batch.status,
+          },
+        }));
+        batch.quantity = quantity;
+        batch.reservedQuantity = reservedQuantity;
+      }
+    },
     async redeemCredits(credit, orderDocumentId) {
       await ledgerQ.create(withTrx(trx, { data: {
         entryId: crypto.randomUUID(),
@@ -778,7 +1056,27 @@ function strapiTx(strapi, query, withTrx, trx) {
       await orderQ.update(withTrx(trx, { where: { documentId: id }, data: values }));
       return orderQ.findOne(withTrx(trx, { where: { documentId: id } }));
     },
-    async releaseStock(items) {
+    async releaseStock(items, batchAllocations) {
+      const batches = await lockAllocationBatches(batchAllocations);
+      for (const allocation of batchAllocations ?? []) {
+        if (!allocation.batchDocumentId) continue;
+        const batch = batches.get(allocation.batchDocumentId);
+        if (batch.productDocumentId !== allocation.productDocumentId ||
+            batch.slug !== allocation.slug ||
+            batch.sku !== allocation.sku ||
+            batch.batchNumber !== allocation.batchNumber ||
+            !Number.isSafeInteger(batch.reservedQuantity) ||
+            batch.reservedQuantity < allocation.qty) {
+          throw new Error("Reserved inventory batch binding is invalid.");
+        }
+        const reservedQuantity =
+          batch.reservedQuantity - allocation.qty;
+        await batchQ.update(withTrx(trx, {
+          where: { documentId: batch.documentId },
+          data: { reservedQuantity },
+        }));
+        batch.reservedQuantity = reservedQuantity;
+      }
       for (const item of items) {
         const exactRow =
           Number.isSafeInteger(item.productRowId) && item.productRowId > 0;
@@ -826,6 +1124,25 @@ function memoryTx(adapter, options) {
     lockCheckout: async (id) => adapter.checkouts.get(id),
     lockMembership: async (id) => adapter.memberships.get(id),
     lockProductBySlug: async (slug) => productBySlug(slug),
+    lockReservedInventory: async () => undefined,
+    async reserveInventory(items, now) {
+      for (const item of items) {
+        const available = adapter.stock.get(item.productDocumentId) ?? 0;
+        if (available < item.qty) throw new Error("Insufficient stock.");
+      }
+      const allocations = planBatchAllocations(
+        items,
+        [...adapter.batches.values()],
+        now,
+      );
+      for (const item of items) {
+        adapter.stock.set(
+          item.productDocumentId,
+          adapter.stock.get(item.productDocumentId) - item.qty,
+        );
+      }
+      return structuredClone(allocations);
+    },
     async reserveStock(identity, qty) {
       const available = adapter.stock.get(identity.documentId) ?? 0;
       if (available < qty) throw new Error("Insufficient stock.");
@@ -846,23 +1163,42 @@ function memoryTx(adapter, options) {
       return value;
     },
     lockOrder: async (id) => adapter.orders.get(id),
-    async createPaidOrder(checkout) {
+    async createPaidOrder(checkout, metadata = {}) {
       if (options.failCreateOrder) throw new Error("payment order creation failed");
-      const documentId = `order:${checkout.checkoutReference}`;
-      const order = {
-        documentId,
-        customerDocumentId: checkout.customerDocumentId,
-        checkoutReference: checkout.checkoutReference,
-        status: "paid",
-      };
-      adapter.orders.set(documentId, order);
-      return order;
-    },
-    async createPendingOrder(checkout) {
       const documentId = `order:${checkout.checkoutReference}`;
       const shipping = checkout.shippingSnapshot ?? {};
       const order = {
         documentId,
+        orderNumber: metadata.orderNumber ?? `JMR-MEMBER-${adapter.orders.size + 1}`,
+        email: shipping.email || metadata.email || "member@example.com",
+        customerDocumentId: checkout.customerDocumentId,
+        membershipDocumentId: checkout.membershipDocumentId,
+        checkoutReference: checkout.checkoutReference,
+        status: "paid",
+        currency: checkout.currency.toLowerCase(),
+        subtotalCents: 0,
+        shippingCents: checkout.totals.shippingMinor,
+        discountCents: 0,
+        totalCents: checkout.totals.totalMinor,
+        items: structuredClone(checkout.items),
+        batchAllocations: structuredClone(checkout.batchAllocations),
+        fulfilmentChecklist: fulfilmentChecklist(checkout.batchAllocations),
+        shippingAddressText: shipping.shippingAddressText || "",
+        shippingAddress: structuredClone(shipping.shippingAddress),
+        shippingSnapshot: structuredClone(shipping),
+        trackingCapabilityStatus: "pending_delivery",
+        trackingCapabilityVersion: 0,
+      };
+      adapter.orders.set(documentId, order);
+      return order;
+    },
+    async createPendingOrder(checkout, metadata = {}) {
+      const documentId = `order:${checkout.checkoutReference}`;
+      const shipping = checkout.shippingSnapshot ?? {};
+      const order = {
+        documentId,
+        orderNumber: metadata.orderNumber ?? `JMR-MEMBER-${adapter.orders.size + 1}`,
+        email: shipping.email || metadata.email || "member@example.com",
         customerDocumentId: checkout.customerDocumentId,
         membershipDocumentId: checkout.membershipDocumentId,
         checkoutReference: checkout.checkoutReference,
@@ -873,6 +1209,8 @@ function memoryTx(adapter, options) {
         discountCents: 0,
         totalCents: checkout.totals.totalMinor,
         items: structuredClone(checkout.items),
+        batchAllocations: structuredClone(checkout.batchAllocations),
+        fulfilmentChecklist: fulfilmentChecklist(checkout.batchAllocations),
         shippingAddressText: shipping.shippingAddressText || "",
         shippingAddress: structuredClone(shipping.shippingAddress),
         shippingSnapshot: structuredClone(shipping),
@@ -905,6 +1243,8 @@ function memoryTx(adapter, options) {
             currency: "RON",
           },
         } : {}) },
+        trackingCapabilityStatus: "pending_delivery",
+        trackingCapabilityVersion: 0,
       };
       adapter.orders.set(documentId, order);
       return order;
@@ -913,7 +1253,20 @@ function memoryTx(adapter, options) {
       adapter.checkouts.get(id).orderDocumentId = orderDocumentId;
     },
     lockCreditReservation: async (id) => adapter.creditReservations.get(id),
-    consumeStock: async () => undefined,
+    async consumeStock(_items, batchAllocations) {
+      for (const allocation of batchAllocations ?? []) {
+        if (!allocation.batchDocumentId) continue;
+        const batch = adapter.batches.get(allocation.batchDocumentId);
+        if (!batch ||
+            batch.quantity < allocation.qty ||
+            batch.reservedQuantity < allocation.qty) {
+          throw new Error("Reserved inventory batch binding is invalid.");
+        }
+        batch.quantity -= allocation.qty;
+        batch.reservedQuantity -= allocation.qty;
+        if (batch.quantity === 0) batch.status = "depleted";
+      }
+    },
     async redeemCredits(credit) {
       if (options.failRedeem) {
         const error = new Error("redeem failed");
@@ -926,8 +1279,21 @@ function memoryTx(adapter, options) {
       Object.assign(adapter.orders.get(id), values);
       return adapter.orders.get(id);
     },
-    async releaseStock(items) {
-      for (const item of items) adapter.stock.set(item.productDocumentId, adapter.stock.get(item.productDocumentId) + item.qty);
+    async releaseStock(items, batchAllocations) {
+      for (const allocation of batchAllocations ?? []) {
+        if (!allocation.batchDocumentId) continue;
+        const batch = adapter.batches.get(allocation.batchDocumentId);
+        if (!batch || batch.reservedQuantity < allocation.qty) {
+          throw new Error("Reserved inventory batch binding is invalid.");
+        }
+        batch.reservedQuantity -= allocation.qty;
+      }
+      for (const item of items) {
+        adapter.stock.set(
+          item.productDocumentId,
+          adapter.stock.get(item.productDocumentId) + item.qty,
+        );
+      }
     },
     async releaseCredits(credit) { credit.status = "released"; },
     async failOrder(id, reason) {

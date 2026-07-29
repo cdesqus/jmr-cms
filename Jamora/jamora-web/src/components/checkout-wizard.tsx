@@ -104,6 +104,7 @@ export function CheckoutWizard({
   const capabilityRef = useRef<
     { token: string; expiresAt: string } | undefined
   >(undefined);
+  const reservationAttemptRef = useRef<string | undefined>(undefined);
   const selectedDigestRef = useRef("");
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const step = state.step as CheckoutStep;
@@ -177,6 +178,7 @@ export function CheckoutWizard({
 
   function clearGuestAuthority() {
     capabilityRef.current = undefined;
+    reservationAttemptRef.current = undefined;
     dispatch({ type: "capability", value: undefined });
     clearSelectedQuote();
   }
@@ -216,11 +218,13 @@ export function CheckoutWizard({
       return current.token;
     }
     if (current) clearGuestAuthority();
+    reservationAttemptRef.current ??= crypto.randomUUID();
     const response = await fetch("/api/jamora/inventory/reserve", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         email: contact.email.trim(),
+        reservationIdempotencyKey: reservationAttemptRef.current,
         customerName: contact.name.trim(),
         items,
       }),

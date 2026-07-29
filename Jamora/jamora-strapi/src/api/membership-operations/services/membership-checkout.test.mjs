@@ -6,6 +6,18 @@ import {
   createStrapiMembershipCheckoutAdapter,
 } from "./membership-checkout.cjs";
 import { quoteShipping } from "../../shipping-operations/services/shipping-domain.cjs";
+import {
+  createMemoryShipmentAdapter,
+  createMockShippingProvider,
+  createShipmentTransactions,
+} from "../../shipping-operations/services/shipment-transaction.cjs";
+import {
+  claimCustomerTrackingCapability,
+  createMemoryTrackingCapabilityAdapter,
+} from "../../shipping-operations/services/tracking-capability-reissue.cjs";
+import {
+  createPublicOrderTrackingQuery,
+} from "../../analytics/services/public-order-tracking.cjs";
 
 const membership = {
   documentId: "membership-1",
@@ -18,6 +30,7 @@ const membership = {
 };
 const product = {
   documentId: "product-1", slug: "beras-kencur",
+  sku: "BK-001", name: "Beras Kencur",
   priceCents: 3000, creditCost: 1, stock: 2, netWeight: "80 g",
 };
 const reserve = {
@@ -327,6 +340,220 @@ test("persists authoritative customer, membership, stock, credit, and totals bin
     adapter.checkouts.get(reserve.checkoutReference).expiresAt,
     "2026-07-24T00:10:00.000Z",
   );
+});
+
+test("member reservation persists FEFO batches, a packable checklist, and pending tracking delivery", async () => {
+  const batch = {
+    documentId: "batch-1",
+    productDocumentId: product.documentId,
+    slug: product.slug,
+    sku: product.sku,
+    batchNumber: "LOT-2026-01",
+    quantity: 2,
+    reservedQuantity: 0,
+    expiryDate: "2027-01-01",
+    status: "active",
+  };
+  const { adapter, service } = fixture({ batches: [batch] });
+
+  const checkout = await service.reserve(reserve);
+  assert.deepEqual(checkout.batchAllocations, [{
+    productDocumentId: product.documentId,
+    slug: product.slug,
+    sku: product.sku,
+    name: product.name,
+    batchDocumentId: batch.documentId,
+    batchNumber: batch.batchNumber,
+    expiryDate: batch.expiryDate,
+    qty: 2,
+  }]);
+  assert.equal(adapter.batches.get(batch.documentId).reservedQuantity, 2);
+
+  const prepared = await service.preparePendingOrder({
+    customerDocumentId: reserve.customerDocumentId,
+    checkoutReference: reserve.checkoutReference,
+    idempotencyKey: "member-pending-order",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+    orderMetadata: { email: "customer@example.com" },
+  });
+  assert.deepEqual(
+    prepared.order.batchAllocations,
+    checkout.batchAllocations,
+  );
+  assert.deepEqual(prepared.order.fulfilmentChecklist, [{
+    productId: product.documentId,
+    sku: product.sku,
+    name: product.name,
+    batchDocumentId: batch.documentId,
+    batchNumber: batch.batchNumber,
+    qty: 2,
+    scannedQty: 0,
+    checked: false,
+  }]);
+  assert.equal(
+    prepared.order.trackingCapabilityStatus,
+    "pending_delivery",
+  );
+  assert.equal(prepared.order.trackingCapabilityVersion, 0);
+  assert.equal(JSON.stringify(prepared.order).includes("trk_"), false);
+});
+
+test("membership reservation never relabels unavailable batch stock as legacy stock", async () => {
+  const { service } = fixture({
+    batches: [{
+      documentId: "expired-batch-1",
+      productDocumentId: product.documentId,
+      slug: product.slug,
+      sku: product.sku,
+      batchNumber: "EXPIRED-1",
+      quantity: 2,
+      reservedQuantity: 0,
+      status: "active",
+      expiryDate: "2026-06-01",
+    }],
+  });
+
+  await assert.rejects(
+    service.reserve(reserve),
+    /insufficient batch stock/i,
+  );
+});
+
+test("real member checkout becomes packable, shippable, claimable, and publicly trackable", async () => {
+  const batch = {
+    documentId: "batch-1",
+    productDocumentId: product.documentId,
+    slug: product.slug,
+    sku: product.sku,
+    batchNumber: "LOT-2026-01",
+    quantity: 2,
+    reservedQuantity: 0,
+    expiryDate: "2027-01-01",
+    status: "active",
+  };
+  const shippingAddress = {
+    recipient: "Member Customer",
+    countryCode: "RO",
+    subdivisionCode: "CJ",
+    locality: "Cluj-Napoca",
+    postalCode: "400001",
+    street: "Strada Memorandumului",
+    building: "10",
+  };
+  const quoteSecret = "membership-shipping-secret-at-least-32-bytes";
+  const selection = quoteShipping({
+    address: shippingAddress,
+    items: reserve.items,
+    products: [product],
+  }, { secret: quoteSecret, now: reserve.now })[0];
+  const { adapter, service } = fixture({
+    batches: [batch],
+    env: {
+      SHIPPING_ENABLED: "true",
+      SHIPPING_QUOTE_SECRET: quoteSecret,
+    },
+  });
+  const checkout = await service.reserve({
+    ...reserve,
+    shippingSelection: selection,
+    shippingSnapshot: {
+      customerName: "Member Customer",
+      email: "member@example.com",
+      shippingAddress,
+    },
+  });
+  const prepared = await service.preparePendingOrder({
+    customerDocumentId: reserve.customerDocumentId,
+    checkoutReference: reserve.checkoutReference,
+    idempotencyKey: "member-pending-order",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+  });
+  Object.assign(adapter.orders.get(prepared.order.documentId), {
+    status: "paid",
+    paymentDocumentId: "payment-member",
+  });
+  const finalized = await service.finalize({
+    customerDocumentId: reserve.customerDocumentId,
+    checkoutReference: reserve.checkoutReference,
+    orderDocumentId: prepared.order.documentId,
+    paymentDocumentId: "payment-member",
+    idempotencyKey: "payment:member:settle",
+    now: new Date("2026-07-24T00:06:00.000Z"),
+  });
+  const packedOrder = {
+    ...structuredClone(finalized.order),
+    status: "processing",
+    packedAt: "2026-07-24T00:07:00.000Z",
+    packedBy: "warehouse@example.com",
+    fulfilmentChecklist: finalized.order.fulfilmentChecklist.map((line) => ({
+      ...line,
+      scannedQty: line.qty,
+      checked: true,
+    })),
+  };
+  const shipmentAdapter = createMemoryShipmentAdapter({
+    orders: [packedOrder],
+    payments: [{
+      documentId: "payment-member",
+      status: "paid",
+      subjectType: "order",
+      orderDocumentId: packedOrder.documentId,
+      amountMinor: packedOrder.priceSnapshot.charge.amountMinor,
+      currency: packedOrder.priceSnapshot.charge.currency,
+    }],
+    products: [{
+      ...product,
+      publishedAt: "2026-07-01T00:00:00.000Z",
+    }],
+    batches: [adapter.batches.get(batch.documentId)],
+  });
+  const shipmentTransactions = createShipmentTransactions({
+    adapter: shipmentAdapter,
+    provider: createMockShippingProvider(),
+    capabilitySecret: "member-label-capability-secret-at-least-32-bytes",
+  });
+  const created = await shipmentTransactions.createShipment({
+    orderDocumentId: packedOrder.documentId,
+    actor: "warehouse@example.com",
+    now: new Date("2026-07-24T00:08:00.000Z"),
+  });
+  assert.match(created.shipment.awb, /^JMR\d{18}$/);
+
+  const capabilityAdapter = createMemoryTrackingCapabilityAdapter({
+    orders: [packedOrder],
+    customers: [{
+      documentId: reserve.customerDocumentId,
+      email: "member@example.com",
+      active: true,
+      emailVerifiedAt: "2026-07-01T00:00:00.000Z",
+    }],
+  });
+  const claim = await claimCustomerTrackingCapability({
+    adapter: capabilityAdapter,
+    customerDocumentId: reserve.customerDocumentId,
+    orderDocumentId: packedOrder.documentId,
+    storefrontUrl: "https://shop.example.test",
+    randomBytes: () => Buffer.alloc(32, 9),
+    now: new Date("2026-07-24T00:09:00.000Z"),
+  });
+  const access = new URL(claim.trackingUrl).searchParams.get("access");
+  const storedOrder = capabilityAdapter.orders.get(packedOrder.documentId);
+  const trackingQuery = createPublicOrderTrackingQuery({
+    documents: (uid) => ({
+      async findMany() {
+        if (uid === "api::order.order") return [storedOrder];
+        if (uid === "api::shipment.shipment") {
+          return [...shipmentAdapter.shipments.values()];
+        }
+        if (uid === "api::shipment-event.shipment-event") return [];
+        return [];
+      },
+    }),
+  });
+  const publicOrder = await trackingQuery(storedOrder.orderNumber, access);
+  assert.equal(publicOrder.shipment.trackingNumber, created.shipment.awb);
+  assert.equal(JSON.stringify(storedOrder).includes("trk_"), false);
+  assert.equal(JSON.stringify(capabilityAdapter.audits).includes("trk_"), false);
 });
 
 test("prepares one pending order from authoritative checkout bindings", async () => {

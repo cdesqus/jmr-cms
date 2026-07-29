@@ -175,6 +175,109 @@ test("locks packing inventory in the global batch-before-product order", async (
   assert.deepEqual(adapter.lockLog, ["batches", "products"]);
 });
 
+test("guest, customer, and member persisted quote snapshots create one AWB and private label", async () => {
+  const ownershipCases = [
+    {
+      name: "guest",
+      order: packedOrder({
+        shippingSnapshot: {
+          shippingAddress: packedOrder().shippingAddress,
+          quote: {
+            carrier: "jamora-mock",
+            service: "standard",
+            quoteId: "quote-guest",
+          },
+        },
+      }),
+      payments: [],
+    },
+    {
+      name: "customer",
+      order: packedOrder({
+        paymentDocumentId: "payment-customer",
+        stripeSessionId: null,
+        priceSnapshot: {
+          charge: { amountMinor: 2_090, currency: "RON" },
+        },
+        shippingSnapshot: {
+          shippingAddress: packedOrder().shippingAddress,
+          quote: {
+            carrier: "jamora-mock",
+            service: "standard",
+            quoteId: "quote-customer",
+          },
+        },
+      }),
+      payments: [{
+        documentId: "payment-customer",
+        status: "paid",
+        subjectType: "order",
+        orderDocumentId: "order-1",
+        amountMinor: 2_090,
+        currency: "RON",
+      }],
+    },
+    {
+      name: "member",
+      order: packedOrder({
+        stripeSessionId: null,
+        membershipDocumentId: "membership-1",
+        checkoutReference: "membership-checkout-1",
+        membershipSnapshot: {
+          membershipDocumentId: "membership-1",
+          checkoutReference: "membership-checkout-1",
+        },
+        shippingSnapshot: {
+          shippingAddress: packedOrder().shippingAddress,
+          quote: {
+            carrier: "jamora-mock",
+            service: "standard",
+            quoteId: "quote-member",
+          },
+        },
+      }),
+      payments: [],
+    },
+  ];
+
+  for (const fixture of ownershipCases) {
+    const provider = recordingProvider();
+    const { transactions } = service({
+      orders: [fixture.order],
+      payments: fixture.payments,
+      provider,
+    });
+    const created = await transactions.createShipment({
+      orderDocumentId: fixture.order.documentId,
+      actor: "warehouse@example.test",
+      now: NOW,
+    });
+    const capability = await transactions.createLabelCapability({
+      shipmentDocumentId: created.shipment.documentId,
+      format: "pdf",
+      actor: "warehouse@example.test",
+      now: NOW,
+    });
+    const label = await transactions.downloadLabel({
+      shipmentDocumentId: created.shipment.documentId,
+      capability: capability.capability,
+      format: "pdf",
+      actor: "warehouse@example.test",
+      now: NOW,
+    });
+
+    assert.equal(created.shipment.carrier, "jamora-mock", fixture.name);
+    assert.equal(created.shipment.service, "standard", fixture.name);
+    assert.match(created.shipment.awb, /^AWB-JMR-1001$/, fixture.name);
+    assert.equal(label.contentType, "application/pdf", fixture.name);
+    assert.equal(
+      JSON.stringify({ created, capability }).includes("provider.example"),
+      false,
+      fixture.name,
+    );
+  }
+});
+
 test("packing must exactly bind authoritative order items, batches, products, and scanned quantities", async () => {
   const exact = packedOrder();
   const checklist = exact.fulfilmentChecklist[0];

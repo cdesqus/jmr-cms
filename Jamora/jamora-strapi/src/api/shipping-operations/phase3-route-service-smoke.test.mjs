@@ -383,9 +383,11 @@ test("paid packed warehouse shipment uses private single-use label authorization
       checked: true,
     }],
     shippingSnapshot: {
-      carrier: "jamora-mock",
-      service: "standard",
-      quoteId: "phase3-quote",
+      quote: {
+        carrier: "jamora-mock",
+        service: "standard",
+        quoteId: "phase3-quote",
+      },
     },
     shippingAddress: address,
   };

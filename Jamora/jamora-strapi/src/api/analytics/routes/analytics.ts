@@ -63,6 +63,12 @@ export default {
       config: { auth: false },
     },
     {
+      method: "POST",
+      path: "/jamora/admin/analytics/visit-privacy-purge",
+      handler: "analytics.adminPurgeVisitPrivacy",
+      config: { auth: false },
+    },
+    {
       method: "GET",
       path: "/jamora/admin/orders",
       handler: "analytics.adminOrders",

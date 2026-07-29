@@ -80,10 +80,14 @@ function quoteRadio(container: ParentNode) {
 test("reservation is single-flight and native focus/live state move to Address", async () => {
   const originalFetch = globalThis.fetch;
   let reservationCalls = 0;
+  let reservationIdempotencyKey = "";
   let resolveReservation!: (response: Response) => void;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     if (String(input).includes("/inventory/reserve")) {
       reservationCalls += 1;
+      reservationIdempotencyKey = JSON.parse(
+        String(init?.body ?? "{}"),
+      ).reservationIdempotencyKey;
       return new Promise<Response>((resolve) => {
         resolveReservation = resolve;
       });
@@ -99,6 +103,10 @@ test("reservation is single-flight and native focus/live state move to Address",
       await Promise.resolve();
     });
     assert.equal(reservationCalls, 1);
+    assert.match(
+      reservationIdempotencyKey,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
     assert.equal(continueButton.disabled, true);
 
     resolveReservation(json({

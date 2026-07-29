@@ -214,6 +214,7 @@ test("Phase 1 route and service fixture smoke", async () => {
       }],
       products: [{
         documentId: "product-1", slug: "beras-kencur",
+        sku: "BK-001", name: "Beras Kencur",
         priceCents: 3000, creditCost: 1, stock: 2,
       }],
     });
@@ -238,6 +239,7 @@ test("Phase 1 route and service fixture smoke", async () => {
       }],
       products: [{
         documentId: "product-1", slug: "beras-kencur",
+        sku: "BK-001", name: "Beras Kencur",
         priceCents: 3000, creditCost: 1, stock: 2,
       }],
       failCreateOrder: true,

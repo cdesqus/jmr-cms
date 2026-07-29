@@ -72,6 +72,36 @@ function packingKey(value) {
   ].join("\u0000");
 }
 
+function authoritativeOrderShipping(order) {
+  const snapshot = order?.shippingSnapshot;
+  if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object") {
+    throw new Error("Order shipping carrier is not handled by this provider.");
+  }
+  const quotePresent = Object.hasOwn(snapshot, "quote");
+  const quote = snapshot.quote;
+  const canonicalCarrier = text(quote?.carrier);
+  const canonicalService = text(quote?.service);
+  const legacyCarrier = text(snapshot.carrier);
+  const legacyService = text(snapshot.service);
+  if (quotePresent) {
+    if (!quote || Array.isArray(quote) || typeof quote !== "object" ||
+        !canonicalCarrier || !canonicalService ||
+        (legacyCarrier && legacyCarrier !== canonicalCarrier) ||
+        (legacyService && legacyService !== canonicalService)) {
+      throw new Error("Order shipping snapshot binding is invalid.");
+    }
+    return {
+      carrier: canonicalCarrier,
+      service: canonicalService,
+      legacy: false,
+    };
+  }
+  if (!legacyCarrier || !legacyService) {
+    throw new Error("Order shipping carrier is not handled by this provider.");
+  }
+  return { carrier: legacyCarrier, service: legacyService, legacy: true };
+}
+
 function assertExactPacking(order, products, batches) {
   const items = Array.isArray(order?.items) ? order.items : [];
   const allocations = Array.isArray(order?.batchAllocations)
@@ -235,8 +265,8 @@ function assertPaidAndPacked(order, payment, providerCarrier, inventory) {
     Boolean(text(order.packedBy));
   if (!packed) throw new Error("A completed packed order is required to create a shipment.");
   assertExactPacking(order, inventory?.products, inventory?.batches);
-  if (text(order.shippingSnapshot?.carrier) !== providerCarrier ||
-      !text(order.shippingSnapshot?.service)) {
+  const shipping = authoritativeOrderShipping(order);
+  if (shipping.carrier !== providerCarrier) {
     throw new Error("Order shipping carrier is not handled by this provider.");
   }
 }
@@ -302,6 +332,7 @@ function shippedOrderPatch(order, shipment, actor, occurredAt) {
 }
 
 function existingShipmentReplay(order, shipment, providerCarrier) {
+  const shipping = authoritativeOrderShipping(order);
   let validated;
   try {
     validated = assertProviderShipment(shipment, providerCarrier);
@@ -314,8 +345,8 @@ function existingShipmentReplay(order, shipment, providerCarrier) {
       text(shipment.provider) !== providerCarrier ||
       text(shipment.carrier) !== providerCarrier ||
       validated.carrier !== providerCarrier ||
-      text(shipment.service) !== text(order.shippingSnapshot?.service) ||
-      text(order.shippingSnapshot?.carrier) !== providerCarrier) {
+      text(shipment.service) !== shipping.service ||
+      shipping.carrier !== providerCarrier) {
     throw new Error("Existing shipment binding is invalid.");
   }
 
@@ -471,6 +502,7 @@ function createShipmentTransactions({
           const batches = await tx.lockPackingBatches(batchIds);
           const products = await tx.lockPackingProducts(productIds);
           assertPaidAndPacked(order, payment, carrier, { products, batches });
+          const shipping = authoritativeOrderShipping(order);
           const providerResult = await provider.createShipment(
             structuredClone(order),
           );
@@ -484,7 +516,7 @@ function createShipmentTransactions({
             orderNumber: text(order.orderNumber) || order.documentId,
             provider: carrier,
             carrier: providerShipment.carrier,
-            service: text(order.shippingSnapshot.service),
+            service: shipping.service,
             awb: providerShipment.awb,
             labelReference: providerShipment.labelReference,
             labelFormats: providerShipment.labelFormats,
@@ -689,10 +721,11 @@ function createMockShippingProvider() {
     carrier: "jamora-mock",
     provider: "jamora-mock",
     async createShipment(order) {
+      const shipping = authoritativeOrderShipping(order);
       const basis = JSON.stringify({
         order: order.documentId,
         number: order.orderNumber,
-        service: order.shippingSnapshot?.service,
+        service: shipping.service,
       });
       const digest = createHash("sha256").update(basis).digest();
       const numericAwb = (

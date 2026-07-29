@@ -1,4 +1,10 @@
 type UnknownRecord = Record<string, any>;
+import {
+  allocateRonLineTotals,
+  authoritativeRonTotals,
+  convertEurMinorToRonMinor,
+  parseDecimalRate,
+} from "../../shipping-operations/services/ron-money.cjs";
 type CheckoutProduct = {
   documentId?: string;
   slug?: string;
@@ -191,16 +197,8 @@ function createDemoPriceSnapshot(
     throw new TypeError("EUR minor amount must be a non-negative safe integer");
   }
   const rate = string(options.rate, process.env.DEMO_EUR_RON_RATE ?? DEFAULT_DEMO_EUR_RON_RATE);
-  const match = /^(\d+)(?:\.(\d+))?$/.exec(rate);
-  if (!match) throw new TypeError("DEMO_EUR_RON_RATE must be a positive decimal");
-  const decimals = match[2] ?? "";
-  const denominator = BigInt(10) ** BigInt(decimals.length);
-  const numerator = BigInt(match[1]) * denominator + BigInt(decimals || "0");
-  if (numerator <= BigInt(0)) throw new TypeError("DEMO_EUR_RON_RATE must be positive");
-  const ronMinor = Number(
-    (BigInt(eurMinor) * numerator + denominator / BigInt(2)) / denominator,
-  );
-  if (!Number.isSafeInteger(ronMinor)) throw new RangeError("RON amount exceeds safe integer range");
+  const parsed = parseDecimalRate(rate);
+  const ronMinor = convertEurMinorToRonMinor(eurMinor, parsed);
   return {
     reference: { amountMinor: eurMinor, currency: "EUR" },
     charge: { amountMinor: ronMinor, currency: "RON" },
@@ -211,14 +209,10 @@ function createDemoPriceSnapshot(
 }
 
 function decimalRate(value: unknown) {
-  const rate = string(value, process.env.DEMO_EUR_RON_RATE ?? DEFAULT_DEMO_EUR_RON_RATE);
-  const match = /^(\d+)(?:\.(\d+))?$/.exec(rate);
-  if (!match) throw new TypeError("DEMO_EUR_RON_RATE must be a positive decimal");
-  const decimals = match[2] ?? "";
-  const denominator = BigInt(10) ** BigInt(decimals.length);
-  const numerator = BigInt(match[1]) * denominator + BigInt(decimals || "0");
-  if (numerator <= BigInt(0)) throw new TypeError("DEMO_EUR_RON_RATE must be positive");
-  return { rate, numerator, denominator };
+  return parseDecimalRate(
+    value,
+    process.env.DEMO_EUR_RON_RATE ?? DEFAULT_DEMO_EUR_RON_RATE,
+  );
 }
 
 function applyAuthoritativeRonShipping(
@@ -246,8 +240,9 @@ function applyAuthoritativeRonShipping(
     throw new TypeError("Authoritative checkout pricing is invalid");
   }
   const parsed = decimalRate(options.rate);
-  const merchandiseEurMinor = pricing.subtotalCents - pricing.discountCents;
-  const chargeItems = pricing.items.map((item: any) => {
+  const lineTotals = pricing.items.map((item: any) => item?.lineTotalCents);
+  const allocatedLineTotals = allocateRonLineTotals(lineTotals, parsed);
+  const chargeItems = pricing.items.map((item: any, index: number) => {
     const qty = item?.qty;
     const unitPriceEurMinor = item?.unitPriceCents;
     if (!Number.isSafeInteger(qty) || qty <= 0 ||
@@ -255,11 +250,11 @@ function applyAuthoritativeRonShipping(
         unitPriceEurMinor < 0) {
       throw new TypeError("Authoritative checkout item pricing is invalid");
     }
-    const unitPriceMinor = Number(
-      (BigInt(unitPriceEurMinor) * parsed.numerator +
-        parsed.denominator / BigInt(2)) / parsed.denominator,
+    const unitPriceMinor = convertEurMinorToRonMinor(
+      unitPriceEurMinor,
+      parsed,
     );
-    const lineTotalMinor = unitPriceMinor * qty;
+    const lineTotalMinor = allocatedLineTotals[index];
     if (!Number.isSafeInteger(unitPriceMinor) ||
         !Number.isSafeInteger(lineTotalMinor)) {
       throw new RangeError("Authoritative checkout item pricing exceeds safe integer range");
@@ -275,21 +270,18 @@ function applyAuthoritativeRonShipping(
       currency: "RON",
     };
   });
-  const shippingEurMinor = Number(
-    (BigInt(shipping.amountMinor) * parsed.denominator + parsed.numerator / BigInt(2)) /
-      parsed.numerator,
-  );
-  const subtotalRonMinor = chargeItems.reduce(
-    (sum: number, item: any) => sum + item.lineTotalMinor,
-    0,
-  );
-  const discountRonMinor = Number(
-    (BigInt(pricing.discountCents) * parsed.numerator + parsed.denominator / BigInt(2)) /
-      parsed.denominator,
-  );
-  const merchandiseRonMinor = subtotalRonMinor - discountRonMinor;
-  const totalCents = merchandiseEurMinor + shippingEurMinor;
-  const chargeMinor = merchandiseRonMinor + shipping.amountMinor;
+  const totals = authoritativeRonTotals({
+    subtotalEurMinor: pricing.subtotalCents,
+    discountEurMinor: pricing.discountCents,
+    shippingRonMinor: shipping.amountMinor,
+    rate: parsed,
+  });
+  const shippingEurMinor = totals.shippingEurMinor;
+  const subtotalRonMinor = totals.subtotalRonMinor;
+  const discountRonMinor = totals.discountRonMinor;
+  const merchandiseRonMinor = totals.merchandiseRonMinor;
+  const totalCents = totals.referenceTotalEurMinor;
+  const chargeMinor = totals.chargeTotalRonMinor;
   if (![
     shippingEurMinor,
     merchandiseRonMinor,

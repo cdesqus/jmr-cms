@@ -19,6 +19,7 @@
       "required": true
     },
     "items": { "type": "json", "required": true },
+    "batchAllocations": { "type": "json" },
     "totals": { "type": "json", "required": true },
     "shippingSnapshot": { "type": "json" },
     "status": {

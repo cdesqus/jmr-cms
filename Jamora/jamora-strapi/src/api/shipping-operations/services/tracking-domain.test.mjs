@@ -407,6 +407,56 @@ test("failed and unchanged polls persist fairness attempts so other shipments ar
   );
 });
 
+test("poll rejects a foreign provider/AWB event without mutating its shipment", async () => {
+  const adapter = createMemoryTrackingAdapter({
+    shipments: [
+      shipment(),
+      shipment({
+        documentId: "shipment-2",
+        orderDocumentId: "order-2",
+        provider: "foreign-provider",
+        carrier: "foreign-provider",
+        awb: "FOREIGN000000000000002",
+      }),
+    ],
+  });
+  const domain = createTrackingDomain({
+    adapter,
+    provider: {
+      async pollTracking() {
+        return observation({
+          providerEventId: "foreign-poll-event",
+          provider: "foreign-provider",
+          awb: "FOREIGN000000000000002",
+        });
+      },
+    },
+  });
+
+  assert.deepEqual(await domain.pollOpenShipments({
+    limit: 1,
+    now: new Date("2026-07-25T12:10:00.000Z"),
+  }), {
+    attempted: 1,
+    applied: 0,
+    replayed: 0,
+    ignored: 0,
+    failed: 1,
+  });
+  assert.equal(adapter.shipments.get("shipment-1").status, "label_created");
+  assert.equal(adapter.shipments.get("shipment-2").status, "label_created");
+  assert.equal(adapter.events.size, 0);
+  assert.deepEqual(adapter.pollMismatchAudits, [{
+    shipmentDocumentId: "shipment-1",
+    reason: "provider_or_awb_mismatch",
+    attemptedAt: "2026-07-25T12:10:00.000Z",
+  }]);
+  assert.doesNotMatch(
+    JSON.stringify(adapter.pollMismatchAudits),
+    /FOREIGN000|foreign-provider/,
+  );
+});
+
 test("PostgreSQL polling explicitly selects never-polled shipments before oldest attempts", async () => {
   const calls = [];
   const rows = {

@@ -343,7 +343,8 @@ async function pollOpenShipments({
   perCallTimeoutMs = DEFAULT_POLL_TIMEOUT_MS,
   totalTimeoutMs = DEFAULT_TOTAL_POLL_TIMEOUT_MS,
 }) {
-  if (!adapter?.listOpenShipments || !adapter?.recordPollAttempt) {
+  if (!adapter?.listOpenShipments || !adapter?.recordPollAttempt ||
+      !adapter?.recordPollMismatch) {
     throw new TypeError("Tracking adapter is required.");
   }
   if (!provider?.pollTracking) {
@@ -386,9 +387,19 @@ async function pollOpenShipments({
         shipment,
         Math.min(callTimeout, remaining),
       );
+      const observation = normaliseTrackingEvent(event);
+      if (observation.provider !== shipment.provider ||
+          observation.awb !== shipment.awb) {
+        await adapter.recordPollMismatch({
+          shipmentDocumentId: shipment.documentId,
+          reason: "provider_or_awb_mismatch",
+          attemptedAt,
+        });
+        throw new Error("Tracking poll observation binding mismatch.");
+      }
       const result = await applyTrackingEvent({
         adapter,
-        event,
+        event: observation,
         source: "poll",
         receivedAt: now,
       });
@@ -479,6 +490,7 @@ function createMemoryTrackingAdapter({
       event.providerEventId,
       structuredClone(event),
     ])),
+    pollMismatchAudits: [],
     lockLog: [],
     sequence: events.length,
     queue: Promise.resolve(),
@@ -501,6 +513,9 @@ function createMemoryTrackingAdapter({
       if (!candidate) throw new Error("Shipment not found.");
       candidate.lastPollAttemptAt = attemptedAt;
       return structuredClone(candidate);
+    },
+    async recordPollMismatch(input) {
+      adapter.pollMismatchAudits.push(structuredClone(input));
     },
     async transaction(work) {
       const prior = adapter.queue;
@@ -559,6 +574,7 @@ function createStrapiTrackingAdapter(strapi) {
   const shipment = () => strapi.db.query("api::shipment.shipment");
   const shipmentEvent = () =>
     strapi.db.query("api::shipment-event.shipment-event");
+  const auditLog = () => strapi.db.query("api::audit-log.audit-log");
   const options = (trx, extra = {}) => ({ ...extra, transacting: trx });
   return {
     async listOpenShipments(limit) {
@@ -591,6 +607,19 @@ function createStrapiTrackingAdapter(strapi) {
         where: { documentId },
         data: { lastPollAttemptAt: attemptedAt },
       }),
+    recordPollMismatch: (input) => auditLog().create({
+      data: {
+        action: "shipping.tracking-poll.mismatch",
+        entityType: "shipment",
+        entityId: input.shipmentDocumentId,
+        actor: "Shipping tracking poll",
+        role: "system",
+        details: {
+          reason: "provider_or_awb_mismatch",
+          attemptedAt: input.attemptedAt,
+        },
+      },
+    }),
     transaction: (work) => strapi.db.transaction(async ({ trx }) => work({
       async lockShipmentByAwb(provider, awb) {
         const candidate = await shipment().findOne(options(trx, {

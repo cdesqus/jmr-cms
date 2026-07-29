@@ -5,6 +5,8 @@
   "options": { "draftAndPublish": false },
   "attributes": {
     "token": { "type": "string", "required": true, "unique": true },
+    "idempotencyKey": { "type": "string", "unique": true, "private": true },
+    "requestBinding": { "type": "json", "private": true },
     "status": { "type": "enumeration", "enum": ["reserved", "consumed", "released", "expired"], "default": "reserved", "required": true },
     "allocations": { "type": "json", "required": true },
     "expiresAt": { "type": "datetime", "required": true },

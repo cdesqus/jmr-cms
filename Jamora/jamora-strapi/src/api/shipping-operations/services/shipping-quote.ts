@@ -7,6 +7,10 @@ import { isDeepStrictEqual } from "node:util";
 import {
   assertShippingProviderMode,
 } from "./shipping-provider-config.cjs";
+import {
+  authoritativeRonTotals,
+  parseDecimalRate,
+} from "./ron-money.cjs";
 
 const PRODUCT_UID = "api::product.product";
 const ORDER_UID = "api::order.order";
@@ -36,45 +40,10 @@ function withTransaction(trx: any, value: any) {
 }
 
 function parseRate(value: unknown) {
-  const match = /^(\d+)(?:\.(\d+))?$/.exec(
-    text(value || process.env.DEMO_EUR_RON_RATE || "4.975000"),
+  return parseDecimalRate(
+    value,
+    process.env.DEMO_EUR_RON_RATE || "4.975000",
   );
-  if (!match) throw new TypeError("DEMO_EUR_RON_RATE must be a positive decimal.");
-  const decimals = match[2] ?? "";
-  const denominator = BigInt(10) ** BigInt(decimals.length);
-  const numerator = BigInt(match[1]) * denominator + BigInt(decimals || "0");
-  if (numerator <= BigInt(0)) {
-    throw new TypeError("DEMO_EUR_RON_RATE must be positive.");
-  }
-  return { rate: `${match[1]}.${decimals || "0"}`, numerator, denominator };
-}
-
-function convertEurToRon(eurMinor: number, rate: ReturnType<typeof parseRate>) {
-  if (!Number.isSafeInteger(eurMinor) || eurMinor < 0) {
-    throw new TypeError("EUR minor amount must be a non-negative safe integer.");
-  }
-  const result = Number(
-    (BigInt(eurMinor) * rate.numerator + rate.denominator / BigInt(2)) /
-      rate.denominator,
-  );
-  if (!Number.isSafeInteger(result)) {
-    throw new RangeError("RON amount exceeds safe integer range.");
-  }
-  return result;
-}
-
-function convertRonToEur(ronMinor: number, rate: ReturnType<typeof parseRate>) {
-  if (!Number.isSafeInteger(ronMinor) || ronMinor < 0) {
-    throw new TypeError("RON minor amount must be a non-negative safe integer.");
-  }
-  const result = Number(
-    (BigInt(ronMinor) * rate.denominator + rate.numerator / BigInt(2)) /
-      rate.numerator,
-  );
-  if (!Number.isSafeInteger(result)) {
-    throw new RangeError("EUR amount exceeds safe integer range.");
-  }
-  return result;
 }
 
 export function assertShippingSubjectOwner(
@@ -272,11 +241,14 @@ export default ({ strapi }: { strapi: any }) => {
     }
     const order = input.order;
     const rate = parseRate(order.priceSnapshot?.rate);
-    const merchandiseEur = order.subtotalCents - order.discountCents;
-    const shippingEur = convertRonToEur(quote.amountMinor, rate);
-    const expectedReference = merchandiseEur + shippingEur;
-    const expectedCharge = convertEurToRon(merchandiseEur, rate) +
-      quote.amountMinor;
+    const totals = authoritativeRonTotals({
+      subtotalEurMinor: order.subtotalCents,
+      discountEurMinor: order.discountCents,
+      shippingRonMinor: quote.amountMinor,
+      rate,
+    });
+    const expectedReference = totals.referenceTotalEurMinor;
+    const expectedCharge = totals.chargeTotalRonMinor;
     if (!Number.isSafeInteger(expectedReference) ||
         !Number.isSafeInteger(expectedCharge) ||
         order.currency?.toUpperCase() !== "EUR" ||
@@ -284,7 +256,7 @@ export default ({ strapi }: { strapi: any }) => {
         !isDeepStrictEqual(order.shippingAddress, shipping.shippingAddress) ||
         (order.shippingAddressText ?? "") !==
           (shipping.shippingAddressText ?? "") ||
-        order.shippingCents !== shippingEur ||
+        order.shippingCents !== totals.shippingEurMinor ||
         order.totalCents !== expectedReference ||
         order.priceSnapshot?.reference?.amountMinor !== expectedReference ||
         order.priceSnapshot?.reference?.currency !== "EUR" ||
@@ -403,11 +375,15 @@ export default ({ strapi }: { strapi: any }) => {
           }));
         } else {
           const rate = parseRate(subject.priceSnapshot?.rate);
-          const merchandiseEur = subject.subtotalCents - subject.discountCents;
-          const shippingCents = convertRonToEur(selected.snapshot.amountMinor, rate);
-          const totalCents = merchandiseEur + shippingCents;
-          const chargeMinor = convertEurToRon(merchandiseEur, rate) +
-            selected.snapshot.amountMinor;
+          const totals = authoritativeRonTotals({
+            subtotalEurMinor: subject.subtotalCents,
+            discountEurMinor: subject.discountCents,
+            shippingRonMinor: selected.snapshot.amountMinor,
+            rate,
+          });
+          const shippingCents = totals.shippingEurMinor;
+          const totalCents = totals.referenceTotalEurMinor;
+          const chargeMinor = totals.chargeTotalRonMinor;
           await strapi.db.query(uid).update(withTransaction(trx, {
             where: { documentId: subject.documentId },
             data: {

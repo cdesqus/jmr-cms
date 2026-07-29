@@ -56,7 +56,7 @@ test("authoritative RON shipping replaces fixed checkout delivery without browse
       },
       priceSnapshot: {
         reference: { amountMinor: 2920, currency: "EUR" },
-        charge: { amountMinor: 14527, currency: "RON" },
+        charge: { amountMinor: 14528, currency: "RON" },
         rate: "4.975000",
         source: "demo-config",
         capturedAt: "2026-07-25T10:00:00.000Z",
@@ -74,12 +74,61 @@ test("authoritative RON shipping replaces fixed checkout delivery without browse
         breakdown: {
           subtotalMinor: 14925,
           shippingMinor: 2090,
-          discountMinor: 2488,
-          totalMinor: 14527,
+          discountMinor: 2487,
+          totalMinor: 14528,
           currency: "RON",
         },
       },
     },
+  );
+});
+
+test("authoritative RON rounds discounted multi-quantity merchandise once at aggregate boundaries", () => {
+  const pricing = computeAuthoritativePricing({
+    body: { items: [{ slug: "tea", qty: 3 }] },
+    products: [{
+      documentId: "p1",
+      slug: "tea",
+      sku: "TEA",
+      name: "Tea",
+      priceCents: 1,
+    }],
+    discountCents: 1,
+  });
+  const shipping = {
+    quoteId: `shq_${"R".repeat(43)}`,
+    carrier: "jamora-mock",
+    service: "standard",
+    amountMinor: 1,
+    currency: "RON",
+    estimate: { minimumDays: 2, maximumDays: 3 },
+    quotedAt: "2026-07-25T10:00:00.000Z",
+    expiresAt: "2026-07-25T10:15:00.000Z",
+    addressDigest: "a".repeat(64),
+    itemsDigest: "b".repeat(64),
+    totalWeightGrams: 90,
+    zone: "regional",
+  };
+
+  const result = applyAuthoritativeRonShipping(pricing, shipping, {
+    rate: "1.5",
+    capturedAt: "2026-07-25T10:00:00.000Z",
+  });
+
+  assert.equal(result.priceSnapshot.charge.amountMinor, 4);
+  assert.deepEqual(result.priceSnapshot.breakdown, {
+    subtotalMinor: 5,
+    shippingMinor: 1,
+    discountMinor: 2,
+    totalMinor: 4,
+    currency: "RON",
+  });
+  assert.equal(
+    result.priceSnapshot.items.reduce(
+      (sum, item) => sum + item.lineTotalMinor,
+      0,
+    ),
+    result.priceSnapshot.breakdown.subtotalMinor,
   );
 });
 

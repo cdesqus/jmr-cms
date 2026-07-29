@@ -109,116 +109,42 @@ On first boot, open `http://<server>:9014/admin` and create the first Strapi
 admin user. The app also seeds the initial Jamora products if the CMS product
 table is empty.
 
-If you use Nginx in front of the Docker host, keep the public domain on HTTPS
-and proxy Strapi's admin/API/plugin routes to port `9014` before the storefront
-catch-all:
+Use the checked Nginx topology in
+[`deploy/nginx/jamora.conf`](deploy/nginx/jamora.conf). The public
+`jamora.kaumtech.com` server sends every browser page and BFF route to Next,
+including `/api/jamora/*`, `/admin`, and `/admin/api/*`. Only the three exact
+provider callback/status paths and `/uploads/` go directly to Strapi. A
+near-match or child path does not bypass the BFF. Strapi's own admin, plugin,
+and general API surfaces live on the separately restrictable
+`cms.jamora.kaumtech.com` server.
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name jamora.kaumtech.com;
-
-    ssl_certificate     /etc/nginx/ssl/kaumtech.com.pem;
-    ssl_certificate_key /etc/nginx/ssl/kaumtech.com.key;
-
-    location ^~ /admin {
-        proxy_pass http://192.168.18.204:9014;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-
-    location ^~ /api {
-        proxy_pass http://192.168.18.204:9014;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-    }
-
-    location ^~ /uploads {
-        proxy_pass http://192.168.18.204:9014;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-    }
-
-    location ^~ /content-manager {
-        proxy_pass http://192.168.18.204:9014;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-    }
-
-    location ^~ /content-type-builder {
-        proxy_pass http://192.168.18.204:9014;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-    }
-
-    location ^~ /upload {
-        proxy_pass http://192.168.18.204:9014;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-    }
-
-    location ^~ /users-permissions {
-        proxy_pass http://192.168.18.204:9014;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-    }
-
-    location / {
-        proxy_pass http://192.168.18.204:3095;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 443;
-
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-```
-
-Then set `STRAPI_PUBLIC_URL=https://jamora.kaumtech.com` in `.env`, restart the
-stack, and reload Nginx:
+Create DNS and TLS coverage for both names, restrict the CMS host to the
+operator VPN/private CIDRs, adjust the two upstream addresses if needed, and
+install the checked file without broadening its exact provider locations.
+Set `STRAPI_PUBLIC_URL=https://cms.jamora.kaumtech.com` and
+`JAMORA_STOREFRONT_URL=https://jamora.kaumtech.com` in `.env`. Then restart the
+stack and validate/reload Nginx:
 
 ```bash
 docker compose up -d
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+After deploying the visit privacy boundary, scrub legacy visit rows through
+the CMS-side owner endpoint in bounded, auditable batches:
+
+```text
+POST /api/jamora/admin/analytics/visit-privacy-purge
+X-Jamora-Admin-Secret: <JAMORA_ADMIN_API_SECRET>
+Content-Type: application/json
+
+{"limit":100,"cursor":""}
+```
+
+Repeat with the returned `nextCursor` until `complete` is true. Each request is
+capped at 500 rows and writes an audit record containing counts and the cursor,
+never raw paths, referrers, or capability values.
 
 ---
 
@@ -922,6 +848,10 @@ checklist is a production release blocker:
    Before a verified receipt/callback they must remain pending and create no
    shipment. Settle each through the Phase 2 verified path; confirm the stored
    shipping snapshot is revalidated and stock/credits settle exactly once.
+   Against PostgreSQL, race two ordinary reservations for the final batch unit
+   and confirm exactly one wins. Retry the winner with its same idempotency key
+   after simulating response loss, then race two expiry attempts; confirm one
+   bearer row, one exact release, and no negative/clamped reserved counter.
 5. **Warehouse/label:** verify unpaid, unpacked, foreign-order, and duplicate
    shipment requests fail. As warehouse, complete the checklist, create one
    shipment, issue PDF and ZPL capabilities, and download through the BFF.
@@ -936,12 +866,21 @@ checklist is a production release blocker:
    replayed, failed, and timed-out observations. Trigger an owner batch at
    limits 1 and 100; confirm fairness, bounds, attempt timestamps, failure
    isolation, sanitized startup logs, and the same state semantics as webhook.
+   For a selected shipment, return a valid event naming another existing
+   shipment's provider/AWB; confirm neither shipment nor the event ledger
+   changes and the mismatch audit contains only the selected opaque shipment
+   ID, reason, and attempt time.
 8. **Public tracking:** missing/malformed capability, order-only, and AWB-only
    requests return the same generic not-found surface. A valid secure link
    exposes only order status plus the minimal shipment timeline. Run the legacy
    reissue at limit 1, verify aggregate/per-order audits contain no `trk_`,
    confirm one-time verified-customer claim stores only a digest, exercise
    owner rotation/revocation, and confirm ineligible guest rows stay unavailable.
+   Load a tracking URL containing its raw `access=trk_...` value, then inspect
+   the Next/Strapi request logs and the new `visit_events` row: none may contain
+   the raw capability, while safe attribution parameters remain. Run the
+   documented visit privacy purge at limits 1 and 500 until `complete`; inspect
+   its count/cursor-only audits and verify legacy rows contain no raw `trk_`.
 9. **BFF ingress limit:** with a temporary 30/minute limit, send 31
    missing/malformed requests to
    `/api/jamora/orders/track?q=&access=bad`; request 31 must be `429` with
