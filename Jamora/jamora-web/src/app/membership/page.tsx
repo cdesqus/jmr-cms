@@ -1,16 +1,21 @@
-import { notFound } from "next/navigation";
-import { membershipSurfaceEnabled } from "@/lib/membership-surface-policy.cjs";
 
 type Plan = { documentId: string; name: string; durationMonths: number; priceRonMinor: number; packageCredits: number; eligibleProductSlugs: string[] };
 
 async function getPlans(): Promise<Plan[]> {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/api/jamora/membership/public-plans`, { cache: "no-store" });
-  if (!response.ok) return [];
-  return ((await response.json()) as { plans?: Plan[] }).plans ?? [];
+  const mock: Plan[] = [
+    { documentId: "mock-3-month", name: "Ritual Starter", durationMonths: 3, priceRonMinor: 14900, packageCredits: 3, eligibleProductSlugs: ["ritual-package"] },
+    { documentId: "mock-6-month", name: "Ritual Regular", durationMonths: 6, priceRonMinor: 27900, packageCredits: 6, eligibleProductSlugs: ["ritual-package"] },
+    { documentId: "mock-12-month", name: "Ritual Year", durationMonths: 12, priceRonMinor: 49900, packageCredits: 12, eligibleProductSlugs: ["ritual-package"] },
+  ];
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/api/jamora/membership/public-plans`, { cache: "no-store" });
+    if (!response.ok) return mock;
+    const plans = ((await response.json()) as { plans?: Plan[] }).plans ?? [];
+    return plans.length ? plans : mock;
+  } catch { return mock; }
 }
 
 export default async function MembershipPage() {
-  if (!membershipSurfaceEnabled(process.env)) notFound();
   const plans = await getPlans();
   return <main className="mx-auto max-w-6xl px-5 py-16 sm:py-24">
     <p className="eyebrow text-terracotta">Prepaid membership</p>
