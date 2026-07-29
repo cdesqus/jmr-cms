@@ -1,0 +1,32 @@
+{
+  "kind": "collectionType",
+  "collectionName": "affiliate_commissions",
+  "info": {
+    "singularName": "affiliate-commission",
+    "pluralName": "affiliate-commissions",
+    "displayName": "Affiliate Commission"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "affiliateDocumentId": { "type": "string", "required": true },
+    "affiliateCode": { "type": "string", "required": true },
+    "paymentDocumentId": { "type": "string", "required": true, "unique": true },
+    "orderDocumentId": { "type": "string" },
+    "membershipDocumentId": { "type": "string" },
+    "subjectType": { "type": "enumeration", "enum": ["order", "membership"], "required": true },
+    "purpose": { "type": "string", "required": true },
+    "status": { "type": "enumeration", "enum": ["pending", "approved", "paid", "reversed"], "default": "pending", "required": true },
+    "eligibleAmountMinor": { "type": "integer", "required": true, "min": 0 },
+    "commissionRateBps": { "type": "integer", "required": true, "min": 0 },
+    "commissionAmountMinor": { "type": "integer", "required": true, "min": 0 },
+    "currency": { "type": "string", "default": "EUR", "required": true },
+    "sourceSnapshot": { "type": "json" },
+    "occurredAt": { "type": "datetime" },
+    "approvedAt": { "type": "datetime" },
+    "paidAt": { "type": "datetime" },
+    "payoutReference": { "type": "string" },
+    "notes": { "type": "text" }
+  }
+}

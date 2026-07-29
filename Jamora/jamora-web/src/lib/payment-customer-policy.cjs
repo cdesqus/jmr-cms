@@ -124,6 +124,7 @@ function paymentPreparationBody(input, method) {
     throw new Error("RoPay currency must be RON.");
   }
   const checkoutReference = text(input.checkoutReference);
+  const affiliateCode = text(input.affiliateCode).replace(/\s+/g, "").toUpperCase();
   return {
     idempotencyKey,
     subjectType,
@@ -131,6 +132,7 @@ function paymentPreparationBody(input, method) {
     purpose,
     currency,
     ...(checkoutReference ? { checkoutReference } : {}),
+    ...(/^[A-Z0-9_-]{3,32}$/.test(affiliateCode) ? { affiliateCode } : {}),
   };
 }
 

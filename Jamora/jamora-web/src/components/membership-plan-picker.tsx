@@ -10,6 +10,7 @@ import type {
   PaymentMethod,
 } from "@/lib/payment-customer-policy.cjs";
 import { paymentPreparationRequest } from "@/lib/payment-customer-view.cjs";
+import { currentAffiliateCode } from "@/lib/affiliate-attribution";
 
 const money = (minor: number, currency: "EUR" | "RON") =>
   new Intl.NumberFormat("en", { style: "currency", currency }).format(minor / 100);
@@ -47,6 +48,7 @@ export function MembershipPlanPicker({ plans }: { plans: CustomerMembershipPlan[
         subjectId: prepared.membership.documentId,
         purpose: "membership_purchase",
         currency: "RON",
+        affiliateCode: currentAffiliateCode(),
       });
       const paymentResponse = await fetch(request.endpoint, {
         method: "POST",

@@ -11,6 +11,7 @@ import type {
   PaymentMethod,
 } from "@/lib/payment-customer-policy.cjs";
 import { paymentPreparationRequest } from "@/lib/payment-customer-view.cjs";
+import { currentAffiliateCode } from "@/lib/affiliate-attribution";
 
 const date = (value?: string | null) =>
   value
@@ -54,6 +55,7 @@ export function MembershipDashboard({ memberships }: { memberships: CustomerMemb
         subjectId: prepared.membership.documentId,
         purpose: "membership_renewal",
         currency: "RON",
+        affiliateCode: currentAffiliateCode(),
       });
       const paymentResponse = await fetch(request.endpoint, {
         method: "POST",

@@ -28,6 +28,7 @@ const NAV_GROUPS = [
   ] },
   { label: "Storefront", items: [
     { href: "/admin/membership", label: "Membership", icon: "membership", roles: ["owner"], membershipOnly: true },
+    { href: "/admin/affiliates", label: "Affiliates", icon: "promotions", roles: ["owner"] },
     { href: "/admin/promotions", label: "Promotions", icon: "promotions", roles: ["owner", "content"] },
     { href: "/admin/content", label: "Content", icon: "content", roles: ["owner", "content"] },
   ] },

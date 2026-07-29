@@ -1,0 +1,28 @@
+{
+  "kind": "collectionType",
+  "collectionName": "affiliates",
+  "info": {
+    "singularName": "affiliate",
+    "pluralName": "affiliates",
+    "displayName": "Affiliate"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "name": { "type": "string", "required": true },
+    "email": { "type": "email" },
+    "code": { "type": "string", "required": true, "unique": true },
+    "discountType": {
+      "type": "enumeration",
+      "enum": ["percentage", "fixed"],
+      "default": "percentage",
+      "required": true
+    },
+    "discountValue": { "type": "integer", "default": 10, "min": 0 },
+    "commissionRateBps": { "type": "integer", "default": 1500, "min": 0 },
+    "clickCount": { "type": "integer", "default": 0, "min": 0 },
+    "conversionCount": { "type": "integer", "default": 0, "min": 0 },
+    "active": { "type": "boolean", "default": true }
+  }
+}

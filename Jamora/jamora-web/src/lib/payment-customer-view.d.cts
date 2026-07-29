@@ -42,6 +42,7 @@ export function paymentPreparationRequest(
     currency: "RON" | "EUR";
     guestCheckoutCapability?: string;
     checkoutReference?: string;
+    affiliateCode?: string;
   },
 ): {
   endpoint: string;
@@ -53,6 +54,7 @@ export function paymentPreparationRequest(
     currency: "RON" | "EUR";
     guestCheckoutCapability?: string;
     checkoutReference?: string;
+    affiliateCode?: string;
   };
 };
 export function pendingCheckoutOrderState(

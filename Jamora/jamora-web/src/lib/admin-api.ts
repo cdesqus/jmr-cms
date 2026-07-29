@@ -163,6 +163,24 @@ export interface AdminPromotion {
   updatedAt?: string;
 }
 
+export interface AdminAffiliate {
+  documentId: string;
+  name: string;
+  email?: string;
+  code: string;
+  discountType: "percentage" | "fixed";
+  discountValue: number;
+  commissionRateBps: number;
+  clickCount?: number;
+  conversionCount?: number;
+  pendingCommissionMinor?: number;
+  approvedCommissionMinor?: number;
+  paidCommissionMinor?: number;
+  commissionCount?: number;
+  active: boolean;
+  createdAt?: string;
+}
+
 export interface InventoryBatch {
   documentId: string;
   productDocumentId: string;
@@ -392,6 +410,13 @@ export async function getAdminPromotions() {
     "/api/jamora/admin/promotions",
   );
   return promotions;
+}
+
+export async function getAdminAffiliates() {
+  const { affiliates } = await adminFetch<{ affiliates: AdminAffiliate[] }>(
+    "/api/jamora/admin/affiliates",
+  );
+  return affiliates;
 }
 
 export async function getInventoryBatches() {

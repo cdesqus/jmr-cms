@@ -159,13 +159,25 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         trx: context.trx,
       });
     }
-    return deriveAuthoritativePaymentSubject(
+    const resolved = deriveAuthoritativePaymentSubject(
       authoritativeInput,
       subject,
       reservation,
       context.now,
       checkout,
     );
+    if (input.affiliateCode && process.env.AFFILIATES_ENABLED === "true") {
+      const attribution = await (
+        strapi.service("api::affiliate-operations.affiliate-operations") as any
+      ).attributionForCode(input.affiliateCode, "code");
+      if (attribution) {
+        resolved.priceSnapshot = {
+          ...(resolved.priceSnapshot ?? {}),
+          affiliateAttribution: attribution,
+        };
+      }
+    }
+    return resolved;
   }
 
   async function validateSettlementSubject(
@@ -183,6 +195,12 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
         ? {
             checkoutReference:
               payment.priceSnapshot.membershipCheckout.checkoutReference,
+          }
+        : {}),
+      ...(payment.priceSnapshot?.affiliateAttribution?.affiliateCode
+        ? {
+            affiliateCode:
+              payment.priceSnapshot.affiliateAttribution.affiliateCode,
           }
         : {}),
       ...(!payment.customerDocumentId && payment.ownerDocumentId?.startsWith("guest:")
@@ -421,11 +439,21 @@ export default factories.createCoreService(uid.payment as any, ({ strapi }) => {
     settleOrder: (payment: any, context: { trx?: any }) =>
       settleOrdinaryOrder(payment, context.trx),
   });
+  const settleSubjectWithAffiliate = async (payment: any, context: any) => {
+    const result = await settleSubject(payment, context);
+    await (
+      strapi.service("api::affiliate-operations.affiliate-operations") as any
+    ).createCommissionForPayment(payment, {
+      occurredAt: payment.paidAt,
+      trx: context?.trx,
+    });
+    return result;
+  };
 
   const adapter = createStrapiPaymentAdapter(strapi, {
     resolvePaymentSubject,
     validateSettlementSubject,
-    settleSubject,
+    settleSubject: settleSubjectWithAffiliate,
   });
   const operations = (beneficiary: any = {}) =>
     createPaymentTransactions(adapter, { env: process.env, beneficiary });

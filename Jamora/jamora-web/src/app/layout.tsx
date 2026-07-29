@@ -34,7 +34,12 @@ export default function RootLayout({
       className={`${inter.variable} ${fraunces.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <AppChrome membershipEnabled={membershipSurfaceEnabled(process.env)}>{children}</AppChrome>
+        <AppChrome
+          membershipEnabled={membershipSurfaceEnabled(process.env)}
+          affiliatesEnabled={process.env.AFFILIATES_ENABLED === "true"}
+        >
+          {children}
+        </AppChrome>
       </body>
     </html>
   );

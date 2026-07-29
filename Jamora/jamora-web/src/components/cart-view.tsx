@@ -37,6 +37,7 @@ import {
   paymentPreparationRequest,
   pendingCheckoutOrderState,
 } from "@/lib/payment-customer-view.cjs";
+import { currentAffiliateCode } from "@/lib/affiliate-attribution";
 import {
   authoritativeShippingCheckoutFields,
   checkoutCompletionMode,
@@ -409,6 +410,7 @@ export function CartView({
           subjectId: attempt.preparedOrderDocumentId,
           purpose: "order",
           currency: shippingEnabled ? "RON" : activeMembershipMode ? "EUR" : "RON",
+          affiliateCode: currentAffiliateCode(),
           ...(activeMembershipMode
             ? { checkoutReference: reservation.checkoutReference }
             : { guestCheckoutCapability: reservation.reservationToken }),

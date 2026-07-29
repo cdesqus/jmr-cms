@@ -45,6 +45,7 @@ export function paymentPreparationBody(
   purpose: PaymentPurpose;
   currency: "RON" | "EUR";
   checkoutReference?: string;
+  affiliateCode?: string;
 };
 export function phase1PaidCheckoutAllowed(
   env: NodeJS.ProcessEnv,
