@@ -13,6 +13,7 @@ import {
 export default {
   async bootstrap({ strapi }) {
     await seedProducts(strapi);
+    if (process.env.MEMBERSHIP_ENABLED === "true") await seedMembershipPlans(strapi);
     await seedStoreContent(strapi);
     await backfillProductStockThresholds(strapi);
     await backfillProductSkus(strapi);
@@ -55,6 +56,20 @@ async function seedProducts(strapi: any) {
   }
 
   strapi.log.info(`Seeded ${products.length} Jamora products`);
+}
+
+async function seedMembershipPlans(strapi: any) {
+  const documents = strapi.documents("api::membership-plan.membership-plan");
+  const existing = await documents.findMany({ fields: ["documentId", "durationMonths"], limit: 100 });
+  const seeded = [
+    { name: "Ritual Starter", durationMonths: 3, priceEurMinor: 2999, priceRonMinor: 14900, packageCredits: 3 },
+    { name: "Ritual Regular", durationMonths: 6, priceEurMinor: 5599, priceRonMinor: 27900, packageCredits: 6 },
+    { name: "Ritual Year", durationMonths: 12, priceEurMinor: 9999, priceRonMinor: 49900, packageCredits: 12 },
+  ];
+  for (const plan of seeded) {
+    if (existing.some((row: any) => row.durationMonths === plan.durationMonths)) continue;
+    await documents.create({ data: { ...plan, active: true, eligibleProductSlugs: ["ritual-package"] } });
+  }
 }
 
 async function backfillProductSkus(strapi: any) {
