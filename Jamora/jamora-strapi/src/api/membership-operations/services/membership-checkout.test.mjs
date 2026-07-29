@@ -705,6 +705,49 @@ test("finalize revalidates membership and releases a now-expired membership chec
   assert.equal(adapter.checkouts.get(checkout.checkoutReference).status, "released");
 });
 
+test("finalize acquires membership before reserved inventory to match reservation lock order", async () => {
+  const { adapter, service } = fixture({
+    batches: [{
+      documentId: "batch-1",
+      productDocumentId: product.documentId,
+      slug: product.slug,
+      sku: product.sku,
+      batchNumber: "LOT-2026-01",
+      quantity: 2,
+      reservedQuantity: 0,
+      expiryDate: "2027-01-01",
+      status: "active",
+    }],
+  });
+  const transaction = adapter.transaction.bind(adapter);
+  const locks = [];
+  adapter.transaction = (work) => transaction((tx) => work({
+    ...tx,
+    async lockMembership(id) {
+      locks.push(`membership:${id}`);
+      return tx.lockMembership(id);
+    },
+    async lockReservedInventory(allocations) {
+      locks.push(`inventory:${allocations.map((item) => item.batchDocumentId).join(",")}`);
+      return tx.lockReservedInventory(allocations);
+    },
+  }));
+
+  const checkout = await service.reserve(reserve);
+  locks.length = 0;
+  await service.finalize({
+    customerDocumentId: reserve.customerDocumentId,
+    checkoutReference: checkout.checkoutReference,
+    idempotencyKey: "final-1",
+    now: new Date("2026-07-24T00:05:00.000Z"),
+  });
+
+  assert.deepEqual(locks.slice(0, 2), [
+    "membership:membership-1",
+    "inventory:batch-1",
+  ]);
+});
+
 test("finalize and release race serializes to one terminal outcome without double stock", async () => {
   const { adapter, service } = fixture();
   const checkout = await service.reserve(reserve);

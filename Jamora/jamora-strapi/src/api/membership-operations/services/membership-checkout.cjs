@@ -468,8 +468,6 @@ function createMembershipCheckoutService(adapter, env = process.env) {
           error.compensated = true;
           throw error;
         }
-        await tx.lockReservedInventory?.(checkout.batchAllocations);
-        await revalidateShipping(tx, checkout, now);
         let order = input.orderDocumentId
           ? await tx.lockOrder(input.orderDocumentId)
           : null;
@@ -488,6 +486,8 @@ function createMembershipCheckoutService(adapter, env = process.env) {
             credit.status !== "reserved" || credit.credits !== checkout.totals.creditsRequired) {
           throw new Error("Checkout binding is invalid.");
         }
+        await tx.lockReservedInventory?.(checkout.batchAllocations);
+        await revalidateShipping(tx, checkout, now);
         if (membership.status !== "active" || now < new Date(membership.startsAt) ||
             now >= new Date(membership.endsAt)) {
           await settleReserved(tx, checkout, "released");

@@ -275,6 +275,7 @@ test("real guest, customer, and member settlement revalidates locked shipping sn
     });
     const payments = createPaymentTransactions(adapter, {
       env: { PAYMENTS_ENABLED: "true" },
+      now: () => new Date("2026-07-29T08:00:05.000Z"),
       beneficiary: {
         name: "Jamora SRL",
         iban: "RO49AAAA1B31007593840000",

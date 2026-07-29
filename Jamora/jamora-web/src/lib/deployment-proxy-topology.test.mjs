@@ -111,3 +111,19 @@ test("HTTPS topology keeps browser BFFs on Next and only explicit provider route
     );
   }
 });
+
+test("HTTPS access logs exclude raw query strings and tracking capabilities", async () => {
+  const configuration = await readFile(configurationPath, "utf8");
+  const scrubbed = configuration
+    .split(/\r?\n/)
+    .map((line) => line.replace(/#.*/, "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const logFormat = /log_format\s+jamora_safe\s+([\s\S]*?);/.exec(scrubbed);
+
+  assert.ok(logFormat, "jamora_safe log_format must be defined");
+  assert.equal(/\$(request_uri|args|query_string|request)\b/.test(logFormat[1]), false);
+  assert.match(logFormat[1], /\$uri\b/);
+  assert.match(logFormat[1], /\$status\b/);
+  assert.match(scrubbed, /access_log\s+\S+\s+jamora_safe;/);
+});
