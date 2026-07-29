@@ -33,6 +33,7 @@ import {
   createStockReservationService,
   createStrapiStockReservationAdapter,
 } from "../services/stock-reservation-transaction.cjs";
+import { aggregateProductEvents, buildInsightPrompt } from "../services/behavioral-analytics.cjs";
 import {
   createStrapiVisitPrivacyAdapter,
   createVisitPrivacyPurge,
@@ -1233,6 +1234,22 @@ const controller = {
       estimatedMargin: revenueCents > 0 ? Math.round((profitCents / revenueCents) * 1000) / 10 : 0,
       costRatio: safeCostRatio,
     };
+  },
+
+  async adminBehavior(ctx) {
+    if (!requireAdminSecret(ctx)) return;
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const events = await strapi.documents("api::commerce-event.commerce-event").findMany({
+      fields: ["eventType", "aggregateId", "payload", "occurredAt"],
+      filters: { occurredAt: { $gte: since } }, limit: 10000,
+    });
+    const normalized = events.map((event: any) => ({
+      eventType: event.eventType,
+      productId: event.payload?.productId ?? event.aggregateId,
+    }));
+    const products = aggregateProductEvents(normalized);
+    const totals = products.reduce((a, p) => ({ views: a.views + p.views, cartAdds: a.cartAdds + p.cartAdds, checkoutStarts: a.checkoutStarts + p.checkoutStarts, purchases: a.purchases + p.purchases }), { views: 0, cartAdds: 0, checkoutStarts: 0, purchases: 0 });
+    ctx.body = { period: "last_30_days", totals, products, openAi: { available: Boolean(process.env.OPENAI_API_KEY), prompt: process.env.OPENAI_API_KEY ? buildInsightPrompt({ period: "last_30_days", totals, products }) : null } };
   },
 
   async adminOrders(ctx) {

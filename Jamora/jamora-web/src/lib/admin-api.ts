@@ -459,6 +459,10 @@ export async function getAnalyticsSummary() {
   return adminFetch<AnalyticsSummary>("/api/jamora/analytics/summary");
 }
 
+export async function getBehaviorAnalytics() {
+  return adminFetch<{ period: string; totals: { views: number; cartAdds: number; checkoutStarts: number; purchases: number }; products: Array<{ productId: string; views: number; cartAdds: number; checkoutStarts: number; purchases: number; viewToCartRate: number; cartToCheckoutRate: number; checkoutToPurchaseRate: number }>; openAi: { available: boolean } }>("/admin/api/analytics/behavior");
+}
+
 export async function getStoreContent() {
   const { content } = await adminFetch<{ content: StoreContent | null }>(
     "/api/jamora/content",

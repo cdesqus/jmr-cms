@@ -1,7 +1,7 @@
-import { formatAdminMoney, getAnalyticsSummary } from "@/lib/admin-api";
+import { formatAdminMoney, getAnalyticsSummary, getBehaviorAnalytics } from "@/lib/admin-api";
 
 export default async function AdminAnalyticsPage() {
-  const summary = await getAnalyticsSummary();
+  const [summary, behavior] = await Promise.all([getAnalyticsSummary(), getBehaviorAnalytics()]);
 
   return (
     <div className="space-y-6">
@@ -23,6 +23,17 @@ export default async function AdminAnalyticsPage() {
           detail={`${summary.estimatedMargin}% margin`}
         />
       </section>
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-lg font-semibold text-slate-950">Product funnel · last 30 days</h2>
+        <p className="mt-1 text-sm text-slate-500">Deterministic event counts; AI insight is optional and never replaces these figures.</p>
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Metric label="Views" value={behavior.totals.views.toLocaleString()} />
+          <Metric label="Cart adds" value={behavior.totals.cartAdds.toLocaleString()} />
+          <Metric label="Checkout starts" value={behavior.totals.checkoutStarts.toLocaleString()} />
+          <Metric label="Purchases" value={behavior.totals.purchases.toLocaleString()} />
+        </div>
+        <div className="mt-5 divide-y divide-slate-100">{behavior.products.slice(0, 10).map((product) => <div key={product.productId} className="grid grid-cols-5 gap-2 py-3 text-sm"><span className="font-medium">{product.productId}</span><span>{product.views} views</span><span>{product.cartAdds} carts</span><span>{product.checkoutStarts} checkouts</span><span className="font-semibold">{product.purchases} sales</span></div>)}</div>
+      </section>
     </div>
   );
 }
@@ -36,4 +47,3 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
     </div>
   );
 }
-

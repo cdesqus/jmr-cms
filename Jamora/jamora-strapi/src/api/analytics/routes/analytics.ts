@@ -52,6 +52,12 @@ export default {
     },
     {
       method: "GET",
+      path: "/jamora/admin/analytics/behavior",
+      handler: "analytics.adminBehavior",
+      config: { auth: false },
+    },
+    {
+      method: "GET",
       path: "/jamora/content",
       handler: "analytics.content",
       config: { auth: false },
