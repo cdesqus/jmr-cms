@@ -28,7 +28,7 @@ export default async function MembershipPage() {
         <p className="mt-5 text-3xl font-semibold text-bark">{new Intl.NumberFormat("ro-RO", { style: "currency", currency: "RON" }).format(plan.priceRonMinor / 100)}</p>
         <p className="mt-2 text-sm text-stone">{plan.packageCredits} package credits included</p>
         <ul className="mt-6 space-y-3 text-sm text-stone"><li>✓ Redeem eligible packages during the active period</li><li>✓ Membership balance tracked in your account</li><li>✓ Shipping paid at each redemption checkout</li></ul>
-        <a href={`/account/register?membershipPlan=${encodeURIComponent(plan.documentId)}`} className="mt-8 rounded-full bg-bark px-5 py-3 text-center text-sm font-semibold text-white">Join this membership</a>
+        <a href={`/membership/checkout?plan=${encodeURIComponent(plan.documentId)}&name=${encodeURIComponent(plan.name)}&months=${plan.durationMonths}&price=${plan.priceRonMinor}`} className="mt-8 rounded-full bg-bark px-5 py-3 text-center text-sm font-semibold text-white">Checkout this membership</a>
       </article>)}
     </div>
     <section className="mt-14 rounded-2xl bg-sand p-7 text-sm text-stone"><h2 className="font-semibold text-bark">Terms & benefits</h2><p className="mt-3">Credits are valid only during the selected membership period and for eligible packages. Membership payment is made upfront. Credits cannot be exchanged for cash, and shipping remains customer-paid at redemption checkout.</p></section>
