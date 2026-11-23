@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MTI Unified ERP · System Design v2.0 (as-built)</title>
+<style>
+  :root{
+    --ink:#1e293b; --ink2:#334155; --muted:#64748b; --faint:#94a3b8;
+    --line:#e2e8f0; --line2:#eef2f6; --bg:#ffffff; --panel:#f8fafc;
+    --blue:#2563eb; --blue-bg:#e8f0fe; --blue-soft:#eff6ff;
+    --green:#10b981; --green-bg:#ecfdf5; --orange:#f97316; --orange-bg:#fff7ed;
+    --purple:#8b5cf6; --purple-bg:#f5f3ff; --gray:#475569; --gray-bg:#f1f5f9;
+    --red:#ef4444; --amber:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#f1f3f7;color:var(--ink2);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .doc{max-width:860px;margin:0 auto;background:var(--bg);padding:64px 72px 48px}
+  @media(max-width:720px){.doc{padding:36px 22px}}
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;color:var(--blue);text-transform:uppercase;margin-bottom:10px}
+  h1{font-size:40px;line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:0 0 16px;font-weight:800}
+  .lede{font-size:17px;color:var(--ink2);margin:0 0 26px;max-width:62ch}
+  .meta{display:flex;flex-wrap:wrap;gap:24px 40px;padding:18px 0 0;border-top:1px solid var(--line);font-size:13.5px}
+  .meta b{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:3px;display:block;font-weight:700}
+  .meta span{color:var(--ink2)}
+  section{margin-top:52px}
+  .sec-h{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+  .sec-n{font-size:12px;font-weight:700;color:var(--blue);background:var(--blue-bg);border-radius:6px;padding:5px 9px;flex:none}
+  h2{font-size:25px;letter-spacing:-.01em;color:var(--ink);margin:0;font-weight:800}
+  h3{font-size:15.5px;color:var(--ink);margin:28px 0 12px;font-weight:700}
+  .sub{font-size:15.5px;color:var(--ink2);margin:0 0 20px;max-width:66ch}
+  p{margin:0 0 14px}
+  code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;background:var(--gray-bg);padding:1px 6px;border-radius:5px;color:#0f172a}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 8px}
+  @media(max-width:720px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{border:1px solid var(--line);border-radius:12px;padding:18px 16px}
+  .stat .big{font-size:30px;font-weight:800;color:var(--ink);line-height:1;letter-spacing:-.02em}
+  .stat .cap{font-size:12.5px;color:var(--muted);margin-top:10px;line-height:1.45}
+  table{width:100%;border-collapse:collapse;margin:10px 0 6px;font-size:13.5px}
+  th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;padding:9px 12px 9px 0;border-bottom:1px solid var(--line);vertical-align:bottom}
+  td{padding:11px 12px 11px 0;border-bottom:1px solid var(--line2);color:var(--ink2);vertical-align:top}
+  td b,th b{color:var(--ink)}
+  tr:last-child td{border-bottom:none}
+  .strike{color:var(--faint);text-decoration:line-through}
+  .tcol-3 th:first-child,.tcol-3 td:first-child{width:22%}
+  .note{background:var(--blue-soft);border-left:3px solid var(--blue);border-radius:0 10px 10px 0;padding:16px 20px;margin:22px 0;font-size:14.5px}
+  .note b{color:var(--ink)}
+  .diagram{border:1px solid var(--line);border-radius:14px;padding:24px 22px;margin:22px 0;background:#fcfdfe}
+  .flow{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap}
+  .node{border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:#fff;flex:1;min-width:110px}
+  .node .t{font-size:12.5px;font-weight:700;color:var(--ink)}
+  .node .d{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4}
+  .arrow{display:flex;align-items:center;color:var(--faint);font-size:18px;flex:none}
+  .lane{display:grid;grid-template-columns:96px 1fr;gap:14px;align-items:center;margin:10px 0}
+  .lane-label{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);text-align:right}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:middle}
+  .party{border-radius:10px;padding:11px 13px;font-size:12.5px}
+  .party .pt{font-weight:700;font-size:13px;color:var(--ink)}
+  .party .pd{color:var(--muted);font-size:11px;margin-top:2px;line-height:1.4}
+  .p-mti{border:1.5px solid var(--blue);background:var(--blue-soft)}
+  .p-sup{border:1px solid #cbd5e1;background:var(--gray-bg)}
+  .p-cust{border:1px solid #a7f3d0;background:var(--green-bg)}
+  .p-fwd{border:1px dashed var(--orange);background:var(--orange-bg)}
+  .p-tax{border:1px solid #ddd6fe;background:var(--purple-bg)}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;border:1px solid var(--line);color:var(--ink2)}
+  .pill.view{color:var(--blue);border-color:#bfdbfe;background:#eff6ff}
+  .pill.edit{color:#047857;border-color:#a7f3d0;background:var(--green-bg)}
+  .pill.full{color:#6d28d9;border-color:#ddd6fe;background:var(--purple-bg)}
+  .pill.no{color:var(--faint);border:1px dashed #cbd5e1;background:transparent}
+  .perm td,.perm th{text-align:center;padding:9px 6px}
+  .perm td:first-child,.perm th:first-child{text-align:left;padding-left:0;width:28%}
+  .dash{color:var(--faint)}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0}
+  @media(max-width:720px){.cards{grid-template-columns:1fr}}
+  .card{border:1px solid var(--line);border-radius:12px;padding:18px}
+  .card h4{margin:0 0 4px;font-size:14.5px;color:var(--ink);font-weight:700}
+  .card .desc{font-size:12.5px;color:var(--muted);margin-bottom:12px;line-height:1.5}
+  .card ul{margin:0;padding-left:18px}
+  .card li{font-size:12.5px;margin-bottom:7px;color:var(--ink2)}
+  .submit{font-size:10.5px;font-weight:700;letter-spacing:.06em;margin:12px 0 7px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:11px;padding:4px 9px;border-radius:6px;background:var(--panel);border:1px solid var(--line);color:var(--ink2)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+  .tag.g{color:#047857;background:var(--green-bg)} .tag.a{color:#b45309;background:#fffbeb} .tag.b{color:var(--blue);background:var(--blue-bg)}
+  .stack-row{display:grid;grid-template-columns:120px 1fr 1fr;gap:16px;align-items:center;padding:14px 0;border-bottom:1px solid var(--line2)}
+  @media(max-width:720px){.stack-row{grid-template-columns:1fr}}
+  .stack-row .lbl{font-weight:700;color:var(--ink);font-size:14px;border-left:3px solid var(--blue);padding-left:12px}
+  .stack-row .why{font-size:12.5px;color:var(--muted)}
+  .tchip{display:inline-block;font-size:12px;padding:4px 10px;border-radius:7px;background:var(--blue-soft);color:var(--blue);margin:0 5px 5px 0;font-weight:500}
+  .foot{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:11px;color:var(--faint)}
+  .pb{page-break-before:always}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px}
+  .status-key{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin-top:6px}
+  @media print{body{background:#fff}.doc{padding:0;max-width:none}}
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="eyebrow">System Design · Version 2.0 · As-built</div>
+  <h1>Matsumoto Trading<br>Unified ERP</h1>
+  <p class="lede">The development build, as implemented: a Dockerized Node + Express + Prisma + PostgreSQL backend and a React front end, built around MTI's document chain — Purchase Order with a scannable QR, receive-to-stock, three-way supplier matching, and customer invoicing that references the PO and Surat Jalan.</p>
+  <div class="meta">
+    <div><b>Date</b><span>23 November 2026</span></div>
+    <div><b>For</b><span>PT Matsumoto Trading Indonesia</span></div>
+    <div><b>Status</b><span>Development build delivered</span></div>
+    <div><b>Classification</b><span>Confidential</span></div>
+  </div>
+
+  <!-- 00 -->
+  <section>
+    <div class="sec-h"><span class="sec-n">00</span><h2>Context</h2></div>
+    <p class="sub">MTI is the Jakarta arm of Matsumoto Trading Co., Ltd. (Tokyo). It imports specialty cosmetic and pharmaceutical ingredients from Japan, clears them through customs, holds them at a forwarder warehouse, and distributes to Indonesian manufacturers. The business previously ran on one shared Excel workbook; this build replaces that workbook with a database-backed application.</p>
+    <p>Version 1.0 was the proposed design. This document (v2.0) describes what was actually built and delivered: the chosen stack, the implemented document chain, the data model, and how it is deployed with Docker.</p>
+  </section>
+
+  <!-- 01 -->
+  <section>
+    <div class="sec-h"><span class="sec-n">01</span><h2>At a glance</h2></div>
+    <div class="stats">
+      <div class="stat"><div class="big">10</div><div class="cap">modules, each a live screen backed by the API</div></div>
+      <div class="stat"><div class="big">3</div><div class="cap">Docker services — PostgreSQL, API, web (Nginx)</div></div>
+      <div class="stat"><div class="big">3</div><div class="cap">auto-generated PDF documents — PO (QR), Goods Receipt, Invoice</div></div>
+      <div class="stat"><div class="big">1</div><div class="cap">command to run it all — <code>docker&nbsp;compose&nbsp;up</code></div></div>
+    </div>
+
+    <h3>What changed from v1.0 (the proposal)</h3>
+    <table class="tcol-3">
+      <tr><th>Topic</th><th>Proposal (v1.0)</th><th>As-built (v2.0)</th></tr>
+      <tr><td><b>Stack</b></td><td class="strike">NestJS + Next.js</td><td>Node + <b>Express</b> + <b>Prisma</b> + <b>PostgreSQL</b>; <b>React</b> (Vite) + Nginx</td></tr>
+      <tr><td><b>Receiving</b></td><td class="strike">Described generally</td><td>PO carries a <b>QR code</b>; receive by scanning it or entering the <b>DN number</b></td></tr>
+      <tr><td><b>Supplier billing</b></td><td class="strike">Not detailed</td><td><b>Three-way match</b>: PO ↔ Goods Receipt ↔ Supplier Invoice</td></tr>
+      <tr><td><b>Customer invoice</b></td><td>PPN invoice from the order</td><td>Raised from the Delivery Order; <b>auto-references PO + Surat Jalan</b> number</td></tr>
+      <tr><td><b>Documents</b></td><td class="strike">Generated from the order</td><td>Live <b>PDF</b> endpoints for PO, Goods Receipt, Surat Jalan &amp; Invoice</td></tr>
+      <tr><td><b>Delivery</b></td><td>Target architecture</td><td><b>Dockerized</b>, one-command run with seeded sample data</td></tr>
+    </table>
+
+    <h3>Key design decisions</h3>
+    <table class="tcol-3">
+      <tr><td><b>PO &amp; QR</b></td><td>Each Purchase Order renders a PDF with a QR code encoding the PO number + a token. The QR is the fast path into the receive screen.</td></tr>
+      <tr><td><b>Receive to stock</b></td><td>Scanning the QR or typing the PO / supplier DN loads the PO lines; posting a Goods Receipt creates one inventory lot per line and raises stock in the same transaction.</td></tr>
+      <tr><td><b>Three-way match</b></td><td>A supplier invoice attaches to a Goods Receipt, so PO ↔ GR ↔ Supplier Invoice are reconciled before payment.</td></tr>
+      <tr><td><b>Stock &amp; FEFO</b></td><td>Stock is held by lot with mfg/expiry dates. Deliveries deduct first-expiry-first-out and can't exceed what's on hand.</td></tr>
+      <tr><td><b>Customer invoice linkage</b></td><td>Invoices are raised from a Delivery Order; the PO number and Surat Jalan number flow onto the invoice automatically, with PPN 11%.</td></tr>
+      <tr><td><b>Masters as links</b></td><td>Finish Goods link to a Customer and to a Raw Material (stock source); Raw Materials link to a Supplier, with HS code &amp; LARTAS for customs.</td></tr>
+    </table>
+  </section>
+
+  <!-- 02 -->
+  <section class="pb">
+    <div class="sec-h"><span class="sec-n">02</span><h2>The document chain</h2></div>
+    <p class="sub">The heart of the system. Two flows meet at stock: the purchase side brings goods in and reconciles the supplier; the sales side ships goods out and bills the customer.</p>
+    <div class="diagram">
+      <div class="lane">
+        <div class="lane-label">Purchase side</div>
+        <div class="flow">
+          <div class="node p-sup" style="flex:none"><div class="t">PO → Tokyo</div><div class="d">PDF + QR code</div></div>
+          <div class="arrow">→</div>
+          <div class="node"><div class="t">Receive</div><div class="d">Scan QR / enter DN</div></div>
+          <div class="arrow">→</div>
+          <div class="node" style="border-color:#a7f3d0;background:var(--green-bg)"><div class="t">Goods Receipt</div><div class="d">Stock ▲ (lot + expiry)</div></div>
+          <div class="arrow">→</div>
+          <div class="node"><div class="t">Supplier Invoice</div><div class="d">3-way match</div></div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-label">Sales side</div>
+        <div class="flow">
+          <div class="node" style="border-color:#a7f3d0;background:var(--green-bg)"><div class="t">Delivery · Surat Jalan</div><div class="d">Stock ▼ FEFO</div></div>
+          <div class="arrow">→</div>
+          <div class="node p-cust" style="flex:none"><div class="t">Customer Invoice</div><div class="d">refs PO + DO · PPN 11%</div></div>
+        </div>
+      </div>
+      <div class="legend"><span>Both sides read and write the same <b>stock</b> — receipts add lots, deliveries consume them first-expiry-first-out.</span></div>
+    </div>
+
+    <h3>Step by step</h3>
+    <table class="tcol-3">
+      <tr><th>Step</th><th>Action</th><th>Effect</th></tr>
+      <tr><td><b>1 · Purchase Order</b></td><td>Raise a PO to Matsumoto Tokyo with line items, HS code, LARTAS</td><td>PDF with QR at <code>/api/purchase-orders/:id/pdf</code></td></tr>
+      <tr><td><b>2 · Receive</b></td><td>Scan the PO QR or enter PO / supplier DN; confirm lot, mfg/exp, qty</td><td>Creates Goods Receipt; <b>stock increases</b></td></tr>
+      <tr><td><b>3 · Goods Receipt</b></td><td>GR document (PDF) issued</td><td>Becomes the match reference for the supplier bill</td></tr>
+      <tr><td><b>4 · Supplier Invoice</b></td><td>Attach the supplier's invoice to a Goods Receipt</td><td>PO ↔ GR ↔ Invoice reconciled</td></tr>
+      <tr><td><b>5 · Delivery (Surat Jalan)</b></td><td>Ship finish goods to a customer, carrying the customer PO no.</td><td><b>Stock decreases</b> FEFO; Surat Jalan PDF</td></tr>
+      <tr><td><b>6 · Customer Invoice</b></td><td>Raise from the Delivery Order</td><td><b>PO + Surat Jalan no. auto-filled</b>; PPN 11%; invoice PDF</td></tr>
+    </table>
+  </section>
+
+  <!-- 03 -->
+  <section>
+    <div class="sec-h"><span class="sec-n">03</span><h2>Data model</h2></div>
+    <p class="sub">Prisma schema on PostgreSQL. One record per real thing, linked rather than copied; stock is the single source of truth.</p>
+    <div class="diagram">
+      <div class="flow" style="gap:12px">
+        <div class="party p-sup" style="flex:1;min-width:130px"><div class="pt">Supplier</div><div class="pd">parent &amp; makers</div></div>
+        <div class="party p-mti" style="flex:1;min-width:130px"><div class="pt">RawMaterial</div><div class="pd">→ Supplier · HS · LARTAS · Unit</div></div>
+        <div class="party p-cust" style="flex:1;min-width:130px"><div class="pt">FinishGood</div><div class="pd">→ Customer · → RawMaterial</div></div>
+        <div class="party p-cust" style="flex:1;min-width:130px"><div class="pt">Customer</div><div class="pd">NPWP · TOP</div></div>
+      </div>
+      <div style="text-align:center;color:var(--faint);margin:10px 0;font-size:15px">↓</div>
+      <div class="flow" style="gap:10px">
+        <div class="node"><div class="t">PurchaseOrder</div><div class="d">+ Lines · qrToken</div></div>
+        <div class="arrow">→</div>
+        <div class="node"><div class="t">GoodsReceipt</div><div class="d">+ Lines · dnNumber</div></div>
+        <div class="arrow">→</div>
+        <div class="node" style="border-color:#a7f3d0;background:var(--green-bg)"><div class="t">InventoryLot</div><div class="d">lot · exp · qtyStock</div></div>
+        <div class="arrow">←</div>
+        <div class="node"><div class="t">DeliveryOrder</div><div class="d">+ Lines · lotsConsumed</div></div>
+      </div>
+      <div style="text-align:center;color:var(--faint);margin:10px 0;font-size:15px">↓</div>
+      <div class="flow" style="gap:10px">
+        <div class="node"><div class="t">SupplierInvoice</div><div class="d">→ GoodsReceipt (1:1)</div></div>
+        <div class="node"><div class="t">CustomerInvoice</div><div class="d">→ DeliveryOrder (1:1) · poNumber · doNumber</div></div>
+      </div>
+    </div>
+    <table class="tcol-3">
+      <tr><th>Entity</th><th>Key fields</th><th>Links</th></tr>
+      <tr><td><b>PurchaseOrder</b> + Line</td><td>poNumber, poDate, status, exchangeRate, <code>qrToken</code></td><td>→ Supplier · → RawMaterial (line)</td></tr>
+      <tr><td><b>GoodsReceipt</b> + Line</td><td>grNumber, dnNumber, receivedBy, lot, exp</td><td>→ PO · → Supplier · → InventoryLot</td></tr>
+      <tr><td><b>InventoryLot</b></td><td>product, lot, mfg/exp, qtyIn, qtyStock, location</td><td>→ RawMaterial</td></tr>
+      <tr><td><b>SupplierInvoice</b></td><td>siNumber, amountUsd, exchangeRate, totalIdr, status</td><td>→ GoodsReceipt (unique)</td></tr>
+      <tr><td><b>DeliveryOrder</b> + Line</td><td>doNumber, customerPoNo, lotsConsumed (JSON)</td><td>→ Customer · → FinishGood</td></tr>
+      <tr><td><b>CustomerInvoice</b></td><td>invNumber, <code>poNumber</code>, <code>doNumber</code>, sellIdr, ppnIdr, totalIdr</td><td>→ Customer · → DeliveryOrder (unique)</td></tr>
+      <tr><td><b>Masters</b></td><td>Customer, Supplier, Vendor, RawMaterial, FinishGood, Unit</td><td>referenced across the chain</td></tr>
+    </table>
+  </section>
+
+  <!-- 04 -->
+  <section>
+    <div class="sec-h"><span class="sec-n">04</span><h2>Modules &amp; API</h2></div>
+    <p class="sub">Ten screens in the React app, each backed by a REST resource under <code>/api</code>. Every list supports search and full CRUD.</p>
+    <table class="tcol-3">
+      <tr><th>Module</th><th>API</th><th>Notes</th></tr>
+      <tr><td><b>Dashboard</b></td><td><code>/dashboard</code></td><td>KPIs, selling by month, top accounts, expiry watch</td></tr>
+      <tr><td><b>Purchase Orders</b></td><td><code>/purchase-orders</code> · <code>/:id/pdf</code> · <code>/lookup/:key</code></td><td>PDF + QR; lookup by QR / PO no / DN</td></tr>
+      <tr><td><b>Receive</b></td><td><code>POST /goods-receipts</code></td><td>Scan / DN → stock in</td></tr>
+      <tr><td><b>Goods Receipts</b></td><td><code>/goods-receipts</code> · <code>/:id/pdf</code></td><td>Reference for supplier matching</td></tr>
+      <tr><td><b>Supplier Invoices</b></td><td><code>/supplier-invoices</code> · <code>/open-receipts</code></td><td>Three-way match</td></tr>
+      <tr><td><b>Deliveries</b></td><td><code>/deliveries</code> · <code>/:id/pdf</code></td><td>Surat Jalan; FEFO stock out</td></tr>
+      <tr><td><b>Customer Invoices</b></td><td><code>/customer-invoices</code> · <code>/:id/pdf</code> · <code>/open-deliveries</code></td><td>Auto-refs PO + DO</td></tr>
+      <tr><td><b>Receivables</b></td><td><code>/customer-invoices</code></td><td>Aging by due date</td></tr>
+      <tr><td><b>Inventory</b></td><td><code>/inventory</code></td><td>Lot-level, FEFO, expiry colour-coding</td></tr>
+      <tr><td><b>Masters</b></td><td><code>/customers /suppliers /vendors /raw-materials /finish-goods /units</code></td><td>CRUD + search</td></tr>
+    </table>
+  </section>
+
+  <!-- 05 -->
+  <section class="pb">
+    <div class="sec-h"><span class="sec-n">05</span><h2>Architecture &amp; deployment</h2></div>
+    <p class="sub">Three containers via Docker Compose. The web container (Nginx) serves the built React app and proxies <code>/api</code> to the backend; the API talks to PostgreSQL over the internal network.</p>
+    <div class="diagram">
+      <div class="flow">
+        <div class="node"><div class="t">Browser</div><div class="d">MTI staff</div></div>
+        <div class="arrow">→</div>
+        <div class="node" style="flex:1.2;background:var(--blue-soft);border-color:#bfdbfe"><div class="t">web · Nginx :8080</div><div class="d">React (Vite build) · proxy /api →</div></div>
+        <div class="arrow">→</div>
+        <div class="node" style="flex:1.2"><div class="t">api · Express :4000</div><div class="d">routes · Prisma · PDFKit · qrcode</div></div>
+        <div class="arrow">→</div>
+        <div class="node" style="border-color:#a7f3d0;background:var(--green-bg)"><div class="t">db · PostgreSQL :5432</div><div class="d">volume-persisted</div></div>
+      </div>
+      <div class="legend"><span>On first boot the API waits for the DB, runs <code>prisma db push</code>, and seeds MTI sample data. One command: <code>docker compose up --build</code>.</span></div>
+    </div>
+    <table class="tcol-3">
+      <tr><th>Service</th><th>Image / build</th><th>Role</th></tr>
+      <tr><td><b>db</b></td><td><code>postgres:16-alpine</code></td><td>Database, persisted to a Docker volume</td></tr>
+      <tr><td><b>api</b></td><td><code>./server</code> (Node 22)</td><td>REST API, Prisma, PDF + QR generation</td></tr>
+      <tr><td><b>web</b></td><td><code>./web</code> → Nginx</td><td>Serves React build, reverse-proxies <code>/api</code></td></tr>
+    </table>
+    <div class="note"><b>Environments.</b> Config via <code>.env</code> (ports, DB credentials, <code>SEED_ON_START</code>). The Docker build runs <code>prisma generate</code>, which downloads the Prisma engine — the build host needs outbound internet. Development uses seeded synthetic data; production data is loaded after go-live.</div>
+  </section>
+
+  <!-- 06 -->
+  <section>
+    <div class="sec-h"><span class="sec-n">06</span><h2>Technology stack</h2></div>
+    <div class="stack-row"><div class="lbl">Frontend</div><div><span class="tchip">React 18</span><span class="tchip">Vite</span><span class="tchip">TypeScript</span><span class="tchip">html5-qrcode</span></div><div class="why">10 module screens, QR camera scan, CRUD + search</div></div>
+    <div class="stack-row"><div class="lbl">Backend</div><div><span class="tchip">Node 22</span><span class="tchip">Express</span><span class="tchip">TypeScript</span></div><div class="why">REST API, business rules, document flow</div></div>
+    <div class="stack-row"><div class="lbl">Data</div><div><span class="tchip">Prisma</span><span class="tchip">PostgreSQL 16</span></div><div class="why">Typed schema, migrations, transactions</div></div>
+    <div class="stack-row"><div class="lbl">Documents</div><div><span class="tchip">PDFKit</span><span class="tchip">qrcode</span></div><div class="why">PO (QR), Goods Receipt, Surat Jalan, Invoice</div></div>
+    <div class="stack-row"><div class="lbl">Delivery</div><div><span class="tchip">Docker</span><span class="tchip">Docker Compose</span><span class="tchip">Nginx</span></div><div class="why">One-command run on the dev server</div></div>
+  </section>
+
+  <!-- 07 -->
+  <section>
+    <div class="sec-h"><span class="sec-n">07</span><h2>Access model &amp; security</h2></div>
+    <p class="sub">The role model is designed; authentication and enforcement are the next build. Today the API is open on the dev network — add auth before any shared or production use.</p>
+    <table class="perm">
+      <tr><th>Area</th><th>Director</th><th>Finance</th><th>Sales</th><th>Warehouse</th></tr>
+      <tr><td>Purchase &amp; import</td><td><span class="pill view">View</span></td><td><span class="pill view">View</span></td><td><span class="dash">—</span></td><td><span class="pill full">Full</span></td></tr>
+      <tr><td>Supplier invoices</td><td><span class="pill view">View</span></td><td><span class="pill full">Full</span></td><td><span class="dash">—</span></td><td><span class="pill view">View</span></td></tr>
+      <tr><td>Inventory</td><td><span class="pill view">View</span></td><td><span class="pill view">View</span></td><td><span class="pill view">View</span></td><td><span class="pill full">Full</span></td></tr>
+      <tr><td>Delivery &amp; invoice</td><td><span class="pill view">View</span></td><td><span class="pill full">Full</span></td><td><span class="pill edit">Draft</span></td><td><span class="pill edit">Deliver</span></td></tr>
+      <tr><td>Masters</td><td><span class="pill full">Full</span></td><td><span class="pill edit">Edit</span></td><td><span class="pill view">View</span></td><td><span class="pill view">View</span></td></tr>
+    </table>
+    <div class="cards">
+      <div class="card"><h4 class="submit" style="color:var(--green)">BUILT</h4><ul><li>Full document chain + stock engine</li><li>PDF + QR generation</li><li>CRUD + search on every module</li><li>Dockerized, seeded, one-command run</li></ul></div>
+      <div class="card"><h4 class="submit" style="color:var(--amber)">NEXT</h4><ul><li>Authentication + RBAC</li><li>HTTPS (needed for QR camera on mobile)</li><li>Faktur Pajak / e-Faktur export</li><li>Partial receive &amp; multi-line supplier invoice</li></ul></div>
+      <div class="card"><h4 class="submit" style="color:var(--blue)">LATER</h4><ul><li>Audit log &amp; approvals</li><li>Backups &amp; restore drill</li><li>Parent-company read view</li><li>CI/CD pipeline</li></ul></div>
+    </div>
+  </section>
+
+  <div class="foot"><span>PT Matsumoto Trading Indonesia · Unified ERP · System Design v2.0 (as-built)</span><span>Confidential</span></div>
+</div>
+</body>
+</html>
